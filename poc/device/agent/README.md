@@ -1,7 +1,7 @@
 ##### [Back To Main](../../../README.md)
-# Device Workload Fleet management Client
+# Device's Workload Fleet Management Client
 
-An edge device workload fleet management client used by the Margo platform to manage application workloads, report device capabilities, and synchronize desired vs actual state with the WFM.
+An edge device's Workload Fleet Management Client used by the Margo platform to manage application workloads, report device capabilities, and synchronize desired vs actual state with the WFM.
 
 This repository contains a code-first-sandbox implementation that supports multiple runtimes (Helm for Kubernetes and Docker Compose) and is designed for easy extension (for example, adding other runtimes).
 
@@ -18,7 +18,7 @@ This repository contains a code-first-sandbox implementation that supports multi
 
 ## Overview
 
-The Device Workload Fleet management Client runs on edge devices and provides these core responsibilities:
+The Device Workload Fleet Management Client runs on edge devices and provides these core responsibilities:
 
 - Onboarding and authentication with the Margo compliant WFM
 - Reporting device capabilities (hardware, interfaces)

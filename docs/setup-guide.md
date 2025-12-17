@@ -230,7 +230,7 @@ You need to copy a security file from the WFM VM to each Device VM.
    cd $HOME/workspace/sandbox/pipeline
    ```
 
-2. **Start the device Workload Fleet management Client**
+2. **Start the device's Workload Fleet Management Client**
    ```bash
    source device-agent_docker.env && sudo -E bash device-agent.sh
    ```
@@ -258,7 +258,7 @@ You need to copy a security file from the WFM VM to each Device VM.
    cd $HOME/workspace/sandbox/pipeline
    ```
 
-2. **Start the device workload fleet management client**
+2. **Start the device's Workload Fleet Management Client**
    ```bash
    source device-agent_k3s.env && sudo -E bash device-agent.sh
    ```
@@ -752,7 +752,7 @@ If you want to remove everything and start over:
    sudo -E bash ./device-agent.sh  # Type 9 - otel-collector-promtail-uninstallation
    sudo -E bash ./device-agent.sh  # Type 10 - cleanup-residual
    ```
-3. **Remove Device Workload Fleet management Client image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
+3. **Remove Device's Workload Fleet Management Client image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
    ```bash
    docker rmi margo.org/device-agent:latest
    ```

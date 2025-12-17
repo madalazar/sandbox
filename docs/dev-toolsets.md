@@ -12,14 +12,14 @@ Development toolsets used and their purposes:
 - **Uses**:
   - Building Symphony API server
   - Building Maestro CLI tool
-  - Building Workload Fleet management Client applications
+  - Building Workload Fleet Management Client applications
   - Go module management and dependencies
 
 #### Docker & Docker Compose
 - **Version**: Docker Compose V2
 - **Uses**:
   - Container orchestration for services
-  - Building and running Workload Fleet management Client containers
+  - Building and running Workload Fleet Management Client containers
   - Running Symphony API as containerized service
   - Managing multi-container applications (Harbor, Observability stack)
 
@@ -34,7 +34,7 @@ Development toolsets used and their purposes:
 
 #### K3s (Lightweight Kubernetes)
 - **Uses**:
-  - Running Workload Fleet management Client pods with ServiceAccount authentication
+  - Running Workload Fleet Management Client pods with ServiceAccount authentication
   - Container orchestration for production workloads
   - RBAC and security management
 
@@ -42,7 +42,7 @@ Development toolsets used and their purposes:
 - **Version**: 3.15.1
 - **Uses**:
   - Package management for Kubernetes applications
-  - Deploying Workload Fleet management Client and workload charts
+  - Deploying Workload Fleet Management Client and workload charts
   - Managing observability stack (Prometheus, Grafana, Jaeger, Loki)
   - Installing OTEL Collector and Promtail
 

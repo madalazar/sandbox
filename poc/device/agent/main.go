@@ -204,7 +204,7 @@ func NewAgent(configPath string) (*Agent, error) {
 }
 
 func (a *Agent) Start() error {
-	a.log.Info("Starting Workload Fleet management Client")
+	a.log.Info("Starting Workload Fleet Management Client")
 
 	var deviceId string
 	var err error
@@ -239,7 +239,7 @@ func (a *Agent) Start() error {
 		hasCfgPubCert = true
 	}
 
-	a.log.Infow("Workload Fleet management Client started successfully",
+	a.log.Infow("Workload Fleet Management Client started successfully",
 		"capabilitiesFile", a.config.Capabilities.ReadFromFile,
 		"hasDeviceSignature", hasCfgPubCert,
 		"stateSeekingInterval", a.config.StateSeeking.Interval,
@@ -249,7 +249,7 @@ func (a *Agent) Start() error {
 }
 
 func (a *Agent) Stop() error {
-	a.log.Info("Stopping Workload Fleet management Client")
+	a.log.Info("Stopping Workload Fleet Management Client")
 
 	a.syncer.Stop()
 	a.deployer.Stop()
@@ -257,7 +257,7 @@ func (a *Agent) Stop() error {
 	a.statusReporter.Stop()
 	a.database.TriggerDataPersist()
 
-	a.log.Info("Workload Fleet management Client stopped")
+	a.log.Info("Workload Fleet Management Client stopped")
 	return nil
 }
 
@@ -274,7 +274,7 @@ func main() {
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "\nMargo Device Workload Fleet management Client\n\n")
+		fmt.Fprintf(os.Stderr, "\nMargo Device Workload Fleet Management Client\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}

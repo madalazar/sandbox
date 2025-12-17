@@ -25,7 +25,7 @@ export DEV_REPO_BRANCH=main
 **For k3s device-agent.sh script**
 
 Environment file path:-
-[Device-Workload Fleet management Client k3s-Env file](../pipeline/device-agent_k3s.env)
+[For k3s Device's Workload Fleet Management Client-Env file](../pipeline/device-agent_k3s.env)
 
 Update the following variables:
 ```bash
@@ -40,7 +40,7 @@ export EXPOSED_HARBOR_IP=<wfm-machine-ip>
 **For docker device-agent.sh script**
 
 Environment file path:-
-[Device-Workload Fleet management Client Docker-Env file](../pipeline/device-agent_docker.env)
+[For docker Device's Workload Fleet Management Client-Env file](../pipeline/device-agent_docker.env)
 
 Update the following variables:
 ```bash

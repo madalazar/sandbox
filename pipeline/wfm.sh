@@ -1633,8 +1633,8 @@ show_menu() {
   echo "2) PreRequisites: Cleanup"
   echo "3) Symphony: Start"
   echo "4) Symphony: Stop"
-  echo "5) ObeservabiliyStack: Start"
-  echo "6) ObeservabiliyStack: Stop"
+  echo "5) ObservabilityStack: Start"
+  echo "6) ObservabilityStack: Stop"
   read -p "Enter choice [1-6]: " choice
   case $choice in
     1) install_prerequisites ;;

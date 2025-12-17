@@ -360,7 +360,7 @@ install_and_enable_ssh() {
 }
 
 #-----------------------------------------------------------------
-# Device Workload Fleet management Client Runtime Configuration update based on Docker or K8s
+# Device Workload Fleet Management Client Runtime Configuration update based on Docker or K8s
 #-----------------------------------------------------------------
 
 enable_kubernetes_runtime() {
@@ -401,7 +401,7 @@ enable_docker_runtime() {
 }
 
 # ----------------------------
-# Device Workload Fleet management Client Build Functions
+# Device Workload Fleet Management Client Build Functions
 # ----------------------------
 build_device_agent_docker() {
   cd "$HOME/sandbox"
@@ -419,7 +419,7 @@ build_device_agent_docker() {
 
 
 # ----------------------------
-# Device Workload Fleet management Client Service Functions
+# Device Workload Fleet Management Client Service Functions
 # ----------------------------
 
 start_device_agent_docker_service() {
@@ -868,7 +868,7 @@ start_device_agent_kubernetes() {
 stop_device_agent_docker() {
   echo "Stopping workload-fleet-management-client on VM2 ($VM2_HOST)..."
   stop_device_agent_service_docker
-  echo "Device Workload Fleet management Client stopped"
+  echo "Device's Workload Fleet Management Client stopped"
 }
 
 
@@ -877,12 +877,12 @@ uninstall_prerequisites() {
 }
 
 show_status() {
-  echo "Device Workload Fleet management Client Status:"
+  echo "Device's Workload Fleet Management Client Status:"
   echo "==================="
   
   # Check Docker first
   if docker ps --format "{{.Names}}" | grep -q "^workload-fleet-management-client$"; then
-    echo "✅ Device Workload Fleet management Client Docker Container is running."
+    echo "✅ Device's Workload Fleet Management Client Docker Container is running."
     
     # Show container details
     echo "Container Details:"
@@ -893,7 +893,7 @@ show_status() {
   
   # Check Kubernetes if Docker is not running (check workload-fleet-management-client namespace)
   if kubectl get pods -n default --no-headers 2>/dev/null | grep -q "workload-fleet-management-client"; then
-  echo "✅ Device Workload Fleet management Client Kubernetes Pod is running."
+  echo "✅ Device's Workload Fleet Management Client Kubernetes Pod is running."
   
   # Show pod details
   echo "Pod Details:"
@@ -907,7 +907,7 @@ show_status() {
   fi
   
   # If neither is running
-  echo "❌ Device Workload Fleet management Client is not running on Docker or Kubernetes."
+  echo "❌ Device's Workload Fleet Management Client is not running on Docker or Kubernetes."
   echo "Available workload-fleet-management-client containers:"
   docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(NAMES|workload-fleet-management-client)" || echo "No workload-fleet-management-client containers found"
 
@@ -1346,11 +1346,11 @@ show_menu() {
   echo "Choose an option:"
   echo "1) Install-prerequisites"
   echo "2) Uninstall-prerequisites"
-  echo "3) Workload-Fleet-Management-client-Start(docker-compose-device)"
-  echo "4) Workload-Fleet-Management-client-Stop(docker-compose-device)"
-  echo "5) Workload-Fleet-Management-client-Start(k3s-device)"
-  echo "6) Workload-Fleet-Management-client-Stop(k3s-device)"
-  echo "7) Workload-Fleet-Management-client-Status"
+  echo "3) Workload-Fleet-Management-Client-Start(docker-compose-device)"
+  echo "4) Workload-Fleet-Management-Client-Stop(docker-compose-device)"
+  echo "5) Workload-Fleet-Management-Client-Start(k3s-device)"
+  echo "6) Workload-Fleet-Management-Client-Stop(k3s-device)"
+  echo "7) Workload-Fleet-Management-Client-Status"
   echo "8) OTEL-collector-promtail-installation"
   echo "9) OTEL-collector-promtail-uninstallation"
   echo "10) cleanup-residual"
