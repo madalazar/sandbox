@@ -8,7 +8,7 @@ This repository contains a code-first-sandbox implementation that supports multi
 ## Contents
 
 - Overview
-- Quickstart
+- Build and Run
 - Configuration
 - Runtimes & Examples
 - Development & Tests
@@ -48,7 +48,7 @@ Runtimes supported out of the box:
 
 The system is event-driven: database writes emit events consumed by other components to perform actions (deploy, monitor, report). Components use contexts for cancellation and support graceful shutdown.
 
-## Quickstart
+## Build and Run
 
 Minimal steps to get the agent running locally (developer flow):
 

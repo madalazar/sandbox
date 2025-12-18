@@ -105,7 +105,7 @@ Reusable Go libraries providing common functionality across MARGO components.
 Scripts and utilities for development, testing, and deployment automation.
 
 **Tools:**
-- **Setup script** (`wfm.sh`, `device-agent.sh`) - Automated environment setup (Harbor, device-agent, Symphony etc.)
+- **Setup script** (`wfm.sh`, `device-agent.sh`) - Automated environment setup (Harbor, device's Workload Fleet Management Client, Symphony etc.)
 - **EasyCLI** (`wfm-cli.sh`) - EasyCLI is an interactive menu with options to upload/apply/delete app packages, deploy/delete instances.
 
 

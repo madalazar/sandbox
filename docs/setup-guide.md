@@ -277,7 +277,7 @@ You need to copy a security file from the WFM VM to each Device VM.
    # View the logs (replace <pod-name> with actual pod name from above using #7)
    sudo kubectl logs -f <pod-name> -n default
    ```
-   Example: `kubectl logs -f device-agent-deploy-7d8f9c5b6-xyz12 -n default`
+   Example: `kubectl logs -f workload-fleet-management-client-deploy-5974667489-dw77w -n default`
    
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit the logs.
 
