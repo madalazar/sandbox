@@ -748,7 +748,7 @@ If you want to remove everything and start over:
    ```
 3. **Remove Device's Workload Fleet Management Client image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
    ```bash
-   docker rmi margo.org/device-agent:latest
+   docker rmi margo.org/workload-fleet-management-client:latest
    ```
    
 
