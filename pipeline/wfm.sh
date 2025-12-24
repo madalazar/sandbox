@@ -298,7 +298,11 @@ clone_symphony_repo() {
   cd "$HOME"
   echo 'Cloning symphony...'
   sudo rm -rf "$HOME/symphony"
-  git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/symphony.git" "$HOME/symphony"
+  if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/symphony.git" "$HOME/symphony"
+  else
+    git clone "https://github.com/margo/symphony.git" "$HOME/symphony"
+  fi
   cd "$HOME/symphony"
   git checkout ${SYMPHONY_BRANCH} || echo 'Branch ${SYMPHONY_BRANCH} not found'
   echo "symphony repo checkout to branch ${SYMPHONY_BRANCH} done"
@@ -307,7 +311,11 @@ clone_symphony_repo() {
 clone_dev_repo() {
   cd "$HOME"
   sudo rm -rf "$HOME/sandbox"
-  git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+  if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+  else
+    git clone "https://github.com/margo/sandbox.git"
+  fi
   cd "$HOME/sandbox"
   git checkout ${DEV_REPO_BRANCH} || echo 'Branch ${DEV_REPO_BRANCH} not found'
   echo "sandbox repo checkout to branch ${DEV_REPO_BRANCH} done"
@@ -1433,19 +1441,13 @@ start_symphony() {
   export GONOPROXY='github.com/margo/*'
   export GONOSUMDB='github.com/margo/*'
   export GOPRIVATE='github.com/margo/*'
-
-  # Check for required environment variables
-  if [ -z "$GITHUB_USER" ] || [ -z "$GITHUB_TOKEN" ]; then
-      echo "Error: GITHUB_USER and GITHUB_TOKEN environment variables must be set"
-      echo "Current values:"
-      echo "  GITHUB_USER: ${GITHUB_USER:-'(not set)'}"
-      echo "  GITHUB_TOKEN: ${GITHUB_TOKEN:-'(not set)'}"
-      return 1
-  fi
   
-  git config --global url."https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/";
+  if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git config --global url."https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/";
+    echo "Using GitHub credentials for user: $GITHUB_USER"
+  fi
+
   go env -w GOPRIVATE="github.com/margo/*";
-  echo "Using GitHub credentials for user: $GITHUB_USER"
 
   # Build phase
   build_maestro_cli   
@@ -1518,19 +1520,26 @@ start_symphony_api_container(){
     else
         echo "🔨 Building Symphony API container..."
         
-        # Create credential files
-        echo "$GITHUB_USER" > github_username.txt
-        echo "$GITHUB_TOKEN" > github_token.txt
+        if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then
+          # Create credential files
+          echo "$GITHUB_USER" > github_username.txt
+          echo "$GITHUB_TOKEN" > github_token.txt
+          # Build with secrets
+          docker build \
+            --secret id=github_username,src=github_username.txt \
+            --secret id=github_token,src=github_token.txt \
+            -t margo-symphony-api:latest \
+            .. -f Dockerfile
 
-        # Build with secrets
-        docker build \
-          --secret id=github_username,src=github_username.txt \
-          --secret id=github_token,src=github_token.txt \
-          -t margo-symphony-api:latest \
-          .. -f Dockerfile
+          # Clean up credential files
+          rm github_username.txt github_token.txt
+        else
+          # Build with secrets
+          docker build \
+            -t margo-symphony-api:latest \
+            .. -f Dockerfile
+        fi
 
-        # Clean up credential files
-        rm github_username.txt github_token.txt
         
         if [ $? -ne 0 ]; then
             echo "❌ Failed to build Symphony API container"

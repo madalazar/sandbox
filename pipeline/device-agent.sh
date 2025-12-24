@@ -97,7 +97,7 @@ export GONOSUMDB='github.com/margo/*'
 export GOPRIVATE='github.com/margo/*'
 
 validate_pre_required_vars() {
-  local required_vars=("GITHUB_USER" "GITHUB_TOKEN" "DEV_REPO_BRANCH" "WFM_IP" "WFM_PORT")
+  local required_vars=("DEV_REPO_BRANCH" "WFM_IP" "WFM_PORT")
   for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
       echo "Error: Required environment variable $var is not set"
@@ -268,7 +268,11 @@ clone_dev_repo() {
   echo "Cloning sandbox on ($VM2_HOST)..."
   cd $HOME
   sudo rm -rf sandbox
-  git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+  if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+  else
+    git clone "https://github.com/margo/sandbox.git"
+  fi
   cd sandbox
   git checkout ${DEV_REPO_BRANCH}
   cd ..
