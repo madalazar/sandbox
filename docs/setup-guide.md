@@ -137,7 +137,9 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit.
 
-> Note: Any service started using these scripts need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
+
 
 ### On Each Device VM:
 1. **Navigate to the pipeline folder**
@@ -191,8 +193,9 @@ You need to copy a security file from the WFM VM to each Device VM.
 
 | Target VM | Run From | SCP Command | Example |
 |-----------|----------|-------------|---------|
-| **Docker Device** | Docker Device VM | `sudo scp username@WFM-VM-IP:$(ssh username@WFM-VM-IP 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `sudo scp azureuser@10.10.10.4:$(ssh azureuser@10.10.10.4 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
-| **K3s Device** | K3s Device VM | `sudo scp username@WFM-VM-IP:$(ssh username@WFM-VM-IP 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `sudo scp azureuser@10.10.10.4:$(ssh azureuser@10.10.10.4 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **Docker Device** | Docker Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **K3s Device** | K3s Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+
 
 **Replace:**
 - `username` with your WFM VM username
@@ -269,7 +272,8 @@ You need to copy a security file from the WFM VM to each Device VM.
    
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit the logs.
 
-> Note: Any service started using these scripts need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ### Add Monitoring to Devices
 
@@ -282,7 +286,8 @@ cd $HOME/workspace/sandbox/pipeline
 - Type `8` and press Enter
 - Choose: `Option 8: otel-collector-promtail-installation`
 
-> Note: Any service started using these script need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ## Step 4: Run and Use
 
@@ -781,4 +786,3 @@ If something doesn't work:
 2. Verify environment variables are set correctly
 3. Make sure the ca-cert.pem file was copied correctly
 4. Check the logs using the commands in "Check Everything is Working" section
-
