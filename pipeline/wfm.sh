@@ -2,6 +2,23 @@
 set -e
 
 # ----------------------------
+# Load environment file
+# ----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+load_wfm_env() {
+  local env_file="$SCRIPT_DIR/wfm.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "[WARN] wfm.env not found at: $env_file"
+    return 1
+  fi
+
+  echo "[INFO] Loading environment from: $env_file"
+  source "$env_file"
+}
+load_wfm_env || true
+
+# ----------------------------
 # Environment & Validation
 # ----------------------------
 
@@ -24,8 +41,6 @@ EXPOSED_SYMPHONY_PORT="${EXPOSED_SYMPHONY_PORT:-8082}"
 #--- device node IPs (can be overridden via env) for prometheus to scrape metrics
 # Format: "IP1:PORT1,IP2:PORT2" or just "IP1,IP2" (defaults to port 30999 for k3s)
 DEVICE_NODE_IPS="${DEVICE_NODE_IPS:-127.0.0.1:30999}"
-
-
 
 #--- Registry settings (can be overridden via env)
 REGISTRY_URL="${REGISTRY_URL:-http://${EXPOSED_HARBOR_IP}:${EXPOSED_HARBOR_PORT}}"
@@ -302,24 +317,142 @@ clone_dev_repo() {
 # Service Setup Functions
 # ----------------------------
 
+create_harbor_systemd_service() {
+  echo "🔧 Creating systemd service for Harbor auto-start..."
+  
+  # Get the actual harbor directory path (not using $HOME variable)
+  local harbor_dir="$HOME/sandbox/pipeline/harbor"
+  
+  # Create systemd service file with absolute path
+  sudo tee /etc/systemd/system/harbor.service > /dev/null <<EOF
+  [Unit]
+  Description=Harbor Container Registry
+  Requires=docker.service
+  After=docker.service network-online.target
+  Wants=network-online.target
 
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  WorkingDirectory=${harbor_dir}
+  ExecStartPre=/bin/sleep 10
+  ExecStart=/usr/bin/docker compose up -d
+  ExecStop=/usr/bin/docker compose down
+  TimeoutStartSec=0
+
+  [Install]
+  WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service
+  sudo systemctl daemon-reload
+  sudo systemctl enable harbor.service
+  
+  echo "✅ Harbor systemd service created and enabled"
+  echo "📋 Service will start Harbor automatically on boot"
+  echo "📁 Working directory: ${harbor_dir}"
+}
+
+
+configure_harbor_restart_policy() {
+  local compose_file="$HOME/sandbox/pipeline/harbor/docker-compose.yml"
+  
+  if [ ! -f "$compose_file" ]; then
+    echo "⚠️ docker-compose.yml not found, will be generated during install"
+    return 0
+  fi
+  
+  echo "🔧 Replacing restart policies in docker-compose.yml..."
+  
+  # Backup original file
+  cp "$compose_file" "${compose_file}.backup.$(date +%s)"
+  
+  # Replace "restart: always" with "restart: unless-stopped"
+  sed -i 's/^\s*restart:\s*always/    restart: unless-stopped/g' "$compose_file"
+  
+  echo "✅ Restart policies replaced with unless-stopped"
+  
+  # Verify the changes - should show only one restart per service
+  echo "📋 Verifying restart policies in docker-compose.yml:"
+  grep "restart:" "$compose_file"
+}
+
+
+
+# ----------------------------
+# Service Setup Functions
+# ----------------------------
 setup_harbor() {
   if docker ps --format '{{.Names}}' | grep -q harbor; then
     echo 'Harbor is already running, skipping startup.'
   else
     cd "$HOME/sandbox/pipeline/harbor"
-    #Update harbor.yml with EXPOSED_HARBOR_IP
+    
+    # Update harbor.yml with EXPOSED_HARBOR_IP
     sudo sed -i "s|^hostname: .*|hostname: $EXPOSED_HARBOR_IP|" harbor.yml
-    echo 'Starting Harbor...'
+    
+    echo 'Preparing Harbor configuration...'
     sudo chmod +x install.sh prepare common.sh
-    sudo bash install.sh
+    
+    # Run prepare to generate docker-compose.yml
+    sudo ./prepare
+    
+    # Add restart policies to docker-compose.yml BEFORE starting
+    configure_harbor_restart_policy
+    
+    # Start Harbor - ensure clean state
+    echo 'Starting Harbor with restart policies...'
+    sudo docker compose down --remove-orphans 2>/dev/null || true
+    sudo docker compose up -d
+    
+    # Force update restart policies on all containers
+    echo '🔧 Applying restart policies to running containers...'
+    sleep 5
+    for container in nginx registry registryctl redis harbor-jobservice harbor-core harbor-db harbor-portal harbor-log; do
+      if docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        docker update --restart=unless-stopped "$container" 2>/dev/null && echo "✅ Updated: $container"
+      fi
+    done
+    
+    echo 'Waiting for Harbor to initialize...'
+    sleep 15
+    
     docker ps
-    sleep 10
-    docker ps | grep harbor || echo 'Harbor did not start properly'
+    
+    # Verify all containers are running
+    echo ""
+    echo "📊 Harbor container status:"
+    docker ps --filter "name=harbor" --format "table {{.Names}}\t{{.Status}}"
+    
+    # Verify restart policies
+    echo ""
+    echo "📋 Verifying restart policies:"
+    for container in nginx registry registryctl redis $(docker ps -a --filter "name=harbor-" --format "{{.Names}}"); do
+      if docker ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+        docker inspect --format='{{.Name}}: {{.HostConfig.RestartPolicy.Name}}' "$container"
+      fi
+    done
+    
+    # Create systemd service for auto-start on boot
+    create_harbor_systemd_service
+    
+    # Final health check
+    echo ""
+    echo "⏳ Waiting for all containers to be healthy (this may take 1-2 minutes)..."
+    sleep 45
+    
+    healthy_count=$(docker ps --filter "name=harbor" --filter "health=healthy" --format "{{.Names}}" | wc -l)
+    total_count=$(docker ps --filter "name=harbor" --format "{{.Names}}" | wc -l)
+    
+    echo "✅ Harbor status: $healthy_count/$total_count containers healthy"
+    
+    if [ "$healthy_count" -eq "$total_count" ] && [ "$total_count" -eq 9 ]; then
+      echo "✅ All Harbor containers are running and healthy!"
+    else
+      echo "⚠️ Some containers may still be initializing. Check with: docker ps | grep harbor"
+    fi
   fi
 }
-
-
 
 # ----------------------------
 # OCI Application Package Push Functions (NEW - replaces Git push)
@@ -743,25 +876,24 @@ install_grafana() {
 }
 
 observability_stack_install(){
-echo "Observability stack installation started"
+  echo "Observability stack installation started"
 
-# Check if collector-scrape-cm-change.txt file exists
-if [ ! -f "$HOME/sandbox/pipeline/observability/collector-scrape-cm-change.txt" ]; then
-    echo "Error: collector-scrape-cm-change.txt file not found in $HOME/sandbox/pipeline/observability"
-    echo "Please ensure the file exists before proceeding."
-    exit 1
-fi
+  # Check if collector-scrape-cm-change.txt file exists
+  if [ ! -f "$HOME/sandbox/pipeline/observability/collector-scrape-cm-change.txt" ]; then
+      echo "Error: collector-scrape-cm-change.txt file not found in $HOME/sandbox/pipeline/observability"
+      echo "Please ensure the file exists before proceeding."
+      exit 1
+  fi
 
-echo "collector-scrape-cm-change.txt file found, proceeding..."
-  create_observability_namespace
-  install_jaeger
-  install_prometheus
-  install_grafana
-  install_loki
-echo "Observability stack installation completed"
+  echo "collector-scrape-cm-change.txt file found, proceeding..."
+    create_observability_namespace
+    install_jaeger
+    install_prometheus
+    install_grafana
+    install_loki
+
+  echo "Observability stack installation completed"
 }
-
-
 
 observability_stack_uninstall(){
     echo "Observability stack uninstall started"
@@ -799,23 +931,11 @@ add_container_registry_mirror_to_k3s() {
   # ---------------------------------------------------
   registry_url="${REGISTRY_URL:-http://${EXPOSED_HARBOR_IP}:${EXPOSED_HARBOR_PORT}}"
   registry_user="${REGISTRY_USER:-admin}"
-  registry_password="${REGISTRY_PASS:-Harbor12345}"
-
-										 
-												   
-								  
-											
-			
-	
-										 
-														
+  registry_password="${REGISTRY_PASS:-Harbor12345}"													
   echo "Using registry mirror: $registry_url"
   echo "Using registry credentials: $registry_user / ******"
   # ---------------------------------------------------
 											
-			
-	
-
   # Create k3s directory if needed
   # ---------------------------------------------------
   sudo mkdir -p /var/lib/rancher/k3s
@@ -1287,15 +1407,11 @@ install_prerequisites() {
   setup_k3s
   install_redis
   install_oras  
-  
   clone_symphony_repo
   clone_dev_repo
   add_container_registry_mirror_to_k3s
-  
-   
   setup_harbor
   build_custom_otel_container_images
-  
   echo ""
   echo "-----------------------------------------------------------------------"
   echo "📦 Pushing pre-existing test-bed application packages to OCI Registry(i.e. harbor)..."
@@ -1338,10 +1454,57 @@ start_symphony() {
   start_symphony_api_container
 }
 
+create_symphony_api_systemd_service() {
+  echo "🔧 Creating systemd service for Symphony API auto-start..."
+  
+  # Get the actual symphony api directory path
+  local symphony_dir="$HOME/symphony/api"
+  
+  # Create systemd service file with absolute path
+  sudo tee /etc/systemd/system/symphony-api.service > /dev/null <<EOF
+[Unit]
+Description=Margo Symphony API Server
+Requires=docker.service redis-server.service
+After=docker.service redis-server.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+RemainAfterExit=yes
+WorkingDirectory=${symphony_dir}
+ExecStartPre=/bin/sleep 15
+ExecStartPre=-/usr/bin/docker stop symphony-api-container
+ExecStartPre=-/usr/bin/docker rm symphony-api-container
+ExecStart=/usr/bin/docker run --rm --name symphony-api-container \
+    --network host \
+    -p 8082:8082 \
+    -e LOG_LEVEL=Debug \
+    -v ${symphony_dir}/certificates:/certificates \
+    -v ${symphony_dir}:/configs \
+    -e CONFIG=symphony-api-margo.json \
+    margo-symphony-api:latest
+ExecStop=/usr/bin/docker stop symphony-api-container
+TimeoutStartSec=0
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service
+  sudo systemctl daemon-reload
+  sudo systemctl enable symphony-api.service
+  
+  echo "✅ Symphony API systemd service created and enabled"
+  echo "📋 Service will start Symphony API automatically on boot"
+  echo "📁 Working directory: ${symphony_dir}"
+}
+
 start_symphony_api_container(){
 
     cd "$HOME/symphony/api"
-	  echo "Building Symphony API container..."																			   
+	  echo "Building Symphony API container..."
 
     # Stop and remove existing container if present
     echo "Stopping and removing existing symphony-api-container if present..."
@@ -1373,8 +1536,6 @@ start_symphony_api_container(){
             echo "❌ Failed to build Symphony API container"
             return 1
         fi
-        
-	   
         echo "✅ Symphony API container built successfully with tag: margo-symphony-api:latest"
     fi
     
@@ -1394,11 +1555,13 @@ start_symphony_api_container(){
         echo "✅ Symphony API container started successfully"
         echo "📡 Container is running on port 8082"
         echo "🏷️  Container name: symphony-api-container"
+
+        # Create systemd service for auto-start on boot
+        create_symphony_api_systemd_service
     else
         echo "❌ Failed to start Symphony API container"
         return 1
     fi
- 
 }
 
 
@@ -1434,8 +1597,6 @@ stop_symphony() {
     echo 'ℹ️ Redis data preserved'
   fi
 }
-
-
 
 # Collect certificate information
 collect_certs_info() {

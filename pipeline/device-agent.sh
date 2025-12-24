@@ -1,6 +1,58 @@
 #!/bin/bash
 set -e
 export PATH="$PATH:/usr/local/go/bin"
+
+# ----------------------------
+# Load environment file 
+# ----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+load_device_agent_env() {
+  local device="${1:-}"
+
+  if [[ -z "$device" ]]; then
+    # Prompt user for device type instead of defaulting to k3s
+    echo "Please select device type:"
+    echo "  1) docker"
+    echo "  2) k3s"
+    read -p "Enter choice [1-2]: " choice
+    
+    case "$choice" in
+      1)
+        device="docker"
+        ;;
+      2)
+        device="k3s"
+        ;;
+      *)
+        echo "[ERROR] Invalid choice: '$choice' (expected: 1 or 2)"
+        return 1
+        ;;
+    esac
+  fi
+  
+  device="${device,,}"
+
+  if [[ "$device" != "docker" && "$device" != "k3s" ]]; then
+    echo "[ERROR] Invalid device type: '$device' (expected: docker or k3s)"
+    return 1
+  fi
+  
+  local env_file="$SCRIPT_DIR/device-agent_${device}.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "[ERROR] Env file not found: $env_file"
+    return 1
+  fi
+
+  echo "[INFO] Device type selected: $device"
+  #echo "[INFO] Loading environment: $env_file"
+  source "$env_file"
+  export DEVICE_TYPE="$device"
+}
+
+load_device_agent_env "$1" || true
+
 # ----------------------------
 # Environment & Validation Functions
 # ----------------------------
@@ -84,9 +136,6 @@ install_basic_utilities() {
     echo "ℹ️ Skipping Helm installation for docker device type"
   fi
 }
-
-
-
 
 install_docker_and_compose() {
   cd $HOME
@@ -422,6 +471,42 @@ build_device_agent_docker() {
 # Device Workload Fleet Management Client Service Functions
 # ----------------------------
 
+create_device_agent_systemd_service() {
+  echo "🔧 Creating systemd service for device-agent auto-start..."
+  
+  # Get the actual docker-compose directory path
+  local compose_dir="$HOME/sandbox/docker-compose"
+  
+  # Create systemd service file
+sudo tee /etc/systemd/system/device-agent.service > /dev/null <<EOF
+  [Unit]
+  Description=Margo Device Agent
+  Requires=docker.service
+  After=docker.service network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  WorkingDirectory=${compose_dir}
+  ExecStartPre=/bin/sleep 10
+  ExecStart=/usr/bin/docker compose up -d
+  ExecStop=/usr/bin/docker compose down
+  TimeoutStartSec=0
+
+  [Install]
+  WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service
+  sudo systemctl daemon-reload
+  sudo systemctl enable device-agent.service
+  
+  echo "✅ Device-agent systemd service created and enabled"
+  echo "📋 Service will start device-agent automatically on boot"
+  echo "📁 Working directory: ${compose_dir}"
+}
+
 start_device_agent_docker_service() {
   echo 'Starting workload-fleet-management-client...'
   cd "$HOME/sandbox/docker-compose"
@@ -446,11 +531,13 @@ start_device_agent_docker_service() {
   mkdir -p data
   enable_docker_runtime
   docker compose up -d
+
+  #systemd service for auto-start if vm reboots
+  create_device_agent_systemd_service
 }
 
-
 stop_device_agent_service_docker() {
-  echo "Stopping workload-fleet-management-client..."
+  
   cd "$HOME/sandbox/docker-compose"
   docker compose down
   
@@ -866,7 +953,7 @@ start_device_agent_kubernetes() {
 }
 
 stop_device_agent_docker() {
-  echo "Stopping workload-fleet-management-client on VM2 ($VM2_HOST)..."
+  echo "Stopping workload-fleet-management-client ..."
   stop_device_agent_service_docker
   echo "Device's Workload Fleet Management Client stopped"
 }
@@ -1074,15 +1161,50 @@ create_observability_namespace() {
     fi
 }
 
+create_observability_systemd_service() {
+  echo "🔧 Creating systemd service for observability (OTEL + Promtail) auto-start..."
+
+  local obs_dir="$HOME/sandbox/pipeline/observability"
+
+  # Create systemd unit file
+  sudo tee /etc/systemd/system/observability.service > /dev/null <<EOF
+[Unit]
+Description=Margo Observability Stack (OTEL Collector + Promtail)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${obs_dir}
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/docker compose -f docker-compose-observability.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose-observability.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service so it runs at boot
+  sudo systemctl daemon-reload
+  sudo systemctl enable observability.service
+
+  echo "✅ Observability systemd service created and enabled"
+  echo "📋 Service will run: /usr/bin/docker compose -f docker-compose-observability.yml up -d"
+  echo "📁 Working directory: ${obs_dir}"
+}
+
 install_otel_collector_promtail_docker() {
   echo "Installing OTEL Collector v0.140.0 and Promtail v2.9.10 as Docker containers..."
   cd "$HOME/sandbox/pipeline/observability" || { echo '❌ observability dir missing'; exit 1; }
   
-  # Fix Docker socket permissions for OTEL Collector access
-  echo "Setting Docker socket permissions..."
-  sudo chmod 666 /var/run/docker.sock
+  # Get docker group GID for proper permissions
+  DOCKER_GID=$(getent group docker | cut -d: -f3)
+  echo "Docker group GID: $DOCKER_GID"
   
-  # Create docker-compose.yml for observability stack
+  # Create docker-compose.yml for observability stack with proper permissions
   cat <<EOF > docker-compose-observability.yml
 version: '3.8'
 
@@ -1101,6 +1223,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     container_name: otel-collector
+    user: "0:${DOCKER_GID}"  # Run as root with docker group access
     volumes:
       - ./otel-collector-config.yml:/etc/otel/config.yml
       - /var/run/docker.sock:/var/run/docker.sock
@@ -1220,13 +1343,17 @@ EOF
   # Start the observability stack
   docker compose -f docker-compose-observability.yml up -d
   
+  # Create & enable systemd unit to start this stack on reboot
+  create_observability_systemd_service
+  
   echo "✅ OTEL Collector v0.140.0 and Promtail v2.9.10 installed"
   echo "📡 OTLP gRPC: localhost:4317"
   echo "📡 OTLP HTTP: localhost:4318"
   echo "📊 Prometheus metrics: localhost:8899"
   echo "🔍 Traces sent to Jaeger at: ${WFM_IP}:4317"
-  
+  echo "🔒 Docker socket access configured with group permissions (survives reboots)"
 }
+
 
 
 install_otel_collector_promtail_wrapper() {
@@ -1340,7 +1467,14 @@ create_device_ecdsa_certs() {
 										 
 																			   
 }
+pause() {
+  echo
+  read -rp "Press Enter to continue..." _
+}
 
+# ----------------------------
+# Menu Functions
+# ----------------------------
 
 show_menu() {
   echo "Choose an option:"
@@ -1356,7 +1490,8 @@ show_menu() {
   echo "10) cleanup-residual"
   echo "11) create_device_rsa_certs"
   echo "12) create_device_ecdsa_certs"
-  read -rp "Enter choice [1-12]: " choice
+  echo "13) Exit"
+  read -rp "Enter choice [1-13]: " choice
   case $choice in
     1) install_prerequisites;;
     2) uninstall_prerequisites;;
@@ -1370,13 +1505,44 @@ show_menu() {
     10) cleanup_residual;;
     11) create_device_rsa_certs ;;
     12) create_device_ecdsa_certs ;;
+    13) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "Invalid choice" ;;
   esac
+
+  pause
 }
 
 # ----------------------------
 # Main Script Execution
 # ----------------------------
-if [ -z "$1" ]; then
-  show_menu
+ main_loop() {
+  while true; do
+    show_menu
+  done
+}
+
+if [[ -z "$1" || "$1" == "docker" || "$1" == "k3s" ]]; then
+  main_loop
+else
+  case "$1" in
+    install) install_prerequisites ;;
+    uninstall) uninstall_prerequisites ;;
+    start-docker) start_device_agent_docker ;;
+    stop-docker) stop_device_agent_docker ;;
+    start-k3s) start_device_agent_kubernetes ;;
+    stop-k3s) stop_device_agent_kubernetes ;;
+    status) show_status ;;
+    otel-install) install_otel_collector_promtail_wrapper ;;
+    otel-uninstall) uninstall_otel_collector_promtail_wrapper ;;
+    cleanup) cleanup_residual ;;
+    create-rsa-certs) create_device_rsa_certs ;;
+    create-ecdsa-certs) create_device_ecdsa_certs ;;
+
+    *)
+      echo "Usage:"
+      echo "  $0 [docker|k3s]"
+      echo "  DEVICE_TYPE=docker $0"
+      exit 1
+      ;;
+  esac
 fi
