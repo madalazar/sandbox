@@ -20,6 +20,7 @@ load_wfm_env() {
   
 }
 
+load_wfm_env || true
 
 # ----------------------------
 # Environment & Validation

@@ -52,6 +52,8 @@ load_device_agent_env() {
   export DEVICE_TYPE="$device"
 }
 
+load_device_agent_env "$1" 2>/dev/null || true
+
 # ----------------------------
 # Environment & Validation Functions
 # ----------------------------
@@ -1540,6 +1542,10 @@ if [[ -z "$1" ]]; then
   
 elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -z "$2" ]]; then
   # Device type specified but no command - run interactive menu
+  if ! load_device_agent_env "$1"; then
+    echo "[ERROR] Failed to load device agent environment"
+    exit 1
+  fi
   main_loop
   
 elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
