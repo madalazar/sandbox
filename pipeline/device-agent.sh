@@ -66,7 +66,7 @@ EXPOSED_HARBOR_IP="${EXPOSED_HARBOR_IP:-127.0.0.1}"
 EXPOSED_HARBOR_PORT="${EXPOSED_HARBOR_PORT:-8081}"
 
 #--- branch details (can be overridden via env)
-DEV_REPO_BRANCH="${DEV_REPO_BRANCH:-dev-sprint-6}"
+SANDBOX_REPO_BRANCH="${SANDBOX_REPO_BRANCH:-dev-sprint-6}"
 WFM_IP="${WFM_IP:-127.0.0.1}"
 WFM_PORT="${WFM_PORT:-8082}"
 
@@ -97,7 +97,7 @@ export GONOSUMDB='github.com/margo/*'
 export GOPRIVATE='github.com/margo/*'
 
 validate_pre_required_vars() {
-  local required_vars=("DEV_REPO_BRANCH" "WFM_IP" "WFM_PORT")
+  local required_vars=("SANDBOX_REPO_BRANCH" "WFM_IP" "WFM_PORT")
   for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
       echo "Error: Required environment variable $var is not set"
@@ -274,7 +274,7 @@ clone_dev_repo() {
     git clone "https://github.com/margo/sandbox.git"
   fi
   cd sandbox
-  git checkout ${DEV_REPO_BRANCH}
+  git checkout ${SANDBOX_REPO_BRANCH}
   cd ..
 }
 
@@ -926,7 +926,7 @@ install_prerequisites() {
   validate_pre_required_vars
   install_go
   install_vim
-  install_and_enable_ssh
+  #install_and_enable_ssh
   install_basic_utilities
   install_docker_and_compose
   clone_dev_repo

@@ -16,8 +16,8 @@ Update the following variables:
 export EXPOSED_HARBOR_IP=<wfm-machine-ip>
 export EXPOSED_SYMPHONY_IP=<wfm-machine-ip>
 export DEVICE_NODE_IPS="<k3-device-machine-ip:port>,<docker-device-machine-ip:port>" # "172.19.59.148:30999,172.19.59.150:8899"  port:30999 is for k3s device & port:8899 is for docker device
-export SYMPHONY_BRANCH=main
-export DEV_REPO_BRANCH=main
+export SYMPHONY_BRANCH=main #it can be a tag also
+export SANDBOX_REPO_BRANCH=main #it can be a tag also
 ```
 
 **For k3s device-agent.sh script**
@@ -27,8 +27,8 @@ Environment file path:-
 
 Update the following variables:
 ```bash
-export DEVICE_TYPE="k3s" #Options: "k3s" or "docker", Use device-type carefully when running this script based on device
-export DEV_REPO_BRANCH=main
+export DEVICE_TYPE="k3s" 
+export SANDBOX_REPO_BRANCH=main #it can be a tag also
 export WFM_IP=<wfm-machine-ip>
 export EXPOSED_HARBOR_IP=<wfm-machine-ip>
 ```
@@ -40,8 +40,8 @@ Environment file path:-
 
 Update the following variables:
 ```bash
-export DEVICE_TYPE="docker" #Options: "k3s" or "docker", Use device-type carefully when running this script based on device
-export DEV_REPO_BRANCH=main
+export DEVICE_TYPE="docker" 
+export SANDBOX_REPO_BRANCH=main #it can be a tag also
 export WFM_IP=<wfm-machine-ip>
 export EXPOSED_HARBOR_IP=<wfm-machine-ip>
 ```

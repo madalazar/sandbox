@@ -28,7 +28,7 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
 #--- branch details (can be overridden via env)
 SYMPHONY_BRANCH="${SYMPHONY_BRANCH:-main}"
-DEV_REPO_BRANCH="${DEV_REPO_BRANCH:-main}"
+SANDBOX_REPO_BRANCH="${SANDBOX_REPO_BRANCH:-main}"
 
 #--- harbor settings (can be overridden via env)
 EXPOSED_HARBOR_IP="${EXPOSED_HARBOR_IP:-127.0.0.1}"
@@ -73,6 +73,11 @@ info() {
 
 success() {
     echo "✅ $1"
+}
+
+pause() {
+  echo
+  read -rp "Press Enter to continue..." _
 }
 
 
@@ -317,8 +322,8 @@ clone_dev_repo() {
     git clone "https://github.com/margo/sandbox.git"
   fi
   cd "$HOME/sandbox"
-  git checkout ${DEV_REPO_BRANCH} || echo 'Branch ${DEV_REPO_BRANCH} not found'
-  echo "sandbox repo checkout to branch ${DEV_REPO_BRANCH} done"
+  git checkout ${SANDBOX_REPO_BRANCH} || echo 'Branch ${SANDBOX_REPO_BRANCH} not found'
+  echo "sandbox repo checkout to branch ${SANDBOX_REPO_BRANCH} done"
 }
 
 # ----------------------------
@@ -1409,7 +1414,7 @@ install_prerequisites() {
   install_basic_utilities
   install_go
   install_vim
-  install_and_enable_ssh
+  #install_and_enable_ssh
   install_docker_and_compose
   add_insecure_registry_to_daemon
   setup_k3s
@@ -1798,6 +1803,8 @@ install_and_enable_ssh() {
 
 # Update the show_menu function to include uninstall option														   
 show_menu() {
+  clear
+ 
   echo "Choose an option:"
   echo "1) PreRequisites: Setup"
   echo "2) PreRequisites: Cleanup"
@@ -1805,7 +1812,8 @@ show_menu() {
   echo "4) Symphony: Stop"
   echo "5) ObservabilityStack: Start"
   echo "6) ObservabilityStack: Stop"
-  read -p "Enter choice [1-6]: " choice
+  echo "7) Exit"
+  read -p "Enter choice [1-7]: " choice
   case $choice in
     1) install_prerequisites ;;
     2) uninstall_prerequisites ;;
@@ -1813,14 +1821,36 @@ show_menu() {
     4) stop_symphony ;;
     5) observability_stack_install ;;
     6) observability_stack_uninstall ;;
-    *) echo "⚠️ Invalid choice"; exit 1 ;;
+    7) echo "👋 Goodbye!"; exit 0 ;;
+    *) echo "⚠️ Invalid choice"; sleep 2 ;;
   esac
+  
+  pause
 }
+
 
 # ----------------------------
 # Main Script Execution
 # ----------------------------
-# Update the main script execution section
+main_loop() {
+  while true; do
+    show_menu
+  done
+}
+
 if [[ -z "$1" ]]; then
-  show_menu
+  main_loop
+else
+  case "$1" in
+    install) install_prerequisites ;;
+    uninstall) uninstall_prerequisites ;;
+    start) start_symphony ;;
+    stop) stop_symphony ;;
+    obs-install) observability_stack_install ;;
+    obs-uninstall) observability_stack_uninstall ;;
+    *)
+      echo "Usage: $0 {install|uninstall|start|stop|obs-install|obs-uninstall}"
+      exit 1
+      ;;
+  esac
 fi

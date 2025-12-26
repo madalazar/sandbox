@@ -44,10 +44,6 @@ You need to download the sandbox code to all three VMs. Follow these steps on **
    git clone https://github.com/margo/sandbox.git
    ```
    
-   If prompted, enter:
-   - Your GitHub username
-   - Your GitHub access token (not your password)
-
 5. **Navigate to the Downloaded Folder**
    ```bash
    cd sandbox
@@ -57,9 +53,6 @@ You need to download the sandbox code to all three VMs. Follow these steps on **
 
 **Important:** We're using `$HOME/workspace/sandbox` instead of `$HOME/sandbox` because the automation scripts will clone their own copies to `$HOME`. This keeps your working copy separate from the automated setup.
 
-**Troubleshooting:**
-- If you get "Permission denied" error, make sure your GitHub account has access to the MARGO repository
-- If you get "Authentication failed" error, verify your GitHub access token is correct
 
 ---
 
@@ -82,7 +75,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    - Network settings
    - Other required configurations
 
-**Important:** Complete this step on all three VMs before proceeding.
+🔴 **Important:** Complete this step on all three VMs before proceeding.
 
 ---
 
@@ -108,12 +101,8 @@ On each VM, you need to configure environment variables (settings that tell the 
    
    This installs everything needed like Redis, Docker, Helm, and other tools. This may take 10-15 minutes.
 
-3. **Set Up Storage and Code Repository**
-   
-   This happens automatically in Step 2 - it creates:
-   - **Harbor**: For storing application container images, Helm charts as OCI-compliant manifests and pre-built application vendors' MARGO compliant application packages.
 
-4. **Start the Workload Fleet Manager**
+3. **Start the Workload Fleet Manager**
    ```bash
     sudo -E bash wfm.sh
    ```
@@ -122,16 +111,16 @@ On each VM, you need to configure environment variables (settings that tell the 
    
    This starts the Workload Fleet Manager service.
 
-5. **Add Monitoring Tools**
+4. **Add Monitoring Tools**
    ```bash
     sudo -E bash wfm.sh
    ```
    - Type `5` and press Enter
    - Choose: `Option 5: ObservabilityStack Start`
    
-   This adds tools to monitor your system's performance.
+   This adds tools to monitor workloads observability.
 
-6. **Verify the Workload Fleet Manager Is Running Correctly**
+5. **Verify the Workload Fleet Manager Is Running Correctly**
    ```bash
    sudo docker logs -f symphony-api-container
    ```
@@ -189,7 +178,10 @@ You need to copy a security file from the WFM VM to each Device VM.
 
 #### Step 2: Copy Methods
 
-**Option A - Using SCP (Recommended - Run from Device VMs)**
+**Option A - Using SCP**  
+🔴 **(Recommended - Run from Device VMs)**
+
+
 
 | Target VM | Run From | SCP Command | Example |
 |-----------|----------|-------------|---------|
