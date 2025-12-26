@@ -3,7 +3,7 @@
 ## Environment Variables Setup
 
 Before running any script, make sure to update the environment variable files according to your system setup.
-The environment files are located here:
+The environment files are located here **(wfm.env and device-agent.env)**:
 [Environment vairable(.env) files](../pipeline/)  
 
 **For wfm.sh and wfm-cli.sh script**
@@ -20,28 +20,15 @@ export SYMPHONY_BRANCH=main #it can be a tag also
 export SANDBOX_REPO_BRANCH=main #it can be a tag also
 ```
 
-**For k3s device-agent.sh script**
+**For k3s/docker device-agent.sh script**
 
 Environment file path:-
-[For k3s Device's Workload Fleet Management Client-Env file](../pipeline/device-agent_k3s.env)
+[For k3s/docker Device's Workload Fleet Management Client-Env file](../pipeline/device-agent.env)
 
 Update the following variables:
 ```bash
-export DEVICE_TYPE="k3s" 
 export SANDBOX_REPO_BRANCH=main #it can be a tag also
 export WFM_IP=<wfm-machine-ip>
 export EXPOSED_HARBOR_IP=<wfm-machine-ip>
 ```
 
-**For docker device-agent.sh script**
-
-Environment file path:-
-[For docker Device's Workload Fleet Management Client-Env file](../pipeline/device-agent_docker.env)
-
-Update the following variables:
-```bash
-export DEVICE_TYPE="docker" 
-export SANDBOX_REPO_BRANCH=main #it can be a tag also
-export WFM_IP=<wfm-machine-ip>
-export EXPOSED_HARBOR_IP=<wfm-machine-ip>
-```

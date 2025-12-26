@@ -6,7 +6,7 @@ set -e
 # ----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_wfm_env() {
-  local env_file="$SCRIPT_DIR/wfm.env"
+   local env_file="$SCRIPT_DIR/wfm.env"
 
   if [[ ! -f "$env_file" ]]; then
     echo "[WARN] wfm.env not found at: $env_file"
@@ -14,9 +14,12 @@ load_wfm_env() {
   fi
 
   echo "[INFO] Loading environment from: $env_file"
+  set -a
   source "$env_file"
+  set +a
+  
 }
-load_wfm_env || true
+
 
 # ----------------------------
 # Environment & Validation
@@ -1804,7 +1807,7 @@ install_and_enable_ssh() {
 # Update the show_menu function to include uninstall option														   
 show_menu() {
   clear
- 
+  load_wfm_env || true
   echo "Choose an option:"
   echo "1) PreRequisites: Setup"
   echo "2) PreRequisites: Cleanup"
@@ -1841,6 +1844,7 @@ main_loop() {
 if [[ -z "$1" ]]; then
   main_loop
 else
+  load_wfm_env || true
   case "$1" in
     install) install_prerequisites ;;
     uninstall) uninstall_prerequisites ;;

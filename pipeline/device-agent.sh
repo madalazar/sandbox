@@ -6,7 +6,6 @@ export PATH="$PATH:/usr/local/go/bin"
 # Load environment file 
 # ----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 load_device_agent_env() {
   local device="${1:-}"
 
@@ -38,7 +37,7 @@ load_device_agent_env() {
     return 1
   fi
   
-  local env_file="$SCRIPT_DIR/device-agent_${device}.env"
+  local env_file="$SCRIPT_DIR/device-agent.env"
 
   if [[ ! -f "$env_file" ]]; then
     echo "[ERROR] Env file not found: $env_file"
@@ -46,12 +45,12 @@ load_device_agent_env() {
   fi
 
   echo "[INFO] Device type selected: $device"
-  #echo "[INFO] Loading environment: $env_file"
+  echo "[INFO] Loading environment: $env_file"
+  set -a
   source "$env_file"
+  set +a
   export DEVICE_TYPE="$device"
 }
-
-load_device_agent_env "$1" || true
 
 # ----------------------------
 # Environment & Validation Functions
@@ -70,8 +69,6 @@ SANDBOX_REPO_BRANCH="${SANDBOX_REPO_BRANCH:-dev-sprint-6}"
 WFM_IP="${WFM_IP:-127.0.0.1}"
 WFM_PORT="${WFM_PORT:-8082}"
 
-# Device type configuration (can be overridden via env)
-DEVICE_TYPE="${DEVICE_TYPE:-k3s}"  # Options: "k3s" or "docker"
 
 #--- Registry settings (can be overridden via env)
 REGISTRY_URL="${REGISTRY_URL:-http://${EXPOSED_HARBOR_IP}:${EXPOSED_HARBOR_PORT}}"
@@ -1481,6 +1478,13 @@ pause() {
 # ----------------------------
 
 show_menu() {
+  clear
+  # Reload environment using stored DEVICE_TYPE (no re-prompt)
+  if [[ -n "$DEVICE_TYPE" ]]; then
+    load_device_agent_env "$DEVICE_TYPE" 2>/dev/null || true
+  fi
+  
+
   echo "Choose an option:"
   echo "1) Install-prerequisites"
   echo "2) Uninstall-prerequisites"
@@ -1525,10 +1529,17 @@ show_menu() {
   done
 }
 
-if [[ -z "$1" || "$1" == "docker" || "$1" == "k3s" ]]; then
+if [[ -z "$1" ]]; then
+  # No arguments - prompt for device type and run interactive menu
   main_loop
-else
-  case "$1" in
+  
+elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -z "$2" ]]; then
+  # Device type specified but no command - run interactive menu
+  main_loop
+  
+elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
+  # Device type + command - execute command
+  case "$2" in
     install) install_prerequisites ;;
     uninstall) uninstall_prerequisites ;;
     start-docker) start_device_agent_docker ;;
@@ -1541,12 +1552,25 @@ else
     cleanup) cleanup_residual ;;
     create-rsa-certs) create_device_rsa_certs ;;
     create-ecdsa-certs) create_device_ecdsa_certs ;;
-
     *)
-      echo "Usage:"
-      echo "  $0 [docker|k3s]"
-      echo "  DEVICE_TYPE=docker $0"
+      echo "[ERROR] Unknown command: $2"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs"
       exit 1
       ;;
   esac
+  
+else
+  # Invalid usage - device type is mandatory
+  echo "[ERROR] Invalid usage. Device type (docker/k3s) is required."
+  echo ""
+  echo "Usage Examples:"
+  echo "  Interactive mode:"
+  echo "    $0              # Prompts for device type"
+  echo "    $0 docker       # Interactive menu for docker"
+  echo "    $0 k3s          # Interactive menu for k3s"
+  echo ""
+  echo "  Command mode:"
+  echo "    $0 docker install"
+  echo "    $0 k3s start-k3s"
+  exit 1
 fi
