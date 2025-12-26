@@ -1529,8 +1529,13 @@ show_menu() {
   done
 }
 
+
 if [[ -z "$1" ]]; then
-  # No arguments - prompt for device type and run interactive menu
+  # No arguments - prompt for device type FIRST, then run interactive menu
+  if ! load_device_agent_env; then
+    echo "[ERROR] Failed to load device agent environment"
+    exit 1
+  fi
   main_loop
   
 elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -z "$2" ]]; then

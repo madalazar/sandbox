@@ -963,22 +963,6 @@ add_container_registry_mirror_to_k3s() {
     echo "✅ Backed up /var/lib/rancher/k3s/registries.yml"
   fi
 
-																	  
-														  
-		
-											
-			 
-					   
-
-		
-											
-		 
-								
-									
-		
-							  
-   
-
   # ---------------------------------------------------
   # Write the registry config
   # ---------------------------------------------------
@@ -997,37 +981,13 @@ configs:
       insecure_skip_verify: true
 EOF
 
-																
-													 
-		
-											
-			 
-					   
-
-		
-											
-		 
-								
-									
-   
-
   sudo cp /var/lib/rancher/k3s/registries.yml /var/lib/rancher/k3s/registries.yaml
   sudo cp /var/lib/rancher/k3s/registries.yml /etc/rancher/k3s/registries.yml
   sudo cp /var/lib/rancher/k3s/registries.yml /etc/rancher/k3s/registries.yaml
-											
-			 
-					   
 
   echo "✅ Created k3s registry mirror configuration"
- # ---------------------------------------------------
-		 
-								
-									
-   
-
-  # ---------------------------------------------------
-						
-								
+ # ---------------------------------------------------				
+ 							
   echo "Restarting k3s..."
   if sudo systemctl restart k3s; then
     echo "✅ k3s restarted successfully"
@@ -1303,7 +1263,7 @@ add_insecure_registry_to_daemon() {
 EOF
   
   echo "✅ Configured insecure registry: $registry_url"
-							 
+				 
 					  
   
   # Validate JSON
@@ -1388,7 +1348,6 @@ verify_k3s_status() {
   k3s --version | head -1
 }
 
-
 setup_kubeconfig() {
   echo 'Setting up kubeconfig...'
   mkdir -p "$HOME/.kube"
@@ -1406,8 +1365,6 @@ setup_k3s() {
   
   echo "✅ k3s ${K3S_VERSION} setup complete"
 }
-
-
 
 # ----------------------------
 # Main Orchestration Functions
@@ -1547,7 +1504,6 @@ start_symphony_api_container(){
             -t margo-symphony-api:latest \
             .. -f Dockerfile
         fi
-
         
         if [ $? -ne 0 ]; then
             echo "❌ Failed to build Symphony API container"
@@ -1762,7 +1718,6 @@ install_vim() {
   echo "[SUCCESS] Vim installed and ready to use."
 }
 
-
 install_and_enable_ssh() {
   echo "[INFO] Checking OS type..."
   
@@ -1802,8 +1757,6 @@ install_and_enable_ssh() {
   echo "[SUCCESS] SSH service installed and running."
 }
 
-
-
 # Update the show_menu function to include uninstall option														   
 show_menu() {
   clear
@@ -1830,7 +1783,6 @@ show_menu() {
   
   pause
 }
-
 
 # ----------------------------
 # Main Script Execution
