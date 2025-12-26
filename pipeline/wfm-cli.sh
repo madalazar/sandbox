@@ -1,6 +1,28 @@
 #!/bin/bash
 set -e
 
+
+# ----------------------------
+# Load environment file
+# ----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+load_wfm_env() {
+   local env_file="$SCRIPT_DIR/wfm.env"
+
+  if [[ ! -f "$env_file" ]]; then
+    echo "[WARN] wfm.env not found at: $env_file"
+    return 1
+  fi
+
+  echo "[INFO] Loading environment from: $env_file"
+  set -a
+  source "$env_file"
+  set +a
+  
+}
+
+load_wfm_env || true
+
 # ----------------------------
 # Environment & Validation
 # ----------------------------
@@ -869,6 +891,7 @@ delete_instance() {
 # ----------------------------
 show_menu() {
   clear
+  load_wfm_env || true
   echo "🎛️  WFM CLI Interactive Interface(EasyCLI)"
   echo "================================="
   echo "Choose an option:"
@@ -911,6 +934,7 @@ main_loop() {
 if [[ -z "$1" ]]; then
   main_loop
 else
+  load_wfm_env || true
   case "$1" in
     list-packages) list_app_packages ;;
     list-devices) list_devices ;;
