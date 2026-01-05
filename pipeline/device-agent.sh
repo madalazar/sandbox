@@ -6,52 +6,55 @@ export PATH="$PATH:/usr/local/go/bin"
 # Load environment file 
 # ----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 load_device_agent_env() {
-  local device="${1:-}"
+  
+  if [[ -n "$_DEVICE_ENV_LOADED" ]]; then
+    return 0
+  fi
+  export _DEVICE_ENV_LOADED=1
+
+  local device="${1:-${DEVICE_TYPE:-}}"
 
   if [[ -z "$device" ]]; then
-    # Prompt user for device type instead of defaulting to k3s
-    echo "Please select device type:"
-    echo "  1) docker"
-    echo "  2) k3s"
-    read -p "Enter choice [1-2]: " choice
-    
+    echo "Select device type:"
+    echo "  1) Docker"
+    echo "  2) K3s"
+    echo -n "Enter choice [1-2]: "
+    read -r choice
+
     case "$choice" in
-      1)
-        device="docker"
-        ;;
-      2)
-        device="k3s"
-        ;;
+      1) device="docker" ;;
+      2) device="k3s" ;;
       *)
-        echo "[ERROR] Invalid choice: '$choice' (expected: 1 or 2)"
+        echo "[ERROR] Invalid choice (expected 1 or 2)"
         return 1
         ;;
     esac
   fi
-  
+
   device="${device,,}"
 
   if [[ "$device" != "docker" && "$device" != "k3s" ]]; then
-    echo "[ERROR] Invalid device type: '$device' (expected: docker or k3s)"
+    echo "[ERROR] Invalid device type: '$device'"
     return 1
   fi
-  
-  local env_file="$SCRIPT_DIR/device-agent.env"
 
+  local env_file="$SCRIPT_DIR/device-agent.env"
   if [[ ! -f "$env_file" ]]; then
     echo "[ERROR] Env file not found: $env_file"
     return 1
   fi
 
-  echo "[INFO] Device type selected: $device"
-  echo "[INFO] Loading environment: $env_file"
+  export DEVICE_TYPE="$device"
+
+  echo "[INFO] Device type selected: $DEVICE_TYPE"
+  #echo "[INFO] Loading environment: $env_file"
+
   set -a
   source "$env_file"
   set +a
-  export DEVICE_TYPE="$device"
 }
-
 load_device_agent_env "$1" 2>/dev/null || true
 
 # ----------------------------
@@ -1480,13 +1483,7 @@ pause() {
 # ----------------------------
 
 show_menu() {
-  clear
-  # Reload environment using stored DEVICE_TYPE (no re-prompt)
-  if [[ -n "$DEVICE_TYPE" ]]; then
-    load_device_agent_env "$DEVICE_TYPE" 2>/dev/null || true
-  fi
   
-
   echo "Choose an option:"
   echo "1) Install-prerequisites"
   echo "2) Uninstall-prerequisites"
