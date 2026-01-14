@@ -304,28 +304,31 @@ install_oras() {
 # Repository Functions
 # ----------------------------
 clone_symphony_repo() {
-  cd "$HOME"
-  echo 'Cloning symphony...'
-  sudo rm -rf "$HOME/symphony"
+ cd "$HOME"
+ sudo rm -rf "$HOME/symphony"
+ echo "Cloning symphony branch: $SYMPHONY_BRANCH"
   if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
-    git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/symphony.git" "$HOME/symphony"
+    git clone --depth 1 "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/symphony.git" "$HOME/symphony"
   else
-    git clone "https://github.com/margo/symphony.git" "$HOME/symphony"
+    git clone --depth 1 "https://github.com/margo/symphony.git" "$HOME/symphony"
   fi
   cd "$HOME/symphony"
+  git fetch --depth 1 --update-head-ok origin ${SYMPHONY_BRANCH}:${SYMPHONY_BRANCH}
   git checkout ${SYMPHONY_BRANCH} || echo 'Branch ${SYMPHONY_BRANCH} not found'
   echo "symphony repo checkout to branch ${SYMPHONY_BRANCH} done"
 }
 
 clone_dev_repo() {
-  cd "$HOME"
-  sudo rm -rf "$HOME/sandbox"
-  if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
-    git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+ cd "$HOME"
+ sudo rm -rf "$HOME/sandbox"
+ echo "Cloning sandbox branch: $SANDBOX_REPO_BRANCH"
+ if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git clone --depth 1 "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
   else
-    git clone "https://github.com/margo/sandbox.git"
+    git clone --depth 1 "https://github.com/margo/sandbox.git"
   fi
   cd "$HOME/sandbox"
+  git fetch --depth 1 --update-head-ok origin ${SANDBOX_REPO_BRANCH}:${SANDBOX_REPO_BRANCH} || echo 'Unable to fetch ${SANDBOX_REPO_BRANCH}'
   git checkout ${SANDBOX_REPO_BRANCH} || echo 'Branch ${SANDBOX_REPO_BRANCH} not found'
   echo "sandbox repo checkout to branch ${SANDBOX_REPO_BRANCH} done"
 }
