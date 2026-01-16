@@ -1,8 +1,5 @@
 image:
-  # there is no such repo as of now, while building the image we tagged it as margo.org/device-agent:dev-sprint-6
-  # and we expected that you have run that build command, else
-  # you can change this as per your need
-  repository: margo.org/device-agent
+  repository: margo.org/workload-fleet-management-client
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -23,7 +20,7 @@ secrets:
   create: true  
 
 # Persistence configuration
-# If enabled, agent data (/data directory) will survive pod restarts
+# If enabled, workload-fleet-management-client data (/data directory) will survive pod restarts
 # This prevents re-onboarding and re-syncing on every pod restart
 persistence:
   # Set to true to enable persistent storage (RECOMMENDED for production)

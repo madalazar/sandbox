@@ -1,5 +1,5 @@
 ##### [Back To Main](../README.md)
-# Setting Up the Code First Sandbox - Simple Guide
+# Setting Up the Code First Sandbox
 
 ## What You'll Need
 
@@ -14,25 +14,11 @@
 - Ubuntu or Debian operating system (**ubuntu-24.04.3-desktop-amd64 or server**) (you can check by doing ```cat /etc/os-release```)
    - Virtual Machine Manager (4.1.0 tested)
 - Internet connection
-- GitHub account with access to sandbox repository
-- GitHub access token - [Generate PAT](#prerequisites)
 - All VMs must be able to talk to each other (same network with static IP addresses)
 
 > Warning: If you are attempting to deploy this on corporate machines or within a corporate network, you will need to address any special networking requirements or access issues to enable internet communication (e.g, proxy configuration, certificates, firewall configuration, etc.). This falls outside the of the scope of this documentation. This warning applies to both the WFM and the Device VMs when running the setup scripts('wfm.sh' & 'device-agent.sh'). 
 ---
-## Prerequisites
 
-### Generating Personal Access Token
-1. Login to Github account
-2. Select profile picture, then Settings
-3. Select 'Developer settings' (last selection in the list)
-4. Select 'Personal access tokens' then 'Tokens (classic)'
-5. Select 'Generate new token' --> 'Generate new token (classic)'
-6. Add Note to remember the token and select all `repo`, `admin:org` `project` checkboxes in Select scopes section
-7. Select Generate token button at bottom.
-8. Copy and store token **Ensure you copy at this stage as it won't be displayed again**
-
----
 
 ## Step 1: Get the Code
 
@@ -58,10 +44,6 @@ You need to download the sandbox code to all three VMs. Follow these steps on **
    git clone https://github.com/margo/sandbox.git
    ```
    
-   If prompted, enter:
-   - Your GitHub username
-   - Your GitHub access token (not your password)
-
 5. **Navigate to the Downloaded Folder**
    ```bash
    cd sandbox
@@ -71,9 +53,6 @@ You need to download the sandbox code to all three VMs. Follow these steps on **
 
 **Important:** We're using `$HOME/workspace/sandbox` instead of `$HOME/sandbox` because the automation scripts will clone their own copies to `$HOME`. This keeps your working copy separate from the automated setup.
 
-**Troubleshooting:**
-- If you get "Permission denied" error, make sure your GitHub account has access to the MARGO repository
-- If you get "Authentication failed" error, verify your GitHub access token is correct
 
 ---
 
@@ -86,9 +65,9 @@ On each VM, you need to configure environment variables (settings that tell the 
    cd $HOME/workspace/sandbox/pipeline
    ```
 
-2. **Follow the detailed setup guide**
+2. **Set Environment Variables**
    
-   Open and follow the [Environment Variables Setup Guide](../pipeline/README.md#step-1-environment-variables-setup)
+   Open and follow the [Environment Variables Setup Guide](../docs/env-setup.md)
    
    This will help you set up:
    - GitHub credentials
@@ -96,7 +75,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    - Network settings
    - Other required configurations
 
-**Important:** Complete this step on all three VMs before proceeding.
+🔴 **Important:** Complete this step on all three VMs before proceeding.
 
 ---
 
@@ -114,7 +93,7 @@ On each VM, you need to configure environment variables (settings that tell the 
 
 2. **Install Basic Tools**
    ```bash
-   source wfm.env && sudo -E bash wfm.sh
+    sudo -E bash wfm.sh
    ```
    - A menu will appear
    - Type `1` and press Enter
@@ -122,36 +101,34 @@ On each VM, you need to configure environment variables (settings that tell the 
    
    This installs everything needed like Redis, Docker, Helm, and other tools. This may take 10-15 minutes.
 
-3. **Set Up Storage and Code Repository**
-   
-   This happens automatically in Step 2 - it creates:
-   - **Harbor**: For storing application container images, Helm charts as OCI-compliant manifests and pre-built application vendors' MARGO compliant application packages.
 
-4. **Start the Workload Fleet Manager**
+3. **Start the Workload Fleet Manager**
    ```bash
-   source wfm.env && sudo -E bash wfm.sh
+    sudo -E bash wfm.sh
    ```
    - Type `3` and press Enter
    - Choose: `Option 3: Symphony Start`
    
    This starts the Workload Fleet Manager service.
 
-5. **Add Monitoring Tools**
+4. **Add Monitoring Tools**
    ```bash
-   source wfm.env && sudo -E bash wfm.sh
+    sudo -E bash wfm.sh
    ```
    - Type `5` and press Enter
    - Choose: `Option 5: ObservabilityStack Start`
    
-   This adds tools to monitor your system's performance.
+   This adds tools to monitor workloads observability.
 
-6. **Verify the Workload Fleet Manager Is Running Correctly**
+5. **Verify the Workload Fleet Manager Is Running Correctly**
    ```bash
    sudo docker logs -f symphony-api-container
    ```
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit.
 
-> Note: Any service started using these scripts need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
+
 
 ### On Each Device VM:
 1. **Navigate to the pipeline folder**
@@ -163,7 +140,8 @@ On each VM, you need to configure environment variables (settings that tell the 
    
    Based on the device type, select **k3s** or **docker** while sourcing the environment variables. For example:
    ```bash
-   source device-agent_k3s.env && sudo -E bash device-agent.sh
+   sudo -E bash device-agent.sh docker # for docker-compose device
+   sudo -E bash device-agent.sh k3s    # for k3s device
    ```
    - Type `1` and press Enter
    - Choose: `Option 1: Install-prerequisites`
@@ -172,7 +150,8 @@ On each VM, you need to configure environment variables (settings that tell the 
 
 4. **Create Security Certificates**
    ```bash
-   source device-agent_k3s.env && sudo -E bash device-agent.sh
+    sudo -E bash device-agent.sh docker # for docker-compose device
+    sudo -E bash device-agent.sh k3s    # for k3s device
    ```
    - First, type `11` and press Enter to choose: `Option 11: create_device_rsa_certs`
    - Then run the command again and type `12` and press Enter to choose: `Option 12: create_device_ecdsa_certs`
@@ -199,12 +178,17 @@ You need to copy a security file from the WFM VM to each Device VM.
 
 #### Step 2: Copy Methods
 
-**Option A - Using SCP (Recommended - Run from Device VMs)**
+**Option A - Using SCP**  
+🔴 **(Recommended - Run from Device VMs)**
+
+
 
 | Target VM | Run From | SCP Command | Example |
 |-----------|----------|-------------|---------|
-| **Docker Device** | Docker Device VM | `sudo scp username@WFM-VM-IP:$(ssh username@WFM-VM-IP 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `sudo scp azureuser@10.10.10.4:$(ssh azureuser@10.10.10.4 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
-| **K3s Device** | K3s Device VM | `sudo scp username@WFM-VM-IP:$(ssh username@WFM-VM-IP 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `sudo scp azureuser@10.10.10.4:$(ssh azureuser@10.10.10.4 'echo $HOME')/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **Docker Device** | Docker Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **K3s Device** | K3s Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+
+**Note:** Run with **sudo** if fails.
 
 **Replace:**
 - `username` with your WFM VM username
@@ -230,16 +214,16 @@ You need to copy a security file from the WFM VM to each Device VM.
    cd $HOME/workspace/sandbox/pipeline
    ```
 
-2. **Start the device agent**
+2. **Start the device's Workload Fleet Management Client**
    ```bash
-   source device-agent_docker.env && sudo -E bash device-agent.sh
+    sudo -E bash device-agent.sh docker
    ```
    - Type `3` and press Enter
    - Choose: `Option 3: Device-agent-Start(docker-compose-device)`
 
 3. **Check device status**
    ```bash
-   source device-agent_docker.env && sudo -E bash device-agent.sh
+    sudo -E bash device-agent.sh docker
    ```
    - Type `7` and press Enter
    - Choose: `Option 7: Device-agent-Status`
@@ -247,7 +231,7 @@ You need to copy a security file from the WFM VM to each Device VM.
 4. **View device logs**
    ```bash
    # View the logs
-   sudo docker logs -f device-agent
+   sudo docker logs -f workload-fleet-management-client
    ```
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit the logs.
 
@@ -258,16 +242,16 @@ You need to copy a security file from the WFM VM to each Device VM.
    cd $HOME/workspace/sandbox/pipeline
    ```
 
-2. **Start the device agent**
+2. **Start the device's Workload Fleet Management Client**
    ```bash
-   source device-agent_k3s.env && sudo -E bash device-agent.sh
+    sudo -E bash device-agent.sh k3s
    ```
    - Type `5` and press Enter
    - Choose: `Option 5: Device-agent-Start(k3s-device)`
 
 3. **Check device status**
    ```bash
-   source device-agent_k3s.env && sudo -E bash device-agent.sh
+    sudo -E bash device-agent.sh k3s
    ```
    - Type `7` and press Enter
    - Choose: `Option 7: Device-agent-Status`
@@ -277,23 +261,26 @@ You need to copy a security file from the WFM VM to each Device VM.
    # View the logs (replace <pod-name> with actual pod name from above using #7)
    sudo kubectl logs -f <pod-name> -n default
    ```
-   Example: `kubectl logs -f device-agent-deploy-7d8f9c5b6-xyz12 -n default`
+   Example: `kubectl logs -f workload-fleet-management-client-deploy-5974667489-dw77w -n default`
    
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit the logs.
 
-> Note: Any service started using these scripts need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ### Add Monitoring to Devices
 
 On each Device VM:
 ```bash
 cd $HOME/workspace/sandbox/pipeline
-source device-agent_k3s.env && sudo -E bash device-agent.sh
+ sudo -E bash device-agent.sh docker # for docker-compose device
+ sudo -E bash device-agent.sh k3s    # for k3s device
 ```
 - Type `8` and press Enter
 - Choose: `Option 8: otel-collector-promtail-installation`
 
-> Note: Any service started using these script need to be restarted if the VM is restarted. They will not restart automatically on boot.
+> Note: Services are configured to auto-start on VM reboot. 
+  However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ## Step 4: Run and Use
 
@@ -308,7 +295,7 @@ On the WFM VM:
 
 2. **Run the Easy CLI script**
    ```bash
-   source wfm.env && sudo -E bash wfm-cli.sh
+    sudo -E bash wfm-cli.sh
    ```
 
 3. **Interactive Menu Interface**
@@ -752,9 +739,9 @@ If you want to remove everything and start over:
    sudo -E bash ./device-agent.sh  # Type 9 - otel-collector-promtail-uninstallation
    sudo -E bash ./device-agent.sh  # Type 10 - cleanup-residual
    ```
-3. **Remove Device Agent image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
+3. **Remove Device's Workload Fleet Management Client image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
    ```bash
-   docker rmi margo.org/device-agent:latest
+   docker rmi margo.org/workload-fleet-management-client:latest
    ```
    
 
@@ -792,4 +779,3 @@ If something doesn't work:
 2. Verify environment variables are set correctly
 3. Make sure the ca-cert.pem file was copied correctly
 4. Check the logs using the commands in "Check Everything is Working" section
-

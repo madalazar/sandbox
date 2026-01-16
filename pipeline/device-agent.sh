@@ -1,6 +1,62 @@
 #!/bin/bash
 set -e
 export PATH="$PATH:/usr/local/go/bin"
+
+# ----------------------------
+# Load environment file 
+# ----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+load_device_agent_env() {
+  
+  if [[ -n "$_DEVICE_ENV_LOADED" ]]; then
+    return 0
+  fi
+  export _DEVICE_ENV_LOADED=1
+
+  local device="${1:-${DEVICE_TYPE:-}}"
+
+  if [[ -z "$device" ]]; then
+    echo "Select device type:"
+    echo "  1) Docker"
+    echo "  2) K3s"
+    echo -n "Enter choice [1-2]: "
+    read -r choice
+
+    case "$choice" in
+      1) device="docker" ;;
+      2) device="k3s" ;;
+      *)
+        echo "[ERROR] Invalid choice (expected 1 or 2)"
+        return 1
+        ;;
+    esac
+  fi
+
+  device="${device,,}"
+
+  if [[ "$device" != "docker" && "$device" != "k3s" ]]; then
+    echo "[ERROR] Invalid device type: '$device'"
+    return 1
+  fi
+
+  local env_file="$SCRIPT_DIR/device-agent.env"
+  if [[ ! -f "$env_file" ]]; then
+    echo "[ERROR] Env file not found: $env_file"
+    return 1
+  fi
+
+  export DEVICE_TYPE="$device"
+
+  echo "[INFO] Device type selected: $DEVICE_TYPE"
+  #echo "[INFO] Loading environment: $env_file"
+
+  set -a
+  source "$env_file"
+  set +a
+}
+load_device_agent_env "$1" 2>/dev/null || true
+
 # ----------------------------
 # Environment & Validation Functions
 # ----------------------------
@@ -14,12 +70,10 @@ EXPOSED_HARBOR_IP="${EXPOSED_HARBOR_IP:-127.0.0.1}"
 EXPOSED_HARBOR_PORT="${EXPOSED_HARBOR_PORT:-8081}"
 
 #--- branch details (can be overridden via env)
-DEV_REPO_BRANCH="${DEV_REPO_BRANCH:-dev-sprint-6}"
+SANDBOX_REPO_BRANCH="${SANDBOX_REPO_BRANCH:-dev-sprint-6}"
 WFM_IP="${WFM_IP:-127.0.0.1}"
 WFM_PORT="${WFM_PORT:-8082}"
 
-# Device type configuration (can be overridden via env)
-DEVICE_TYPE="${DEVICE_TYPE:-k3s}"  # Options: "k3s" or "docker"
 
 #--- Registry settings (can be overridden via env)
 REGISTRY_URL="${REGISTRY_URL:-http://${EXPOSED_HARBOR_IP}:${EXPOSED_HARBOR_PORT}}"
@@ -45,7 +99,7 @@ export GONOSUMDB='github.com/margo/*'
 export GOPRIVATE='github.com/margo/*'
 
 validate_pre_required_vars() {
-  local required_vars=("GITHUB_USER" "GITHUB_TOKEN" "DEV_REPO_BRANCH" "WFM_IP" "WFM_PORT")
+  local required_vars=("SANDBOX_REPO_BRANCH" "WFM_IP" "WFM_PORT")
   for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
       echo "Error: Required environment variable $var is not set"
@@ -84,9 +138,6 @@ install_basic_utilities() {
     echo "ℹ️ Skipping Helm installation for docker device type"
   fi
 }
-
-
-
 
 install_docker_and_compose() {
   cd $HOME
@@ -219,9 +270,16 @@ clone_dev_repo() {
   echo "Cloning sandbox on ($VM2_HOST)..."
   cd $HOME
   sudo rm -rf sandbox
-  git clone "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
-  cd sandbox
-  git checkout ${DEV_REPO_BRANCH}
+  echo "Cloning sandbox branch: $SANDBOX_REPO_BRANCH"
+ if [[ -n "$GITHUB_USER" && -n "$GITHUB_TOKEN" ]]; then 
+    git clone --depth 1 "https://${GITHUB_USER}:${GITHUB_TOKEN}@github.com/margo/sandbox.git"
+  else
+    git clone --depth 1 "https://github.com/margo/sandbox.git"
+  fi
+  cd "$HOME/sandbox"
+  git fetch --depth 1 --update-head-ok origin ${SANDBOX_REPO_BRANCH}:${SANDBOX_REPO_BRANCH} || echo 'Unable to fetch ${SANDBOX_REPO_BRANCH}'
+  git checkout ${SANDBOX_REPO_BRANCH} || echo 'Branch ${SANDBOX_REPO_BRANCH} not found'
+  echo "sandbox repo checkout to branch ${SANDBOX_REPO_BRANCH} done"
   cd ..
 }
 
@@ -229,7 +287,7 @@ clone_dev_repo() {
 # Configuration Functions
 # ----------------------------
 update_agent_sbi_url() {
-  echo 'Updating wfm.sbiUrl in agent config ...'
+  echo 'Updating wfm.sbiUrl in workload-fleet-management-client config ...'
   sed -i "s|sbiUrl:.*|sbiUrl: https://$WFM_IP:$WFM_PORT/v1alpha2/margo|" "$HOME/sandbox/poc/device/agent/config/config.yaml"
 }
 
@@ -360,7 +418,7 @@ install_and_enable_ssh() {
 }
 
 #-----------------------------------------------------------------
-# Device Agent Runtime Configuration update based on Docker or K8s
+# Device Workload Fleet Management Client Runtime Configuration update based on Docker or K8s
 #-----------------------------------------------------------------
 
 enable_kubernetes_runtime() {
@@ -401,29 +459,65 @@ enable_docker_runtime() {
 }
 
 # ----------------------------
-# Device Agent Build Functions
+# Device Workload Fleet Management Client Build Functions
 # ----------------------------
 build_device_agent_docker() {
   cd "$HOME/sandbox"
-  echo 'Checking if device-agent image already exists...'
+  echo 'Checking if workload-fleet-management-client image already exists...'
 
 # Check if the image exists
-  if docker images -q margo.org/device-agent:latest | grep -q .; then
-    echo "device-agent image already exists. Skipping build."
+  if docker images -q margo.org/workload-fleet-management-client:latest | grep -q .; then
+    echo "workload-fleet-management-client image already exists. Skipping build."
   else
-    echo 'Building device-agent...'
-    docker build -f poc/device/agent/Dockerfile . -t margo.org/device-agent:latest
+    echo 'Building workload-fleet-management-client...'
+    docker build -f poc/device/agent/Dockerfile . -t margo.org/workload-fleet-management-client:latest
   fi
-  echo 'device-agent image build complete.'     
+  echo 'workload-fleet-management-client image build complete.'     
 }
 
 
 # ----------------------------
-# Device Agent Service Functions
+# Device Workload Fleet Management Client Service Functions
 # ----------------------------
 
+create_device_agent_systemd_service() {
+  echo "🔧 Creating systemd service for device-agent auto-start..."
+  
+  # Get the actual docker-compose directory path
+  local compose_dir="$HOME/sandbox/docker-compose"
+  
+  # Create systemd service file
+sudo tee /etc/systemd/system/device-agent.service > /dev/null <<EOF
+  [Unit]
+  Description=Margo Device Agent
+  Requires=docker.service
+  After=docker.service network-online.target
+  Wants=network-online.target
+
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  WorkingDirectory=${compose_dir}
+  ExecStartPre=/bin/sleep 10
+  ExecStart=/usr/bin/docker compose up -d
+  ExecStop=/usr/bin/docker compose down
+  TimeoutStartSec=0
+
+  [Install]
+  WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service
+  sudo systemctl daemon-reload
+  sudo systemctl enable device-agent.service
+  
+  echo "✅ Device-agent systemd service created and enabled"
+  echo "📋 Service will start device-agent automatically on boot"
+  echo "📁 Working directory: ${compose_dir}"
+}
+
 start_device_agent_docker_service() {
-  echo 'Starting device-agent...'
+  echo 'Starting workload-fleet-management-client...'
   cd "$HOME/sandbox/docker-compose"
   mkdir -p config
   
@@ -446,11 +540,13 @@ start_device_agent_docker_service() {
   mkdir -p data
   enable_docker_runtime
   docker compose up -d
+
+  #systemd service for auto-start if vm reboots
+  create_device_agent_systemd_service
 }
 
-
 stop_device_agent_service_docker() {
-  echo "Stopping device-agent..."
+  
   cd "$HOME/sandbox/docker-compose"
   docker compose down
   
@@ -475,32 +571,32 @@ stop_device_agent_service_docker() {
 
 build_start_device_agent_k3s_service() {
     cd "$HOME/sandbox"
-    echo "Building and deploying device-agent on Kubernetes..."
+    echo "Building and deploying workload-fleet-management-client on Kubernetes..."
     
     # Step 1: Build the Docker image if it doesn't exist
-    echo "Checking if device-agent image exists..."
-    if ! docker images | grep -q "margo.org/device-agent"; then
-      echo "Building device-agent Docker image..."
-      docker build -f poc/device/agent/Dockerfile . -t margo.org/device-agent:latest
+    echo "Checking if workload-fleet-management-client image exists..."
+    if ! docker images | grep -q "margo.org/workload-fleet-management-client"; then
+      echo "Building workload-fleet-management-client Docker image..."
+      docker build -f poc/device/agent/Dockerfile . -t margo.org/workload-fleet-management-client:latest
       if [ $? -ne 0 ]; then
-        echo "❌ Failed to build device-agent image"
+        echo "❌ Failed to build workload-fleet-management-client image"
         return 1
       fi
-      echo "✅ Device-agent image built successfully"
+      echo "✅ workload-fleet-management-client image built successfully"
     else
-      echo "✅ Device-agent image already exists"
+      echo "✅ workload-fleet-management-client image already exists"
     fi
     
     # Step 2: Save and import image to k3s
     echo "Importing image to k3s cluster..."
-    docker save -o device-agent.tar margo.org/device-agent:latest
+    docker save -o workload-fleet-management-client.tar margo.org/workload-fleet-management-client:latest
     
 						   
     if command -v k3s >/dev/null 2>&1; then
-      k3s ctr -n k8s.io image import device-agent.tar
+      k3s ctr -n k8s.io image import workload-fleet-management-client.tar
       echo "✅ Image imported to k3s cluster"
     elif command -v ctr >/dev/null 2>&1; then
-      ctr -n k8s.io image import device-agent.tar
+      ctr -n k8s.io image import workload-fleet-management-client.tar
       echo "✅ Image imported to k3s cluster"
     else
       echo "❌ Neither k3s nor ctr command found"
@@ -508,7 +604,7 @@ build_start_device_agent_k3s_service() {
     fi
     
 					   
-    rm -f device-agent.tar
+    rm -f workload-fleet-management-client.tar
     
     # Step 3: Navigate to helmchart directory
     cd helmchart
@@ -537,9 +633,9 @@ build_start_device_agent_k3s_service() {
     if [ -d "$HOME/certs" ] && [ -f "$HOME/certs/device-private.key" ] && [ -f "$HOME/certs/device-public.crt" ] && [ -f "$HOME/certs/device-ecdsa.crt" ] && [ -f "$HOME/certs/device-ecdsa.key" ] && [ -f "$HOME/certs/ca-cert.pem" ]; then
         echo "Creating TLS secrets..."
    							 
-        kubectl delete secret device-agent-certs --namespace=default 2>/dev/null || true
+        kubectl delete secret workload-fleet-management-client-certs --namespace=default 2>/dev/null || true
         
-        kubectl create secret generic device-agent-certs \
+        kubectl create secret generic workload-fleet-management-client-certs \
             --from-file=device-private.key="$HOME/certs/device-private.key" \
             --from-file=device-public.crt="$HOME/certs/device-public.crt" \
             --from-file=device-ecdsa.key="$HOME/certs/device-ecdsa.key" \
@@ -562,20 +658,20 @@ build_start_device_agent_k3s_service() {
 														
     # Step 6: Clean up old resources 
     echo "Cleaning up any existing resources..."
-    kubectl delete clusterrole device-agent-role 2>/dev/null || true
-    kubectl delete clusterrolebinding device-agent-binding 2>/dev/null || true
+    kubectl delete clusterrole workload-fleet-management-client-role 2>/dev/null || true
+    kubectl delete clusterrolebinding workload-fleet-management-client-binding 2>/dev/null || true
     
-    helm uninstall device-agent -n default 2>/dev/null || true
+    helm uninstall workload-fleet-management-client -n default 2>/dev/null || true
     
 											
     sleep 5
 
     # Step 7: Install with Helm 
-    echo "Installing device-agent with persistent storage..."
-    helm install device-agent . \
+    echo "Installing workload-fleet-management-client with persistent storage..."
+    helm install workload-fleet-management-client . \
         --set serviceAccount.create=true \
         --set secrets.create=false \
-        --set secrets.existingSecret=device-agent-certs \
+        --set secrets.existingSecret=workload-fleet-management-client-certs \
         --set persistence.enabled=true \
         --set persistence.size=1Gi \
         --debug \
@@ -594,7 +690,7 @@ build_start_device_agent_k3s_service() {
     echo "🔍 Verifying deployment..."
     
     # Verify RBAC permissions 
-    if kubectl auth can-i create secrets --as=system:serviceaccount:default:device-agent-sa -n default | grep -q "yes"; then
+    if kubectl auth can-i create secrets --as=system:serviceaccount:default:workload-fleet-management-client-sa -n default | grep -q "yes"; then
       echo "✅ RBAC permissions verified"
     else
       echo "⚠️ RBAC permissions may need manual verification"
@@ -602,27 +698,27 @@ build_start_device_agent_k3s_service() {
     
     # Verify PVC (FIXED NAME)
 												 
-    if kubectl get pvc -n default | grep -q "device-agent-data"; then
+    if kubectl get pvc -n default | grep -q "workload-fleet-management-client-data"; then
       echo "✅ Persistent volume claim created successfully"
-      kubectl get pvc -n default | grep device-agent
+      kubectl get pvc -n default | grep workload-fleet-management-client
     else
       echo "⚠️ PVC not found, checking for errors..."
       kubectl get events -n default --sort-by='.lastTimestamp' | tail -10
     fi
     
-    echo "✅ Device-agent deployed successfully"
+    echo "✅ Device-workload-fleet-management-client deployed successfully"
     
     # Show deployment status
     echo ""
     echo "Deployment Summary:"
-    kubectl get pods -n default | grep device-agent
-    kubectl get serviceaccount -n default | grep device-agent
-    kubectl get pvc -n default | grep device-agent
+    kubectl get pods -n default | grep workload-fleet-management-client
+    kubectl get serviceaccount -n default | grep workload-fleet-management-client
+    kubectl get pvc -n default | grep workload-fleet-management-client
 	
 }
 
 stop_device_agent_kubernetes() {
-  echo "Stopping device-agent..."
+  echo "Stopping workload-fleet-management-client..."
   cd "$HOME/sandbox"
 
   # Ask user about PVC deletion FIRST (before Helm uninstall)
@@ -636,8 +732,8 @@ stop_device_agent_kubernetes() {
     echo "ℹ️ Attempting to preserve PVC..."
     
     # Add Helm annotation to prevent PVC deletion during uninstall
-    if kubectl get pvc device-agent-data -n default >/dev/null 2>&1; then
-      kubectl annotate pvc device-agent-data -n default \
+    if kubectl get pvc workload-fleet-management-client-data -n default >/dev/null 2>&1; then
+      kubectl annotate pvc workload-fleet-management-client-data -n default \
         "helm.sh/resource-policy=keep" \
         --overwrite 2>/dev/null && echo "✅ PVC annotated for preservation" || echo "⚠️ Could not annotate PVC"
     else
@@ -646,45 +742,45 @@ stop_device_agent_kubernetes() {
   fi
   
   # Check if Helm release exists and uninstall
-  if helm list -A | grep -q "device-agent"; then
-    echo "Uninstalling device-agent Helm release..."
-    helm uninstall device-agent --namespace default
+  if helm list -A | grep -q "workload-fleet-management-client"; then
+    echo "Uninstalling workload-fleet-management-client Helm release..."
+    helm uninstall workload-fleet-management-client --namespace default
     
     if [ $? -eq 0 ]; then
-      echo "✅ Device-agent Helm release uninstalled successfully"
+      echo "✅ Device-workload-fleet-management-client Helm release uninstalled successfully"
     else
       echo "❌ Failed to uninstall Helm release"
       return 1
     fi
   else
-    echo "No device-agent Helm release found, trying direct kubectl deletion..."
-    kubectl delete deployment device-agent-deploy -n default 2>/dev/null || echo "No deployment found"
+    echo "No workload-fleet-management-client Helm release found, trying direct kubectl deletion..."
+    kubectl delete deployment workload-fleet-management-client-deploy -n default 2>/dev/null || echo "No deployment found"
   fi
   
   # Clean up ServiceAccount and RBAC resources
   echo "Cleaning up ServiceAccount and RBAC resources..."
-  kubectl delete serviceaccount device-agent-sa -n default 2>/dev/null || echo "No serviceaccount found"
-  kubectl delete clusterrole device-agent-role 2>/dev/null || echo "No clusterrole found"
-  kubectl delete clusterrolebinding device-agent-binding 2>/dev/null || echo "No clusterrolebinding found"
+  kubectl delete serviceaccount workload-fleet-management-client-sa -n default 2>/dev/null || echo "No serviceaccount found"
+  kubectl delete clusterrole workload-fleet-management-client-role 2>/dev/null || echo "No clusterrole found"
+  kubectl delete clusterrolebinding workload-fleet-management-client-binding 2>/dev/null || echo "No clusterrolebinding found"
   
   # Clean up ConfigMaps and Secrets
   echo "Cleaning up configmaps and secrets..."
-  kubectl delete configmap device-agent-cm -n default 2>/dev/null || echo "No configmap found"
-  kubectl delete secret device-agent-certs -n default 2>/dev/null || echo "No secret found"
+  kubectl delete configmap workload-fleet-management-client-cm -n default 2>/dev/null || echo "No configmap found"
+  kubectl delete secret workload-fleet-management-client-certs -n default 2>/dev/null || echo "No secret found"
   
   # NOW handle PVC based on user choice
   if [ "$DELETE_PVC" = true ]; then
     echo "Deleting PVC as requested..."
-    kubectl delete pvc device-agent-data -n default 2>/dev/null || echo "No PVC found"
+    kubectl delete pvc workload-fleet-management-client-data -n default 2>/dev/null || echo "No PVC found"
     echo "✅ PVC deleted - device will re-onboard on next start"
   else
     # Verify PVC was preserved
-    if kubectl get pvc device-agent-data -n default >/dev/null 2>&1; then
+    if kubectl get pvc workload-fleet-management-client-data -n default >/dev/null 2>&1; then
       echo "✅ PVC preserved successfully - device will resume with existing ID on next start"
-      kubectl get pvc device-agent-data -n default
+      kubectl get pvc workload-fleet-management-client-data -n default
       
       # Remove the keep annotation for next deployment
-      kubectl annotate pvc device-agent-data -n default \
+      kubectl annotate pvc workload-fleet-management-client-data -n default \
         "helm.sh/resource-policy-" \
         2>/dev/null || true
     else
@@ -696,49 +792,49 @@ stop_device_agent_kubernetes() {
   # Verify cleanup
   echo ""
   echo "Verifying cleanup..."
-  if kubectl get pods -n default 2>/dev/null | grep -q "device-agent"; then
-    echo "⚠️ Some device-agent pods may still be terminating"
-    kubectl get pods -n default | grep device-agent
+  if kubectl get pods -n default 2>/dev/null | grep -q "workload-fleet-management-client"; then
+    echo "⚠️ Some workload-fleet-management-client pods may still be terminating"
+    kubectl get pods -n default | grep workload-fleet-management-client
   else
-    echo "✅ All device-agent pods stopped"
+    echo "✅ All workload-fleet-management-client pods stopped"
   fi
   
   # Show remaining resources
   echo ""
-  echo "Remaining device-agent resources:"
-  kubectl get all,pvc,sa,cm,secrets -n default 2>/dev/null | grep device-agent || echo "✅ No device-agent resources found (except possibly PVC if preserved)"
+  echo "Remaining workload-fleet-management-client resources:"
+  kubectl get all,pvc,sa,cm,secrets -n default 2>/dev/null | grep workload-fleet-management-client || echo "✅ No workload-fleet-management-client resources found (except possibly PVC if preserved)"
   
   # Check for remaining RBAC resources
   echo ""
   echo "Remaining RBAC resources:"
-  kubectl get clusterroles,clusterrolebindings 2>/dev/null | grep device-agent || echo "✅ No device-agent RBAC resources found"
+  kubectl get clusterroles,clusterrolebindings 2>/dev/null | grep workload-fleet-management-client || echo "✅ No workload-fleet-management-client RBAC resources found"
   
   echo ""
-  echo "✅ Device-agent cleanup complete"
+  echo "✅ Device-workload-fleet-management-client cleanup complete"
 }
 
 
 
 cleanup_device_agent() {
-  echo "Cleaning up device-agent files..."
+  echo "Cleaning up workload-fleet-management-client files..."
   
-  # Check if device-agent container exists and remove it
-  if docker ps -a --format "{{.Names}}" | grep -q "^device-agent$"; then
-    echo "Stopping and removing device-agent container..."
-    docker stop device-agent 2>/dev/null || true
-    docker rm device-agent 2>/dev/null || true
-    echo "Removed device-agent container"
+  # Check if workload-fleet-management-client container exists and remove it
+  if docker ps -a --format "{{.Names}}" | grep -q "^workload-fleet-management-client$"; then
+    echo "Stopping and removing workload-fleet-management-client container..."
+    docker stop workload-fleet-management-client 2>/dev/null || true
+    docker rm workload-fleet-management-client 2>/dev/null || true
+    echo "Removed workload-fleet-management-client container"
   else
-    echo "No device-agent container found"
+    echo "No workload-fleet-management-client container found"
   fi
  
   #If using Helm deployment, uninstall the release
-  if helm list --short 2>/dev/null | grep -q "^device-agent$"; then
-    echo "Uninstalling device-agent Helm release..."
-    helm uninstall device-agent 2>/dev/null || true
-    echo "Removed device-agent Helm release"
+  if helm list --short 2>/dev/null | grep -q "^workload-fleet-management-client$"; then
+    echo "Uninstalling workload-fleet-management-client Helm release..."
+    helm uninstall workload-fleet-management-client 2>/dev/null || true
+    echo "Removed workload-fleet-management-client Helm release"
   else
-    echo "No device-agent Helm release found"
+    echo "No workload-fleet-management-client Helm release found"
   fi
 
 
@@ -835,7 +931,7 @@ install_prerequisites() {
   validate_pre_required_vars
   install_go
   install_vim
-  install_and_enable_ssh
+  #install_and_enable_ssh
   install_basic_utilities
   install_docker_and_compose
   clone_dev_repo
@@ -850,25 +946,25 @@ install_prerequisites() {
 
 
 start_device_agent_docker() {
-  echo "Building and starting device-agent ..."
+  echo "Building and starting workload-fleet-management-client ..."
   validate_start_required_vars
   update_agent_sbi_url
   build_device_agent_docker
   start_device_agent_docker_service
-   echo 'device-agent-docker-container started'
+   echo 'workload-fleet-management-client docker-container started'
 }
 
 start_device_agent_kubernetes() {
-  echo "Building and starting device-agent with ServiceAccount authentication..."
+  echo "Building and starting workload-fleet-management-client with ServiceAccount authentication..."
   validate_start_required_vars
   build_start_device_agent_k3s_service
-  echo '✅ device-agent-pod started with ServiceAccount authentication'
+  echo '✅ workload-fleet-management-client-pod started with ServiceAccount authentication'
 }
 
 stop_device_agent_docker() {
-  echo "Stopping device-agent on VM2 ($VM2_HOST)..."
+  echo "Stopping workload-fleet-management-client ..."
   stop_device_agent_service_docker
-  echo "Device Agent stopped"
+  echo "Device's Workload Fleet Management Client stopped"
 }
 
 
@@ -877,45 +973,45 @@ uninstall_prerequisites() {
 }
 
 show_status() {
-  echo "Device Agent Status:"
+  echo "Device's Workload Fleet Management Client Status:"
   echo "==================="
   
   # Check Docker first
-  if docker ps --format "{{.Names}}" | grep -q "^device-agent$"; then
-    echo "✅ Device Agent Docker Container is running."
+  if docker ps --format "{{.Names}}" | grep -q "^workload-fleet-management-client$"; then
+    echo "✅ Device's Workload Fleet Management Client Docker Container is running."
     
     # Show container details
     echo "Container Details:"
-    docker ps --filter "name=device-agent" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}"
+    docker ps --filter "name=workload-fleet-management-client" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}"
     
     return 0
   fi
   
-  # Check Kubernetes if Docker is not running (check device-agent namespace)
-  if kubectl get pods -n default --no-headers 2>/dev/null | grep -q "device-agent"; then
-  echo "✅ Device Agent Kubernetes Pod is running."
+  # Check Kubernetes if Docker is not running (check workload-fleet-management-client namespace)
+  if kubectl get pods -n default --no-headers 2>/dev/null | grep -q "workload-fleet-management-client"; then
+  echo "✅ Device's Workload Fleet Management Client Kubernetes Pod is running."
   
   # Show pod details
   echo "Pod Details:"
-  kubectl get pods -n default -o wide | grep -E "(NAME|device-agent)"
+  kubectl get pods -n default -o wide | grep -E "(NAME|workload-fleet-management-client)"
   
   # Add ServiceAccount verification
   echo "ServiceAccount Details:"
-  kubectl get serviceaccount -n default | grep device-agent || echo "No ServiceAccount found"
+  kubectl get serviceaccount -n default | grep workload-fleet-management-client || echo "No ServiceAccount found"
   
   return 0
   fi
   
   # If neither is running
-  echo "❌ Device Agent is not running on Docker or Kubernetes."
-  echo "Available device-agent containers:"
-  docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(NAMES|device-agent)" || echo "No device-agent containers found"
+  echo "❌ Device's Workload Fleet Management Client is not running on Docker or Kubernetes."
+  echo "Available workload-fleet-management-client containers:"
+  docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(NAMES|workload-fleet-management-client)" || echo "No workload-fleet-management-client containers found"
 
   
   if command -v kubectl >/dev/null 2>&1; then
     echo ""
-    echo "Available pods in device-agent namespace:"
-    kubectl get pods -n default --no-headers 2>/dev/null | head -5 || echo "No device-agent namespace or pods found"
+    echo "Available pods in workload-fleet-management-client namespace:"
+    kubectl get pods -n default --no-headers 2>/dev/null | head -5 || echo "No workload-fleet-management-client namespace or pods found"
     
     
   fi
@@ -1074,15 +1170,50 @@ create_observability_namespace() {
     fi
 }
 
+create_observability_systemd_service() {
+  echo "🔧 Creating systemd service for observability (OTEL + Promtail) auto-start..."
+
+  local obs_dir="$HOME/sandbox/pipeline/observability"
+
+  # Create systemd unit file
+  sudo tee /etc/systemd/system/observability.service > /dev/null <<EOF
+[Unit]
+Description=Margo Observability Stack (OTEL Collector + Promtail)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${obs_dir}
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/docker compose -f docker-compose-observability.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose-observability.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Reload systemd and enable the service so it runs at boot
+  sudo systemctl daemon-reload
+  sudo systemctl enable observability.service
+
+  echo "✅ Observability systemd service created and enabled"
+  echo "📋 Service will run: /usr/bin/docker compose -f docker-compose-observability.yml up -d"
+  echo "📁 Working directory: ${obs_dir}"
+}
+
 install_otel_collector_promtail_docker() {
   echo "Installing OTEL Collector v0.140.0 and Promtail v2.9.10 as Docker containers..."
   cd "$HOME/sandbox/pipeline/observability" || { echo '❌ observability dir missing'; exit 1; }
   
-  # Fix Docker socket permissions for OTEL Collector access
-  echo "Setting Docker socket permissions..."
-  sudo chmod 666 /var/run/docker.sock
+  # Get docker group GID for proper permissions
+  DOCKER_GID=$(getent group docker | cut -d: -f3)
+  echo "Docker group GID: $DOCKER_GID"
   
-  # Create docker-compose.yml for observability stack
+  # Create docker-compose.yml for observability stack with proper permissions
   cat <<EOF > docker-compose-observability.yml
 version: '3.8'
 
@@ -1101,6 +1232,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     container_name: otel-collector
+    user: "0:${DOCKER_GID}"  # Run as root with docker group access
     volumes:
       - ./otel-collector-config.yml:/etc/otel/config.yml
       - /var/run/docker.sock:/var/run/docker.sock
@@ -1220,13 +1352,17 @@ EOF
   # Start the observability stack
   docker compose -f docker-compose-observability.yml up -d
   
+  # Create & enable systemd unit to start this stack on reboot
+  create_observability_systemd_service
+  
   echo "✅ OTEL Collector v0.140.0 and Promtail v2.9.10 installed"
   echo "📡 OTLP gRPC: localhost:4317"
   echo "📡 OTLP HTTP: localhost:4318"
   echo "📊 Prometheus metrics: localhost:8899"
   echo "🔍 Traces sent to Jaeger at: ${WFM_IP}:4317"
-  
+  echo "🔒 Docker socket access configured with group permissions (survives reboots)"
 }
+
 
 
 install_otel_collector_promtail_wrapper() {
@@ -1340,23 +1476,32 @@ create_device_ecdsa_certs() {
 										 
 																			   
 }
+pause() {
+  echo
+  read -rp "Press Enter to continue..." _
+}
 
+# ----------------------------
+# Menu Functions
+# ----------------------------
 
 show_menu() {
+  
   echo "Choose an option:"
   echo "1) Install-prerequisites"
   echo "2) Uninstall-prerequisites"
-  echo "3) Device-agent-Start(docker-compose-device)"
-  echo "4) Device-agent-Stop(docker-compose-device)"
-  echo "5) Device-agent-Start(k3s-device)"
-  echo "6) Device-agent-Stop(k3s-device)"
-  echo "7) Device-agent-Status"
+  echo "3) Workload-Fleet-Management-Client-Start(docker-compose-device)"
+  echo "4) Workload-Fleet-Management-Client-Stop(docker-compose-device)"
+  echo "5) Workload-Fleet-Management-Client-Start(k3s-device)"
+  echo "6) Workload-Fleet-Management-Client-Stop(k3s-device)"
+  echo "7) Workload-Fleet-Management-Client-Status"
   echo "8) OTEL-collector-promtail-installation"
   echo "9) OTEL-collector-promtail-uninstallation"
   echo "10) cleanup-residual"
   echo "11) create_device_rsa_certs"
   echo "12) create_device_ecdsa_certs"
-  read -rp "Enter choice [1-12]: " choice
+  echo "13) Exit"
+  read -rp "Enter choice [1-13]: " choice
   case $choice in
     1) install_prerequisites;;
     2) uninstall_prerequisites;;
@@ -1370,13 +1515,73 @@ show_menu() {
     10) cleanup_residual;;
     11) create_device_rsa_certs ;;
     12) create_device_ecdsa_certs ;;
+    13) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "Invalid choice" ;;
   esac
+
+  pause
 }
 
 # ----------------------------
 # Main Script Execution
 # ----------------------------
-if [ -z "$1" ]; then
-  show_menu
+ main_loop() {
+  while true; do
+    show_menu
+  done
+}
+
+
+if [[ -z "$1" ]]; then
+  # No arguments - prompt for device type FIRST, then run interactive menu
+  if ! load_device_agent_env; then
+    echo "[ERROR] Failed to load device agent environment"
+    exit 1
+  fi
+  main_loop
+  
+elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -z "$2" ]]; then
+  # Device type specified but no command - run interactive menu
+  if ! load_device_agent_env "$1"; then
+    echo "[ERROR] Failed to load device agent environment"
+    exit 1
+  fi
+  main_loop
+  
+elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
+  # Device type + command - execute command
+  case "$2" in
+    install) install_prerequisites ;;
+    uninstall) uninstall_prerequisites ;;
+    start-docker) start_device_agent_docker ;;
+    stop-docker) stop_device_agent_docker ;;
+    start-k3s) start_device_agent_kubernetes ;;
+    stop-k3s) stop_device_agent_kubernetes ;;
+    status) show_status ;;
+    otel-install) install_otel_collector_promtail_wrapper ;;
+    otel-uninstall) uninstall_otel_collector_promtail_wrapper ;;
+    cleanup) cleanup_residual ;;
+    create-rsa-certs) create_device_rsa_certs ;;
+    create-ecdsa-certs) create_device_ecdsa_certs ;;
+    *)
+      echo "[ERROR] Unknown command: $2"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs"
+      exit 1
+      ;;
+  esac
+  
+else
+  # Invalid usage - device type is mandatory
+  echo "[ERROR] Invalid usage. Device type (docker/k3s) is required."
+  echo ""
+  echo "Usage Examples:"
+  echo "  Interactive mode:"
+  echo "    $0              # Prompts for device type"
+  echo "    $0 docker       # Interactive menu for docker"
+  echo "    $0 k3s          # Interactive menu for k3s"
+  echo ""
+  echo "  Command mode:"
+  echo "    $0 docker install"
+  echo "    $0 k3s start-k3s"
+  exit 1
 fi

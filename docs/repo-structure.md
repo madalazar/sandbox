@@ -23,8 +23,8 @@ sandbox/
 ├── shared-lib      # Go-package. Reusable libraries, and utilities. It is a Go-package and is imported in the main codebase.
 ├── poc             # The runnable implementations and code for code-first-sandbox.
 ├── pipeline        # Automation scripts for build, deployment and run.
-├── docker-compose  # Files related to running device-agent using docker-compose
-├── helmchart       # Helmchart files to run device-agent in kubernetes environment
+├── docker-compose  # Files related to running Workload Fleet Management Client using docker-compose
+├── helmchart       # Helmchart files to run Workload Fleet Management Client in kubernetes environment
 ```
 
 ## Core Components
@@ -33,7 +33,7 @@ sandbox/
 Experimental implementations and prototypes for Margo.
 
 #### Subdirectories:
-- `poc/device/agent` -- The device agent codebase
+- `poc/device/agent` -- The device's Workload Fleet Management Client codebase
 - `poc/wfm/cli` -- The client wrapper that can be used to talk to Margo compliant APIs on wfm 
 - `poc/tests` -- Test artefacts like Margo Application Descriptions etc.
 
@@ -59,7 +59,7 @@ cd sandbox
 go mod download
 ```
 
-3. **Build and run device agent:**
+3. **Build and run device's Workload Fleet Management Client:**
 ```bash
 cd poc/device/agent
 go build -o agent .
@@ -76,8 +76,8 @@ go test ./...
 go test -cover ./...
 
 
-### 🤖 Device Agent (`poc/device/agent/`)
-Edge device agent that manages workload deployments on device and communicates with the workload-orchestrator/fleet-manager for state seeking, deployment status updates and other operations.
+### 🤖 Device's Workload Fleet Management Client (`poc/device/agent/`)
+Edge device's workload fleet management client that manages workload deployments on device and communicates with the workload-orchestrator/fleet-manager for state seeking, deployment status updates and other operations.
 
 **Key Features:**
 - Multi-runtime support (Kubernetes Distributions(for Helm workloads), Docker(for docker-compose workloads))
@@ -86,7 +86,7 @@ Edge device agent that manages workload deployments on device and communicates w
 - Workload lifecycle management and monitoring
 - In-memory database with persistence on disk
 
-NOTE: Please check the [Agent Docs](../poc/device/agent/README.md). It has comprehensive literature on how it works, and how to extend its development.
+NOTE: Please check the [Workload Fleet Management Client Docs](../poc/device/agent/README.md). It has comprehensive literature on how it works, and how to extend its development.
 
 ### 📚 Shared Libraries (`shared-lib/`)
 Reusable Go libraries providing common functionality across MARGO components.
@@ -105,7 +105,7 @@ Reusable Go libraries providing common functionality across MARGO components.
 Scripts and utilities for development, testing, and deployment automation.
 
 **Tools:**
-- **Setup script** (`wfm.sh`, `device-agent.sh`) - Automated environment setup (Harbor, device-agent, Symphony etc.)
+- **Setup script** (`wfm.sh`, `device-agent.sh`) - Automated environment setup (Harbor, device's Workload Fleet Management Client, Symphony etc.)
 - **EasyCLI** (`wfm-cli.sh`) - EasyCLI is an interactive menu with options to upload/apply/delete app packages, deploy/delete instances.
 
 

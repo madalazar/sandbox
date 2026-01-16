@@ -48,7 +48,7 @@ stateSeeking:
   # in seconds
   interval: 15
 
-# the agent architecture is kept in a way that it is capable of managing more than one runtimes
+# the workload-fleet-management-client architecture is kept in a way that it is capable of managing more than one runtimes
 # but one client with multiple devices is not defined by Margo yet. For example: what would be the identification
 # for the client and the device. Will WFM be aware of the client and devices? Etc...
 # If this is needed please reach out to the Margo group and follow the formal approach of Margo for SUPs.

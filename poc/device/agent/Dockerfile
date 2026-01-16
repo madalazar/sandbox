@@ -40,9 +40,9 @@ RUN chmod +x /usr/local/libexec/docker/cli-plugins/docker-compose
 VOLUME ["/config"]
 
 # Add metadata labels
-LABEL description="Margo Device Agent for edge workload management" \
+LABEL description="Margo Device Workload Fleet management Client for edge workload management" \
       source="https://github.com/margo/sandbox" \
-      title="Device Agent"
+      title="Device Workload Fleet management Client"
 
 # Use ENTRYPOINT for better flexibility
 ENTRYPOINT ["./device-agent"]

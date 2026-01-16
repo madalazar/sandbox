@@ -1,14 +1,14 @@
 ##### [Back To Main](../../../README.md)
-# Device Agent
+# Device's Workload Fleet Management Client
 
-An edge device agent used by the Margo platform to manage application workloads, report device capabilities, and synchronize desired vs actual state with the WFM.
+An edge device's Workload Fleet Management Client used by the Margo platform to manage application workloads, report device capabilities, and synchronize desired vs actual state with the WFM.
 
 This repository contains a code-first-sandbox implementation that supports multiple runtimes (Helm for Kubernetes and Docker Compose) and is designed for easy extension (for example, adding other runtimes).
 
 ## Contents
 
 - Overview
-- Quickstart
+- Build and Run
 - Configuration
 - Runtimes & Examples
 - Development & Tests
@@ -18,7 +18,7 @@ This repository contains a code-first-sandbox implementation that supports multi
 
 ## Overview
 
-The Device Agent runs on edge devices and provides these core responsibilities:
+The Device Workload Fleet Management Client runs on edge devices and provides these core responsibilities:
 
 - Onboarding and authentication with the Margo compliant WFM
 - Reporting device capabilities (hardware, interfaces)
@@ -48,7 +48,7 @@ Runtimes supported out of the box:
 
 The system is event-driven: database writes emit events consumed by other components to perform actions (deploy, monitor, report). Components use contexts for cancellation and support graceful shutdown.
 
-## Quickstart
+## Build and Run
 
 Minimal steps to get the agent running locally (developer flow):
 
@@ -118,11 +118,11 @@ wfm:
         path: "./config/device-private.key" # this should be the path to the private key pem file
 
     # NOTE: The oauth workflow is not yet defined in Margo spec, hence keep this disabled
-    # the auth info is auto-fetched by the agent when it gets onboarded
+    # the auth info is auto-fetched by the workload-fleet-management-client when it gets onboarded
     # but if you, for any reason, want to specify the oauth info, then you can pass that info over here 
     authHelper:
       # if the wfm doesn't have oauth enabled on its endpoints, then set enable: false
-      # and the agent will not add any authorization header in the request
+      # and the workload-fleet-management-client will not add any authorization header in the request
       enabled: false
 
     # this plugin will be used to verify server tls certificates
@@ -134,11 +134,11 @@ wfm:
         path: "./config/ca-cert.pem"
 
 stateSeeking:
-  # How frequently the agent attempts to seek for the desired state from wfm
+  # How frequently the workload-fleet-management-client attempts to seek for the desired state from wfm
   # in seconds
   interval: 15
 
-# the agent architecture is kept in a way that it is capable of managing more than one runtimes
+# the workload-fleet-management-client architecture is kept in a way that it is capable of managing more than one runtimes
 # but one client with multiple devices is not defined by Margo yet, as it comes with its own complexities,
 # for example: how would the client know which device should the application be deployed to? etc...  
 # If this is needed please reach out to the Margo group and follow the formal approach of Margo for SUPs.
@@ -219,11 +219,11 @@ When you add runtime clients, also add small integration or smoke tests where fe
 2. **Add runtime configuration** to `types/config.go`
 3. **Update deployment manager** to handle new runtime type
 4. **Add monitoring support** in `monitor.go`
-5. **Register runtime** in agent initialization
+5. **Register runtime** in workload-fleet-management-client initialization
 
 #### Development Extension Example: Adding Podman Runtime Support
 
-The following example tries to extend the device agent to support Podman as a new container runtime,
+The following example tries to extend the device workload-fleet-management-client to support Podman as a new container runtime,
 this is just exemplary code. : )
 
 #### Step 1: Add Configuration Support
@@ -273,7 +273,7 @@ type PodmanClient struct {
 Quick checks
 
 - WFM unreachable: verify `wfm.sbiUrl` and that the network path is accessible. Try telnet to the WFM IP and Port. If it works, then try `curl` to the endpoints.
-- Docker socket permissions: ensure the container or user has access to `/var/run/docker.sock` or run the agent as a user in the `docker` group
+- Docker socket permissions: ensure the container or user has access to `/var/run/docker.sock` or run the workload-fleet-management-client as a user in the `docker` group
 - Kubernetes issues: verify `kubeconfig` and that `kubectl` can access the cluster
 - Capabilities file: validate JSON with `jq` before use
 

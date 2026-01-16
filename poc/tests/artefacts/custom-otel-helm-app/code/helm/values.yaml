@@ -16,6 +16,6 @@ service:
 collector:
   name: collector
 
-# Support for fullnameOverride (used by agent)
+# Support for fullnameOverride (used by workload-fleet-management-client)
 fullnameOverride: ""
 nameOverride: ""
