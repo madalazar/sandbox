@@ -16,13 +16,13 @@
 - Internet connection
 - All VMs must be able to talk to each other (same network with static IP addresses)
 
-> Warning: If you are attempting to deploy this on corporate machines or within a corporate network, you will need to address any special networking requirements or access issues to enable internet communication (e.g, proxy configuration, certificates, firewall configuration, etc.). This falls outside the of the scope of this documentation. This warning applies to both the WFM and the Device VMs when running the setup scripts('wfm.sh' & 'device-agent.sh'). 
+> Warning: If you are attempting to deploy this on corporate machines or within a corporate network, you will need to address any special networking requirements or access issues to enable internet communication (e.g, proxy configuration, certificates, firewall configuration, etc.). This falls outside the of the scope of this documentation. This warning applies to both the WFM and the Device VMs when running the setup scripts('wfm.sh' & 'device-agent.sh').
 ---
 
 
-## Step 1: Get the Code
+## Step 1: Get the Setup Files
 
-You need to download the sandbox code to all three VMs. Follow these steps on **each VM**:
+You need to download the setup files to all three VMs. Follow these steps on **each VM**:
 
 1. **Open Terminal**
    - On your WFM VM, open the terminal/command line application
@@ -39,21 +39,16 @@ You need to download the sandbox code to all three VMs. Follow these steps on **
    cd $HOME/workspace
    ```
 
-4. **Download the Repository**
+4. **Download the Setup Files**
    ```bash
-   git clone https://github.com/margo/sandbox.git
-   ```
-   
-5. **Navigate to the Downloaded Folder**
-   ```bash
+   git clone --filter=blob:none --sparse https://github.com/margo/sandbox.git
    cd sandbox
+   git sparse-checkout init --no-cone
+   git sparse-checkout set \
+        pipeline/*.sh \
+        pipeline/*.env
+   git checkout main
    ```
-
-**Note:** Repeat these steps on all three VMs (WFM VM, K3s Device VM, and Docker Device VM).
-
-**Important:** We're using `$HOME/workspace/sandbox` instead of `$HOME/sandbox` because the automation scripts will clone their own copies to `$HOME`. This keeps your working copy separate from the automated setup.
-
-
 ---
 
 ## Step 2: Set Up Environment
@@ -66,9 +61,9 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
 
 2. **Set Environment Variables**
-   
+
    Open and follow the [Environment Variables Setup Guide](../docs/env-setup.md)
-   
+
    This will help you set up:
    - GitHub credentials
    - VM IP addresses
@@ -98,7 +93,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    - A menu will appear
    - Type `1` and press Enter
    - Choose: `Option 1: PreRequisites Setup`
-   
+
    This installs everything needed like Redis, Docker, Helm, and other tools. This may take 10-15 minutes.
 
 
@@ -108,8 +103,9 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    - Type `3` and press Enter
    - Choose: `Option 3: Symphony Start`
-   
-   This starts the Workload Fleet Manager service.
+
+   This starts the Workload Fleet Manager service. 
+> Note: Docker image for Workload Fleet Manager has been already built and pushed using CI pipeline to Margo GHCR registry from where the below script pull the image and starts WFM.
 
 4. **Add Monitoring Tools**
    ```bash
@@ -117,7 +113,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    - Type `5` and press Enter
    - Choose: `Option 5: ObservabilityStack Start`
-   
+
    This adds tools to monitor workloads observability.
 
 5. **Verify the Workload Fleet Manager Is Running Correctly**
@@ -126,7 +122,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit.
 
-> Note: Services are configured to auto-start on VM reboot. 
+> Note: Services are configured to auto-start on VM reboot.
   However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 
@@ -137,7 +133,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
 
 2. **Install Basic Tools**
-   
+
    Based on the device type, select **k3s** or **docker** while sourcing the environment variables. For example:
    ```bash
    sudo -E bash device-agent.sh docker # for docker-compose device
@@ -145,7 +141,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    - Type `1` and press Enter
    - Choose: `Option 1: Install-prerequisites`
-   
+
    This may take 10-15 minutes.
 
 4. **Create Security Certificates**
@@ -155,7 +151,7 @@ On each VM, you need to configure environment variables (settings that tell the 
    ```
    - First, type `11` and press Enter to choose: `Option 11: create_device_rsa_certs`
    - Then run the command again and type `12` and press Enter to choose: `Option 12: create_device_ecdsa_certs`
-   
+
    These certificates allow secure communication between VMs and are automatically saved in `$HOME/certs` directory.
 
 ---
@@ -178,7 +174,7 @@ You need to copy a security file from the WFM VM to each Device VM.
 
 #### Step 2: Copy Methods
 
-**Option A - Using SCP**  
+**Option A - Using SCP**
 🔴 **(Recommended - Run from Device VMs)**
 
 
@@ -201,11 +197,12 @@ You need to copy a security file from the WFM VM to each Device VM.
 | 1 | Open `ca-cert.pem` on WFM VM and copy contents | Open `ca-cert.pem` on WFM VM and copy contents |
 | 2 | Create file `ca-cert.pem` in `$HOME/certs/` | Create file `ca-cert.pem` in `$HOME/certs/` |
 | 3 | Paste contents and save | Paste contents and save |
-  
+
 
 **Note:** The `$HOME/certs` directory was automatically created when you generated the security certificates in Step 3.
 
 ### Start Device Services
+> Note: Docker image for Workload Fleet Management client has been already built and pushed using CI pipeline to Margo GHCR registry from where the below script pull the image and starts WFM client.
 
 **On Docker Device VM:**
 
@@ -262,13 +259,21 @@ You need to copy a security file from the WFM VM to each Device VM.
    sudo kubectl logs -f <pod-name> -n default
    ```
    Example: `kubectl logs -f workload-fleet-management-client-deploy-5974667489-dw77w -n default`
-   
+
    You should see log messages indicating the service is running. Press `Ctrl+C` to exit the logs.
 
-> Note: Services are configured to auto-start on VM reboot. 
+> Note: Services are configured to auto-start on VM reboot.
   However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ### Add Monitoring to Devices
+> Note : OTEL Collector: Pushes traces to Jaeger (port 30417) and metrics to Prometheus (port 30909). Promtail: Pushes logs to Loki (port 32100)
+```
+Device → Push Traces → WFM Jaeger (port 30417)
+Device → Push Metrics → WFM Prometheus (port 30909)
+Device → Push Logs → WFM Loki (port 32100)
+
+Devices use a push-based architecture - they actively send data to WFM rather than being scraped. This works seamlessly across NAT/firewalls and requires no additional firewall configuration.
+```
 
 On each Device VM:
 ```bash
@@ -279,7 +284,7 @@ cd $HOME/workspace/sandbox/pipeline
 - Type `8` and press Enter
 - Choose: `Option 8: otel-collector-promtail-installation`
 
-> Note: Services are configured to auto-start on VM reboot. 
+> Note: Services are configured to auto-start on VM reboot.
   However, if you encounter issues after reboot, you can manually restart them using the same menu options.
 
 ## Step 4: Run and Use
@@ -335,7 +340,7 @@ On the WFM VM:
 
 **Option 1: List App Packages**
 
-Select this option to display the app packages that were uploaded to the sandbox WFM. These are ready to deploy to an onboarded edge node. 
+Select this option to display the app packages that were uploaded to the sandbox WFM. These are ready to deploy to an onboarded edge node.
 
 > Note: Below is a example snippet showing the expected output of the selection. You will need to use option 5 (see below) to load the app packages first.
 ```
@@ -393,7 +398,7 @@ Press Enter to continue...
 
 **Option 3: List Deployments**
 
-Select this option to display the current app deployments configured in the sandbox WFM. 
+Select this option to display the current app deployments configured in the sandbox WFM.
 
 > Note: Below is a example snippet showing the expected output of the selection.
 ```
@@ -425,7 +430,7 @@ Select this option to display the combined view of packages, devices, and deploy
 
 **Option 5: Upload App-Package**
 
-Select this option to upload an application package from the pre-configured harbor OCI registry to WFM for deployment. Also user can upload new application packges to local harbor OCI registry which can be discovered here and listed as an option to upload to WFM. Refer [upload instructions.](./upload-package.md) 
+Select this option to upload an application package from the pre-configured harbor OCI registry to WFM for deployment. Also user can upload new application packges to local harbor OCI registry which can be discovered here and listed as an option to upload to WFM. Refer [upload instructions.](./upload-package.md)
 
 > Note: Below is a example snippet showing the expected output of the selection.
 
@@ -452,10 +457,10 @@ Press Enter to continue...
 
 **Option 6: Delete App-Package**
 
-Select this option to delete previously uploaded application packages from the sandbox WFM. 
+Select this option to delete previously uploaded application packages from the sandbox WFM.
 
 > Note: Below is a example snippet showing the expected output of the selection.
-> Note: the id of the application package needs to be copied from the output shown below 'current packages'. 
+> Note: the id of the application package needs to be copied from the output shown below 'current packages'.
 ```
 Enter choice [1-9]: 6
 🗑️  Delete App Package
@@ -501,12 +506,12 @@ Application Pkg ae011433-28ed-4f4e-a8af-474810810746 deleted successfully
 
 **Option 7: Deploy Instance**
 
-Select this option to deploy an instance of an uploaded application package within the sandbox WFM. 
+Select this option to deploy an instance of an uploaded application package within the sandbox WFM.
 
-Configuration Notes: 
+Configuration Notes:
 - Below is a example snippet showing the expected output of the selection.
-- The id of the application package needs to be copied from the output shown below 'Available packages'. 
-- The id of the device needs to be copied from the output shown below 'Available devices'. 
+- The id of the application package needs to be copied from the output shown below 'Available packages'.
+- The id of the device needs to be copied from the output shown below 'Available devices'.
 
 ```
 Enter choice [1-9]: 7
@@ -574,11 +579,11 @@ Application configuration applied successfully
 
 **Option 8: Delete Instance**
 
-Select this option to delete an application instance within the sandbox WFM. 
+Select this option to delete an application instance within the sandbox WFM.
 
-Configuration Notes: 
+Configuration Notes:
 - Below is a example snippet showing the expected output of the selection.
-- The id of the application instance needs to be copied from the output shown below 'Current deployments'. 
+- The id of the application instance needs to be copied from the output shown below 'Current deployments'.
 
 ```
 
@@ -647,17 +652,17 @@ To view the monitoring dashboards, you need your WFM VM's IP address.
    Write down the first IP address shown (for example: 192.168.1.100).
 
 2. **Open your web browser and visit:**
-   
+
    Replace `[WFM-VM-IP]` with your actual IP address from step 1.
-   
+
    - **Grafana** (Charts and Graphs): `http://[WFM-VM-IP]:32000`
      - Username: `admin`
      - Password: `admin`
-   
+
    - **Jaeger** (Performance Tracking): `http://[WFM-VM-IP]:32500`
-   
+
    - **Prometheus** (Metrics): `http://[WFM-VM-IP]:30900`
-   
+
    **Example:** If your WFM VM IP is 192.168.1.100, you would visit:
    - Grafana: `http://192.168.1.100:32000`
    - Jaeger: `http://192.168.1.100:32500`
@@ -698,8 +703,8 @@ To view the monitoring dashboards, you need your WFM VM's IP address.
    |--------------|-------|
    | **Metrics (Prometheus)** | 1. Click **Open Menu**(top left)  → **Explore**<br>2. Select **Prometheus** from data source dropdown<br>3. Enter a query (e.g., `up` to see all targets, select from metric dropdown, if you have installed pre-built  custom-otel-helm-app-package select **orders_processed_total** from metric dropdown)<br>4. Click **Run query**(top right)|
    | **Logs (Loki)** | 1. Click **Open Menu**(top left) → **Explore**<br>2. Select **Loki** from data source dropdown<br>3. On **Label filters** select a label (e.g., `job`)<br>4. Select a label value(e.g., dockerlogs or  `default/custom-otel-helm` if otel-app installed)<br>5. Click **Run query**(top right)
-  
-   
+
+
    Detailed documentation for  [Observability verification](../pipeline/observability/README.md)
 ---
 
@@ -720,10 +725,7 @@ If you want to remove everything and start over:
    sudo -E bash ./wfm.sh  # Type 2 and press Enter - Option 2: PreRequisites Cleanup
    sudo -E bash ./wfm.sh  # Type 6 and press Enter - Option 6: ObservabilityStack Stop
    ```
-3. **Remove Symphony image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
-   ```bash
-   docker rmi margo-symphony-api:latest
-   ```
+
 
 ### On Device VMs:
 
@@ -739,11 +741,8 @@ If you want to remove everything and start over:
    sudo -E bash ./device-agent.sh  # Type 9 - otel-collector-promtail-uninstallation
    sudo -E bash ./device-agent.sh  # Type 10 - cleanup-residual
    ```
-3. **Remove Device's Workload Fleet Management Client image.(Recommended - Only when you want to verify new features from Margo branch/tag, Not to be done for every clean-up)**
-   ```bash
-   docker rmi margo.org/workload-fleet-management-client:latest
-   ```
-   
+
+
 
 ---
 
