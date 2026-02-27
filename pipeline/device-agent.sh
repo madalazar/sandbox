@@ -596,36 +596,29 @@ build_start_device_agent_k3s_service() {
     cd "$HOME/sandbox"
     echo "Deploying workload-fleet-management-client on Kubernetes..."
     
-    # Step 1: Pull image from GHCR (no local build)
-    echo "Checking GHCR image: ${workload_Fleet_Management_Client_IMAGE_REF}"
-    if docker manifest inspect "${workload_Fleet_Management_Client_IMAGE_REF}" >/dev/null 2>&1; then
-        echo "Image exists in GHCR"
+    # Step 1: Import into k3s container runtime
+    echo "Importing image into k3s..."
+    
+    # Method 1: Use crictl (K3s native)
+    if command -v crictl >/dev/null 2>&1; then
+        echo "Using crictl to pull image directly into k3s..."
+        sudo crictl pull "${workload_Fleet_Management_Client_IMAGE_REF}"
+      
+        if [ $? -eq 0 ]; then
+            echo "✅ Image imported into k3s cluster via crictl"
+        else
+            echo "❌ Failed to import image via crictl"
+            return 1
+        fi
+    
+    # Method 2: Skip import - let Helm pull from GHCR
     else
-        echo "❌ Image does NOT exist in GHCR: ${workload_Fleet_Management_Client_IMAGE_REF}"																 
-        return 1															  
+        echo "⚠️  crictl not found, skipping import step"
+        echo "ℹ️  K3s will pull image directly from GHCR during Helm deployment"
+        echo "   Ensure GHCR registry mirror is configured in k3s"
     fi
 
-    echo "⬇️ Pulling image from GHCR..."
-    docker pull "${workload_Fleet_Management_Client_IMAGE_REF}"
-    echo "✅ Image pulled: ${workload_Fleet_Management_Client_IMAGE_REF}"
-
-    # Step 2: Import into k3s container runtime
-    echo "Saving and importing GHCR image into k3s..."
-    docker save -o workload-fleet-management-client.tar "${workload_Fleet_Management_Client_IMAGE_REF}"
-
-    if command -v k3s >/dev/null 2>&1; then
-        k3s ctr -n k8s.io image import workload-fleet-management-client.tar
-        echo "✅ Image imported into k3s cluster"
-    elif command -v ctr >/dev/null 2>&1; then
-        ctr -n k8s.io image import workload-fleet-management-client.tar
-        echo "✅ Image imported into CTR runtime"
-    else
-        echo "❌ Neither k3s nor ctr command found"
-        return 1
-    fi
-    rm -f workload-fleet-management-client.tar
-
-    # Step 3: Navigate to helmchart directory
+    # Step 2: Navigate to helmchart directory
     cd helmchart
     if [ $? -ne 0 ]; then
       echo "❌ Failed to navigate to helmchart directory"
