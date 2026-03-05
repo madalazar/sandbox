@@ -282,14 +282,17 @@ func (dm *DeploymentManager) deployOrUpdateHelm(ctx context.Context, deploymentI
 	// Generate release name
 	releaseName := fmt.Sprintf("%s-%s", helmComp.Name, deploymentId[:8])
 
-	// Get values
-	componentValues, _ := pkg.ConvertAllAppDeploymentParamsToValues(*appDeployment.Spec.Parameters)
-	values := componentValues[helmComp.Name]
-
-	// Override fullname to make resources unique
-	if values == nil {
-		values = make(map[string]interface{})
+	values := map[string]interface{}{}
+	if appDeployment.Spec.Parameters != nil {
+		componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(*appDeployment.Spec.Parameters)
+		if err != nil {
+			return fmt.Errorf("failed to convert deployment profiles: %w", err)
+		}
+		if v, exists := componentValues[helmComp.Name]; exists {
+			values = v
+		}
 	}
+
 	values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
 	dm.log.Infow("Deploying with unique resource names",
@@ -334,16 +337,23 @@ func (dm *DeploymentManager) deployOrUpdateCompose(ctx context.Context, deployme
 	if err != nil {
 		return fmt.Errorf("invalid compose component %v", err)
 	}
+	// Get compose content from package location
+	dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(composeComp))
 
 	// Generate project name (must be valid Docker Compose project name)
 	projectName := fmt.Sprintf("%s-%s", strings.ToLower(composeComp.Name), deploymentId[:8])
 	projectName = strings.ReplaceAll(projectName, "_", "-")
 
-	componentValues, _ := pkg.ConvertAllAppDeploymentParamsToValues(*appDeployment.Spec.Parameters)
-	values := componentValues[composeComp.Name]
-
-	// Get compose content from package location
-	dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(composeComp))
+	values := map[string]interface{}{}
+	if appDeployment.Spec.Parameters != nil {
+		componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(*appDeployment.Spec.Parameters)
+		if err != nil {
+			return fmt.Errorf("failed to parse compose parameters: %w", err)
+		}
+		if v, exists := componentValues[composeComp.Name]; exists {
+			values = v
+		}
+	}
 
 	composeFilename, err := dm.composeClient.DownloadCompose(ctx, composeComp.Properties.PackageLocation, composeComp.Properties.KeyLocation, projectName)
 	if err != nil {
