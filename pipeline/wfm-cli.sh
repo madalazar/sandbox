@@ -239,25 +239,15 @@ generate_instance_yaml_from_oci() {
 }
 
 
-# Generate Helm-based instance.yaml
 generate_helm_instance() {
-  local app_identifier="$1"  # Receives id (pre-formatted) or sanitized name
+  local app_identifier="$1"
   local package_id="$2"
   local device_id="$3"
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
-
-  # Extract Helm-specific metadata
-  local chart_version=$(grep -E "^\s*version:" "$margo_file" | head -1 | sed 's/.*version:\s*//' | tr -d '"' | tr -d "'" | xargs)
-  chart_version="${chart_version:-0.1.0}"
-
-  # Create instance name from identifier (already properly formatted)
-  # Truncate to 53 chars for Helm release name limit
+													
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
-
-  # Component name: truncate to 40 chars to leave room for UUID suffix
-  local component_name=$(echo "$app_identifier" | cut -c1-40)
 
   cat > "$output_file" <<EOF
 # This is an input template allowing the WFM user to modify deployment instance specific parameters(currently read-only).
@@ -275,19 +265,88 @@ spec:
   deploymentProfile:
     type: helm.v3
     components:
+EOF
+
+  # Check if components section exists in margo.yaml
+  if grep -q "components:" "$margo_file"; then
+    # Parse ALL Helm components from margo.yaml
+    awk '/components:/,/^[^ ]/ {
+      if (/- name:/) {
+        name = $0
+        sub(/.*name:/, "", name)
+        gsub(/^[ \t]+|[ \t]+$/, "", name)
+        gsub(/"/, "", name)
+        print "COMPONENT_NAME:" name
+      }
+      if (/repository:/ && !/registryUrl/) {
+        repo = $0
+        sub(/.*repository:/, "", repo)
+        gsub(/^[ \t]+|[ \t]+$/, "", repo)
+        gsub(/"/, "", repo)
+        print "REPOSITORY:" repo
+      }
+      if (/revision:/) {
+        rev = $0
+        sub(/.*revision:/, "", rev)
+        gsub(/^[ \t]+|[ \t]+$/, "", rev)
+        gsub(/"/, "", rev)
+        print "REVISION:" rev
+      }
+    }' "$margo_file" | {
+      local current_name=""
+      local current_repo=""
+      local current_rev="0.1.0"
+      
+      while IFS=: read -r key value; do
+        case "$key" in
+          COMPONENT_NAME)
+            current_name="$value"
+            ;;
+          REPOSITORY)
+            current_repo="$value"
+            ;;
+          REVISION)
+            current_rev="$value"
+            # Output component when we have all required fields
+            if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
+              cat >> "$output_file" <<COMPONENT
+      - name: ${current_name}
+        properties:
+          repository: ${current_repo}
+          revision: ${current_rev}
+          wait: true
+          timeout: 5m
+COMPONENT
+              # Reset for next component
+              current_name=""
+              current_repo=""
+              current_rev="0.1.0"
+            fi
+            ;;
+        esac
+      done
+    }
+  else
+    # Fallback: single component using provided repository
+    local component_name=$(echo "$app_identifier" | cut -c1-40)
+    local chart_version=$(grep -E "^\s*version:" "$margo_file" | head -1 | sed 's/.*version:\s*//' | tr -d '"' | tr -d "'" | xargs)
+    chart_version="${chart_version:-0.1.0}"
+    
+    cat >> "$output_file" <<COMPONENT
       - name: ${component_name}
         properties:
           repository: ${repository}
           revision: ${chart_version}
           wait: true
           timeout: 5m
-EOF
+COMPONENT
+  fi
 
-  # Add parameters if they exist in margo.yaml
+  # Add parameters if they exist
   if grep -q "parameters:" "$margo_file"; then
     echo "  parameters:" >> "$output_file"
 
-    # Extract OTEL endpoint if present (common pattern)
+													   
     if grep -qi "otel\|otlp" "$margo_file"; then
       cat >> "$output_file" <<EOF
     otlpEndpoint:
@@ -301,19 +360,21 @@ EOF
 }
 
 
-# Generate Compose-based instance.yaml
+
+# Generate Compose-based instance.yaml with multi-component support
 generate_compose_instance() {
-  local app_identifier="$1"  # Receives id (pre-formatted) or sanitized name
+  local app_identifier="$1"
   local package_id="$2"
   local device_id="$3"
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
 
-  # Create names from identifier (already properly formatted)
+  # Create names from identifier
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
   local stack_name=$(echo "${app_identifier}-stack" | cut -c1-40)
 
+  # Start building the YAML
   cat > "$output_file" <<EOF
 # This is an input template allowing the WFM user to modify deployment instance specific parameters(currently read-only).
 # This file is not MARGO specified, however these parameters will be used to create the MARGO ApplicationDeployment
@@ -329,12 +390,56 @@ spec:
   deploymentProfile:
     type: compose
     components:
+EOF
+
+  # Check if components section exists in margo.yaml
+  if grep -q "components:" "$margo_file"; then
+    # Parse ALL components from margo.yaml (handles 2, 3, 4, or more)
+    awk '/components:/,/^[^ ]/ {
+      if (/- name:/) {
+        name = $0
+        sub(/.*name:/, "", name)
+        gsub(/^[ \t]+|[ \t]+$/, "", name)
+        gsub(/"/, "", name)
+        print "COMPONENT_NAME:" name
+      }
+      if (/packageLocation:/) {
+        location = $0
+        sub(/.*packageLocation:/, "", location)
+        gsub(/^[ \t]+|[ \t]+$/, "", location)
+        gsub(/"/, "", location)
+        print "PACKAGE_LOCATION:" location
+      }
+    }' "$margo_file" | {
+      local current_name=""
+      while IFS=: read -r key value; do
+        case "$key" in
+          COMPONENT_NAME)
+            current_name="$value"
+            ;;
+          PACKAGE_LOCATION)
+            if [ -n "$current_name" ]; then
+              cat >> "$output_file" <<COMPONENT
+      - name: ${current_name}
+        properties:
+          packageLocation: ${value}
+COMPONENT
+              current_name=""
+            fi
+            ;;
+        esac
+      done
+    }
+  else
+    # Fallback: single component using provided repository
+    cat >> "$output_file" <<COMPONENT
       - name: ${stack_name}
         properties:
           packageLocation: ${repository}
-EOF
+COMPONENT
+  fi
 
-  # Add common Compose parameters
+  # Add parameters if they exist
   if grep -q "parameters:" "$margo_file"; then
     echo "  parameters:" >> "$output_file"
 
