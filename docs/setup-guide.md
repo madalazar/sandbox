@@ -177,7 +177,7 @@ On each VM, you need to configure environment variables (settings that tell the 
 
 ## Step 4: Deploy (Connect Everything)
 
-### Copy Security File Between VMs
+### Copy Security Files Between VMs ( Both WFM's and Harbor's to Device VM)
 
 You need to copy a security file from the WFM VM to each Device VM.
 
@@ -186,7 +186,9 @@ You need to copy a security file from the WFM VM to each Device VM.
 | Step | Action | Command | Expected Result |
 |------|--------|---------|-----------------|
 | 1 | Find WFM IP address | `hostname -I` | First IP address (e.g., 192.168.1.100) |
-| 2 | Locate certificate | `cd $HOME/symphony/api/certificates`<br>`ls -la ca-cert.pem` | File: `ca-cert.pem` |
+| 2 | Locate WFM certificate | `cd $HOME/symphony/api/certificates`<br>`ls -la ca-cert.pem` | File: `ca-cert.pem` |
+| 3 | Locate Harbor certificate | `cd $HOME/sandbox/scripts/harbor/certs`<br>`ls -la harbor.crt` | File: `harbor.crt` |
+
 
 **Note:** Write down the IP address from Step 1 for use in the copy commands below.
 
@@ -200,8 +202,8 @@ You need to copy a security file from the WFM VM to each Device VM.
 
 | Target VM | Run From | SCP Command | Example |
 |-----------|----------|-------------|---------|
-| **Docker Device** | Docker Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
-| **K3s Device** | K3s Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **Docker Device** | Docker Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` <br><br> `scp username@WFM-VM-IP:~/sandbox/scripts/harbor/certs/harbor.crt $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` <br><br> `scp azureuser@10.10.10.4:~/sandbox/scripts/harbor/certs/harbor.crt $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
+| **K3s Device** | K3s Device VM | `scp username@WFM-VM-IP:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` <br><br> `scp username@WFM-VM-IP:~/sandbox/scripts/harbor/certs/harbor.crt $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` <br><br> `scp azureuser@10.10.10.4:~/sandbox/scripts/harbor/certs/harbor.crt $HOME/certs/` | `scp azureuser@10.10.10.4:~/symphony/api/certificates/ca-cert.pem $HOME/certs/` |
 
 **Note:** Run with **sudo** if fails.
 
@@ -427,7 +429,7 @@ Enter choice [1-9]: 1
 | af3af6b3-01c1-42bb-9168-347e99a174b8 | custom-otel-helm-app |         | ONBOARD   | ONBOARDED | OCI_REPO    | {"authentication":{"password":"Harb | 2025-12-02 10:00 | 2025-12-02 10:00 |
 |                                      |                      |         |           |           |             | or12345","type":"basic","username": |                  |                  |
 |                                      |                      |         |           |           |             | "admin"},"registryUrl":"172.19.59.1 |                  |                  |
-|                                      |                      |         |           |           |             | 48:8081","repository":"library/cust |                  |                  |
+|                                      |                      |         |           |           |             | 48:8443","repository":"library/cust |                  |                  |
 |                                      |                      |         |           |           |             | om-otel-helm-app-package","tag":"la |                  |                  |
 |                                      |                      |         |           |           |             | test","url":""}                     |                  |                  |
 +--------------------------------------+----------------------+---------+-----------+-----------+-------------+-------------------------------------+------------------+------------------+
@@ -547,7 +549,7 @@ Enter choice [1-9]: 6
 | ae011433-28ed-4f4e-a8af-474810810746 | custom-otel-helm-app |         | ONBOARD   | ONBOARDED | OCI_REPO    | {"authentication":{"password":"Harb | 2025-12-02 09:52 | 2025-12-02 09:52 |
 |                                      |                      |         |           |           |             | or12345","type":"basic","username": |                  |                  |
 |                                      |                      |         |           |           |             | "admin"},"registryUrl":"172.19.59.1 |                  |                  |
-|                                      |                      |         |           |           |             | 48:8081","repository":"library/cust |                  |                  |
+|                                      |                      |         |           |           |             | 48:8443","repository":"library/cust |                  |                  |
 |                                      |                      |         |           |           |             | om-otel-helm-app-package","tag":"la |                  |                  |
 |                                      |                      |         |           |           |             | test","url":""}                     |                  |                  |
 +--------------------------------------+----------------------+---------+-----------+-----------+-------------+-------------------------------------+------------------+------------------+
@@ -599,7 +601,7 @@ Enter choice [1-9]: 7
 | ae011433-28ed-4f4e-a8af-474810810746 | custom-otel-helm-app |         | ONBOARD   | ONBOARDED | OCI_REPO    | {"authentication":{"password":"Harb | 2025-12-02 09:52 | 2025-12-02 09:52 |
 |                                      |                      |         |           |           |             | or12345","type":"basic","username": |                  |                  |
 |                                      |                      |         |           |           |             | "admin"},"registryUrl":"172.19.59.1 |                  |                  |
-|                                      |                      |         |           |           |             | 48:8081","repository":"library/cust |                  |                  |
+|                                      |                      |         |           |           |             | 48:8443","repository":"library/cust |                  |                  |
 |                                      |                      |         |           |           |             | om-otel-helm-app-package","tag":"la |                  |                  |
 |                                      |                      |         |           |           |             | test","url":""}                     |                  |                  |
 +--------------------------------------+----------------------+---------+-----------+-----------+-------------+-------------------------------------+------------------+------------------+

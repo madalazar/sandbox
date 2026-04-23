@@ -68,7 +68,7 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"  # Set via env or leave empty
 
 #--- harbor settings (can be overridden via env)
 EXPOSED_HARBOR_HOST="${EXPOSED_HARBOR_HOST:-localhost}"
-EXPOSED_HARBOR_PORT="${EXPOSED_HARBOR_PORT:-8081}"
+EXPOSED_HARBOR_PORT="${EXPOSED_HARBOR_PORT:-8443}"
 
 #--- branch details (can be overridden via env)
 SANDBOX_REPO_BRANCH="${SANDBOX_REPO_BRANCH:-dev-sprint-6}"
@@ -177,7 +177,7 @@ install_prerequisites() {
   # Only install k3s for k3s device type
   if [ "$DEVICE_TYPE" = "k3s" ]; then
     setup_k3s
-    add_container_registry_mirror_to_k3s
+    configure_harbor_trust_for_k3s
   fi
 
   echo 'prerequisites installation completed.'
