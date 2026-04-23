@@ -79,7 +79,7 @@ changelog:
 
 release:
   footer: |
-    ## This release targets the Margo specification version: {{env.MARGO_SPEC_VERSION}}, and can be tracked here, https://github.com/margo/specification .
+    ## This release targets the Margo specification version: {{.Env.MARGO_SPEC_VERSION}}, and can be tracked here, https://github.com/margo/specification .
   github:
     owner: margo
     name: sandbox
