@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/database"
@@ -210,7 +211,11 @@ func (da *DeviceClientSettings) ReportCapabilities(
 	ctx context.Context,
 	capabilities sbi.DeviceCapabilitiesManifest,
 ) error {
-	da.log.Infow("Starting capabilities reporting", "deviceClientId", da.deviceClientId)
+	da.log.Infow(
+		"Starting capabilities reporting",
+		"deviceClientId", da.deviceClientId,
+		"cpu", summarizeCapabilitiesCPU(capabilities),
+	)
 	err := da.apiClient.ReportCapabilities(ctx, da.deviceClientId, capabilities)
 	if err != nil {
 		da.log.Errorw(
@@ -225,6 +230,61 @@ func (da *DeviceClientSettings) ReportCapabilities(
 
 	da.log.Infow("Capabilities reported successfully", "deviceClientId", da.deviceClientId)
 	return nil
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func summarizeCapabilitiesCPU(capabilities sbi.DeviceCapabilitiesManifest) string {
+	cpus := capabilities.Properties.Cpus
+	if cpus == nil || len(*cpus) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, len(*cpus))
+	for cpuIndex, cpu := range *cpus {
+		architecture := "<nil>"
+		if cpu.Architecture != nil {
+			architecture = string(*cpu.Architecture)
+		}
+
+		if cpu.Kinds == nil || len(*cpu.Kinds) == 0 {
+			parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%g, architecture=%s}",
+				cpuIndex, cpu.Cores, architecture))
+			continue
+		}
+
+		for kindIndex, cpuKind := range *cpu.Kinds {
+			cpuCores := "<nil>"
+			if cpuKind.Cores != nil {
+				cpuCores = fmt.Sprintf("%g", *cpuKind.Cores)
+			}
+
+			cpuClass := "<nil>"
+			if cpuKind.Class != nil {
+				cpuClass = string(*cpuKind.Class)
+			}
+
+			cpuType := "<nil>"
+			if cpuKind.Type != nil {
+				cpuType = string(*cpuKind.Type)
+			}
+
+			baseMHz := "<nil>"
+			maxMHz := "<nil>"
+			if cpuKind.Frequency != nil {
+				if cpuKind.Frequency.BaseMHz != nil {
+					baseMHz = fmt.Sprintf("%g", *cpuKind.Frequency.BaseMHz)
+				}
+				if cpuKind.Frequency.MaxMHz != nil {
+					maxMHz = fmt.Sprintf("%g", *cpuKind.Frequency.MaxMHz)
+				}
+			}
+
+			parts = append(parts, fmt.Sprintf("cpu[%d].kind[%d]={cores=%s, class=%s, frequency={baseMHz=%s, maxMHz=%s}, type=%s, architecture=%s}",
+				cpuIndex, kindIndex, cpuCores, cpuClass, baseMHz, maxMHz, cpuType, architecture))
+		}
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 func (da *DeviceClientSettings) IsOnboarded() (bool, error) {
