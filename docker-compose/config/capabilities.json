@@ -8,9 +8,11 @@
         "serialNumber": "PF45343-AA",
         "roles": ["Standalone Cluster"],
         "resources": {
-            "cpu": {
-                "cores": 24
-            },
+            "cpu": [
+                {
+                    "cores": 24
+                }
+            ],
             "memory": "64",
             "storage": "2000"
         }

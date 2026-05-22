@@ -50,6 +50,19 @@ const (
 	Arm64 DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture = "arm64"
 )
 
+// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuClass.
+const (
+	Efficiency  DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "efficiency"
+	LowPower    DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "low-power"
+	Performance DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "performance"
+)
+
+// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuType.
+const (
+	Isolated DeviceCapabilitiesManifestPropertiesResourcesCpuType = "isolated"
+	Shared   DeviceCapabilitiesManifestPropertiesResourcesCpuType = "shared"
+)
+
 // Defines values for DeviceCapabilitiesManifestPropertiesRoles.
 const (
 	ClusterLeader     DeviceCapabilitiesManifestPropertiesRoles = "Cluster Leader"
@@ -80,7 +93,12 @@ const (
 // Defines values for AppDeploymentProfileType.
 const (
 	Compose AppDeploymentProfileType = "compose"
-	HelmV3  AppDeploymentProfileType = "helm.v3"
+	Helm    AppDeploymentProfileType = "helm"
+)
+
+// Defines values for PostApiV1OnboardingJSONBodyKind.
+const (
+	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
 )
 
 // Defines values for PostApiV1OnboardingJSONBodyKind.
@@ -160,9 +178,15 @@ type DeviceCapabilitiesManifest struct {
 		Id          string `json:"id"`
 		ModelNumber string `json:"modelNumber"`
 		Resources   struct {
-			Cpu struct {
+			Cpu []struct {
 				Architecture *DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture `json:"architecture,omitempty"`
-				Cores        float32                                                       `json:"cores"`
+
+				// Class Core class (P-core, E-core, etc.)
+				Class *DeviceCapabilitiesManifestPropertiesResourcesCpuClass `json:"class,omitempty"`
+				Cores float32                                                `json:"cores"`
+
+				// Type Whether these cores are kernel-isolated
+				Type *DeviceCapabilitiesManifestPropertiesResourcesCpuType `json:"type,omitempty"`
 			} `json:"cpu"`
 			Interfaces  []DeviceCommunicationInterface `json:"interfaces"`
 			Memory      string                         `json:"memory"`
@@ -180,6 +204,12 @@ type DeviceCapabilitiesManifestKind string
 
 // DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture defines model for DeviceCapabilitiesManifest.Properties.Resources.Cpu.Architecture.
 type DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture string
+
+// DeviceCapabilitiesManifestPropertiesResourcesCpuClass Core class (P-core, E-core, etc.)
+type DeviceCapabilitiesManifestPropertiesResourcesCpuClass string
+
+// DeviceCapabilitiesManifestPropertiesResourcesCpuType Whether these cores are kernel-isolated
+type DeviceCapabilitiesManifestPropertiesResourcesCpuType string
 
 // DeviceCapabilitiesManifestPropertiesRoles defines model for DeviceCapabilitiesManifest.Properties.Roles.
 type DeviceCapabilitiesManifestPropertiesRoles string
@@ -303,7 +333,7 @@ type ComposeApplicationDeploymentProfileComponent struct {
 		// KeyLocation Key location of the component
 		KeyLocation *string `json:"keyLocation,omitempty"`
 
-		// PackageLocation Package location of the component
+		// PackageLocation The URL indicating the Compose package's location. It should be a direct path to the compose.yaml or compose.yaml file archived in tar.gz
 		PackageLocation string `json:"packageLocation"`
 
 		// Timeout Timeout for the component

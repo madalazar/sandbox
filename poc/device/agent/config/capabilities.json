@@ -8,11 +8,15 @@
         "serialNumber": "PF45343-AA",
         "roles": ["Standalone Cluster"],
         "resources": {
-            "cpu": {
-                "architecture": "amd64",
-                "cores": 24
-            },
-            "memory": "64 Gi",
+            "cpu": [
+                {
+                    "architecture": "amd64",
+                    "cores": 24,
+                    "class": "performance",
+                    "type": "shared"
+                }
+            ],
+            "memory": "64",
             "storage": "2000 Gi",
             "peripherals": [],
             "interfaces": []

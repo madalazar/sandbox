@@ -999,24 +999,9 @@ components:
           x-oapi-codegen-extra-tags:
             json: "cpu"
             yaml: "cpu"
-          properties:
-            architectures:
-              # x-go-field-tags: 'json:"architectures" yaml:"architectures"'
-              x-oapi-codegen-extra-tags:
-                json: "architectures"
-                yaml: "architectures"
-              description: Supported CPU architectures
-              items:
-                type: string
-              type: array
-            cores:
-              # x-go-field-tags: 'json:"cores" yaml:"cores"'
-              x-oapi-codegen-extra-tags:
-                json: "cores"
-                yaml: "cores"
-              description: Required CPU cores
-              type: number
-          type: object
+          type: array
+          items:
+            $ref: '#/components/schemas/Cpu'
         interfaces:
           # x-go-field-tags: 'json:"interfaces" yaml:"interfaces"'
           x-oapi-codegen-extra-tags:
@@ -1071,6 +1056,54 @@ components:
           description: Required storage (e.g., "10Gi")
           type: string
       type: object
+
+    Cpu:
+      type: object
+      properties:
+        architectures:
+          # x-go-field-tags: 'json:"architectures" yaml:"architectures"'
+          x-oapi-codegen-extra-tags:
+            json: "architectures"
+            yaml: "architectures"
+          description: Supported CPU architectures
+          items:
+            type: string
+          type: array
+        cores:
+          # x-go-field-tags: 'json:"cores" yaml:"cores"'
+          x-oapi-codegen-extra-tags:
+            json: "cores"
+            yaml: "cores"
+          description: Required CPU cores
+          type: number
+        class:
+          # x-go-field-tags: 'json:"class" yaml:"class"'
+          x-oapi-codegen-extra-tags:
+            json: "class"
+            yaml: "class"
+          description: Core class required by the workload
+          type: string
+          enum:
+          - performance
+          - efficiency
+          - low-power
+        type:
+          # x-go-field-tags: 'json:"type" yaml:"type"'
+          x-oapi-codegen-extra-tags:
+            json: "type"
+            yaml: "type"
+          description: Whether requested cores must be isolated or can be shared
+          type: string
+          enum:
+          - shared
+          - isolated
+        name:
+          # x-go-field-tags: 'json:"name" yaml:"name"'
+          x-oapi-codegen-extra-tags:
+            json: "name"
+            yaml: "name"
+          description: Name of the container this CPU requirement applies to
+          type: string
 
 
     # Application Package Schemas
@@ -1337,6 +1370,10 @@ components:
               - $ref: '#/components/schemas/HelmDeploymentProfileComponent'
               - $ref: '#/components/schemas/ComposeDeploymentProfileComponent'
           description: Components of the deployment profile
+        ### TODO: wait for this to be needed
+        # requiredResources:
+        #   $ref: '#/components/schemas/RequiredResources'
+        #   description: Required resources for this deployment profile
 
     HelmDeploymentProfileComponent:
       type: object

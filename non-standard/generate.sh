@@ -21,6 +21,9 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+
+bash -c 'echo "$PATH"; command -v go; go version'
+
 check_prerequisites() {
     log_info "Checking prerequisites..."
 
