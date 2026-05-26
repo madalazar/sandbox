@@ -423,6 +423,7 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 	if err := json.Unmarshal(jsonData, &deployment); err != nil {
 		return nil, fmt.Errorf("failed to parse deployment: %w", err)
 	}
+	ss.logDeploymentComponentCPURequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile.Components)
 
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
@@ -632,8 +633,68 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 			continue
 		}
 
+		ss.logDeploymentComponentCPURequirements(deploymentId, deployment.Spec.DeploymentProfile.Components)
+
 		// Store deployment
 		ss.storeDeployment(deploymentId, deploymentRef, &deployment)
+	}
+}
+
+func (ss *StateSyncer) logDeploymentComponentCPURequirements(
+	deploymentID string,
+	components []sbi.AppDeploymentProfile_Components_Item,
+) {
+	for compIndex, component := range components {
+		componentBytes, err := component.MarshalJSON()
+		if err != nil {
+			ss.log.Warnw("Failed to marshal component while logging CPU requirements",
+				"deploymentId", deploymentID,
+				"componentIndex", compIndex,
+				"error", err)
+			continue
+		}
+
+		var componentObj map[string]interface{}
+		if err := json.Unmarshal(componentBytes, &componentObj); err != nil {
+			ss.log.Warnw("Failed to decode component JSON while logging CPU requirements",
+				"deploymentId", deploymentID,
+				"componentIndex", compIndex,
+				"error", err)
+			continue
+		}
+
+		componentName := fmt.Sprintf("component-%d", compIndex)
+		if rawName, ok := componentObj["name"].(string); ok && rawName != "" {
+			componentName = rawName
+		}
+
+		resources, ok := componentObj["resourceRequirements"].(map[string]interface{})
+		if !ok {
+			resources, _ = componentObj["requiredResources"].(map[string]interface{})
+		}
+		if resources == nil {
+			continue
+		}
+
+		cpuItems, ok := resources["cpu"].([]interface{})
+		if !ok || len(cpuItems) == 0 {
+			continue
+		}
+
+		for cpuIndex, cpuItem := range cpuItems {
+			cpuObj, ok := cpuItem.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			ss.log.Infow("Parsed deployment CPU requirement",
+				"deploymentId", deploymentID,
+				"component", componentName,
+				"cpuIndex", cpuIndex,
+				"cores", cpuObj["cores"],
+				"class", cpuObj["class"],
+				"type", cpuObj["type"])
+		}
 	}
 }
 

@@ -1,20 +1,28 @@
 {
-    "apiVersion": "device.margo/v1",
-    "kind": "DeviceCapability",
+    "apiVersion": "device.margo.org/v1alpha1",
+    "kind": "DeviceCapabilitiesManifest",
     "properties": {
         "id": "device-id-from-manufacturer",
         "vendor": "Northstar Industrial Applications",
         "modelNumber": "332ANZE1-N1",
         "serialNumber": "PF45343-AA",
-        "roles": ["standalone cluster", "cluster lead"],
+        "roles": ["Standalone Cluster"],
         "resources": {
             "memory": 64,
             "storage": 2000,
-            "cpus": [{
-                "architecture": "Intel x64",
-                "cores": 24,
-                "frequency": 6.2
-            }]
+            "cpus": [
+                {
+                    "architecture": "amd64",
+                    "cores": 2,
+                    "type": "isolated"
+                },
+                {
+                    "architecture": "amd64",
+                    "cores": 24,
+                    "class": "performance",
+                    "type": "shared"
+                }
+            ]
         },
         "peripherals": [{
             "name": "NVIDIA GeForce RTX 4070 Ti SUPER OC Edition Graphics Card",

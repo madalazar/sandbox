@@ -231,7 +231,8 @@ func (dm *DeploymentManager) deployOrUpdate(
 	var err error
 
 	switch profileType {
-	case sbi.HelmV3:
+	case sbi.Helm:
+	case sbi.AppDeploymentProfileType("helm.v3"):
 		//  Check if Helm client is available
 		if dm.helmClient == nil {
 			err = fmt.Errorf(
@@ -594,7 +595,8 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 
 	var removeErr error
 	switch profileType {
-	case sbi.HelmV3:
+	case sbi.Helm:
+	case sbi.AppDeploymentProfileType("helm.v3"):
 		removeErr = dm.removeHelm(ctx, deploymentId, appDeployment)
 	case sbi.Compose:
 		removeErr = dm.removeCompose(ctx, deploymentId, appDeployment)

@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/database"
@@ -202,7 +203,11 @@ func (da *DeviceClientSettings) ReportCapabilities(
 	ctx context.Context,
 	capabilities sbi.DeviceCapabilitiesManifest,
 ) error {
-	da.log.Infow("Starting capabilities reporting", "deviceClientId", da.deviceClientId)
+	da.log.Infow(
+		"Starting capabilities reporting",
+		"deviceClientId", da.deviceClientId,
+		"cpu", summarizeCapabilitiesCPU(capabilities),
+	)
 	err := da.apiClient.ReportCapabilities(ctx, da.deviceClientId, capabilities)
 	if err != nil {
 		da.log.Errorw(
@@ -217,6 +222,35 @@ func (da *DeviceClientSettings) ReportCapabilities(
 
 	da.log.Infow("Capabilities reported successfully", "deviceClientId", da.deviceClientId)
 	return nil
+}
+
+func summarizeCapabilitiesCPU(capabilities sbi.DeviceCapabilitiesManifest) string {
+	if len(capabilities.Properties.Resources.Cpu) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, len(capabilities.Properties.Resources.Cpu))
+	for index, cpu := range capabilities.Properties.Resources.Cpu {
+		architecture := "<nil>"
+		if cpu.Architecture != nil {
+			architecture = string(*cpu.Architecture)
+		}
+
+		cpuClass := "<nil>"
+		if cpu.Class != nil {
+			cpuClass = string(*cpu.Class)
+		}
+
+		cpuType := "<nil>"
+		if cpu.Type != nil {
+			cpuType = string(*cpu.Type)
+		}
+
+		parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%g, class=%s, type=%s, architecture=%s}",
+			index, cpu.Cores, cpuClass, cpuType, architecture))
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 func (da *DeviceClientSettings) IsOnboarded() (bool, error) {

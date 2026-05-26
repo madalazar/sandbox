@@ -11,6 +11,10 @@
             "cpu": [
                 {
                     "architecture": "amd64",
+                    "cores": 2,
+                    "type": "isolated"
+                },
+                {
                     "cores": 24,
                     "class": "performance",
                     "type": "shared"

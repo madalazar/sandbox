@@ -101,11 +101,6 @@ const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
 )
 
-// Defines values for PostApiV1OnboardingJSONBodyKind.
-const (
-	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
-)
-
 // ComponentStatus defines model for ComponentStatus.
 type ComponentStatus struct {
 	Error *struct {
