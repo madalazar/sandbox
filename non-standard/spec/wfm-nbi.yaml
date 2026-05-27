@@ -1370,10 +1370,9 @@ components:
               - $ref: '#/components/schemas/HelmDeploymentProfileComponent'
               - $ref: '#/components/schemas/ComposeDeploymentProfileComponent'
           description: Components of the deployment profile
-        ### TODO: wait for this to be needed
-        # requiredResources:
-        #   $ref: '#/components/schemas/RequiredResources'
-        #   description: Required resources for this deployment profile
+        requiredResources:
+          $ref: '#/components/schemas/RequiredResources'
+          description: Required resources for this deployment profile
 
     HelmDeploymentProfileComponent:
       type: object

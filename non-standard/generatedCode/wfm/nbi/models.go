@@ -602,7 +602,8 @@ type CpuType string
 // DeploymentExecutionProfile Application Deployment Profile
 type DeploymentExecutionProfile struct {
 	// Components Components of the deployment profile
-	Components []DeploymentExecutionProfile_Components_Item `json:"components"`
+	Components        []DeploymentExecutionProfile_Components_Item `json:"components"`
+	RequiredResources *RequiredResources                           `json:"requiredResources,omitempty"`
 
 	// Type Type of deployment profile
 	Type DeploymentExecutionProfileType `json:"type"`

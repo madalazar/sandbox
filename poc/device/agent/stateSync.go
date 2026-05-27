@@ -423,7 +423,7 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 	if err := json.Unmarshal(jsonData, &deployment); err != nil {
 		return nil, fmt.Errorf("failed to parse deployment: %w", err)
 	}
-	ss.logDeploymentComponentCPURequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile.Components)
+	ss.logDeploymentProfileCPURequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile.RequiredResources)
 
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
@@ -610,6 +610,7 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 
 		// Convert YAML maps to JSON-compatible format
 		jsonCompatible := convertYAMLToJSON(yamlInterface)
+		ss.logDeploymentCPURequirementsFromRawYAML(deploymentId, jsonCompatible)
 
 		// Convert to JSON (which will be properly unmarshaled by UnmarshalJSON())
 		jsonData, err := json.Marshal(jsonCompatible)
@@ -633,68 +634,124 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 			continue
 		}
 
-		ss.logDeploymentComponentCPURequirements(deploymentId, deployment.Spec.DeploymentProfile.Components)
+		ss.logDeploymentProfileCPURequirements(deploymentId, deployment.Spec.DeploymentProfile.RequiredResources)
 
 		// Store deployment
 		ss.storeDeployment(deploymentId, deploymentRef, &deployment)
 	}
 }
 
-func (ss *StateSyncer) logDeploymentComponentCPURequirements(
+func (ss *StateSyncer) logDeploymentProfileCPURequirements(
 	deploymentID string,
-	components []sbi.AppDeploymentProfile_Components_Item,
+	requiredResources *sbi.RequiredResources,
 ) {
-	for compIndex, component := range components {
-		componentBytes, err := component.MarshalJSON()
-		if err != nil {
-			ss.log.Warnw("Failed to marshal component while logging CPU requirements",
+	ss.log.Debugw("Entered logDeploymentProfileCPURequirements",
+		"deploymentId", deploymentID,
+		"hasRequiredResources", requiredResources != nil)
+
+	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
+		ss.log.Debugw("No profile-level CPU requirements found in parsed deployment",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	for cpuIndex, cpuReq := range *requiredResources.Cpu {
+		cpuName := ""
+		hasCPUName := cpuReq.Name != nil && *cpuReq.Name != ""
+		if hasCPUName {
+			cpuName = *cpuReq.Name
+		} else {
+			ss.log.Warnw("Deployment CPU requirement missing name in typed profile",
 				"deploymentId", deploymentID,
-				"componentIndex", compIndex,
-				"error", err)
-			continue
+				"cpuIndex", cpuIndex)
 		}
 
-		var componentObj map[string]interface{}
-		if err := json.Unmarshal(componentBytes, &componentObj); err != nil {
-			ss.log.Warnw("Failed to decode component JSON while logging CPU requirements",
-				"deploymentId", deploymentID,
-				"componentIndex", compIndex,
-				"error", err)
-			continue
+		var class interface{}
+		if cpuReq.Class != nil {
+			class = *cpuReq.Class
 		}
 
-		componentName := fmt.Sprintf("component-%d", compIndex)
-		if rawName, ok := componentObj["name"].(string); ok && rawName != "" {
-			componentName = rawName
+		var cpuType interface{}
+		if cpuReq.Type != nil {
+			cpuType = *cpuReq.Type
 		}
 
-		resources, ok := componentObj["resourceRequirements"].(map[string]interface{})
+		ss.log.Infow("Parsed deployment CPU requirement from typed profile",
+			"deploymentId", deploymentID,
+			"name", cpuName,
+			"cpuIndex", cpuIndex,
+			"cores", cpuReq.Cores,
+			"class", class,
+			"type", cpuType)
+	}
+}
+
+func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
+	deploymentID string,
+	rawManifest interface{},
+) {
+	manifestObj, ok := rawManifest.(map[string]interface{})
+	if !ok {
+		ss.log.Debugw("Raw deployment manifest is not an object",
+			"deploymentId", deploymentID,
+			"type", fmt.Sprintf("%T", rawManifest))
+		return
+	}
+
+	specObj, ok := manifestObj["spec"].(map[string]interface{})
+	if !ok {
+		ss.log.Debugw("No spec found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	profileObj, ok := specObj["deploymentProfile"].(map[string]interface{})
+	if !ok {
+		ss.log.Debugw("No deploymentProfile found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	resources, ok := profileObj["requiredResources"].(map[string]interface{})
+	if !ok {
+		resources, _ = profileObj["resourceRequirements"].(map[string]interface{})
+	}
+	if resources == nil {
+		ss.log.Debugw("No raw requiredResources found in deployment profile",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	cpuItems, ok := resources["cpu"].([]interface{})
+	if !ok || len(cpuItems) == 0 {
+		ss.log.Debugw("No raw CPU entries found in deployment profile resources",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	for cpuIndex, cpuItem := range cpuItems {
+		cpuObj, ok := cpuItem.(map[string]interface{})
 		if !ok {
-			resources, _ = componentObj["requiredResources"].(map[string]interface{})
-		}
-		if resources == nil {
 			continue
 		}
 
-		cpuItems, ok := resources["cpu"].([]interface{})
-		if !ok || len(cpuItems) == 0 {
-			continue
-		}
-
-		for cpuIndex, cpuItem := range cpuItems {
-			cpuObj, ok := cpuItem.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			ss.log.Infow("Parsed deployment CPU requirement",
+		cpuName := ""
+		rawName, hasCPUName := cpuObj["name"].(string)
+		if hasCPUName && rawName != "" {
+			cpuName = rawName
+		} else {
+			ss.log.Warnw("Deployment CPU requirement missing name in raw YAML",
 				"deploymentId", deploymentID,
-				"component", componentName,
-				"cpuIndex", cpuIndex,
-				"cores", cpuObj["cores"],
-				"class", cpuObj["class"],
-				"type", cpuObj["type"])
+				"cpuIndex", cpuIndex)
 		}
+
+		ss.log.Infow("Parsed deployment CPU requirement from raw YAML",
+			"deploymentId", deploymentID,
+			"name", cpuName,
+			"cpuIndex", cpuIndex,
+			"cores", cpuObj["cores"],
+			"class", cpuObj["class"],
+			"type", cpuObj["type"])
 	}
 }
 

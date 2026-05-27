@@ -52,15 +52,15 @@ const (
 
 // Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuClass.
 const (
-	Efficiency  DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "efficiency"
-	LowPower    DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "low-power"
-	Performance DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "performance"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuClassEfficiency  DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "efficiency"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuClassLowPower    DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "low-power"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuClassPerformance DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "performance"
 )
 
 // Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuType.
 const (
-	Isolated DeviceCapabilitiesManifestPropertiesResourcesCpuType = "isolated"
-	Shared   DeviceCapabilitiesManifestPropertiesResourcesCpuType = "shared"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuTypeIsolated DeviceCapabilitiesManifestPropertiesResourcesCpuType = "isolated"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuTypeShared   DeviceCapabilitiesManifestPropertiesResourcesCpuType = "shared"
 )
 
 // Defines values for DeviceCapabilitiesManifestPropertiesRoles.
@@ -94,6 +94,19 @@ const (
 const (
 	Compose AppDeploymentProfileType = "compose"
 	Helm    AppDeploymentProfileType = "helm"
+)
+
+// Defines values for CpuClass.
+const (
+	CpuClassEfficiency  CpuClass = "efficiency"
+	CpuClassLowPower    CpuClass = "low-power"
+	CpuClassPerformance CpuClass = "performance"
+)
+
+// Defines values for CpuType.
+const (
+	CpuTypeIsolated CpuType = "isolated"
+	CpuTypeShared   CpuType = "shared"
 )
 
 // Defines values for PostApiV1OnboardingJSONBodyKind.
@@ -281,6 +294,9 @@ type AppDeploymentProfile struct {
 	// Components Components of the deployment profile
 	Components []AppDeploymentProfile_Components_Item `json:"components"`
 
+	// RequiredResources Required resources for a deployment profile
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
 	// Type Type of deployment profile
 	Type AppDeploymentProfileType `json:"type"`
 }
@@ -339,6 +355,30 @@ type ComposeApplicationDeploymentProfileComponent struct {
 	} `json:"properties"`
 }
 
+// Cpu CPU requirement for a workload or deployment profile
+type Cpu struct {
+	// Architectures Supported CPU architectures
+	Architectures *[]string `json:"architectures,omitempty"`
+
+	// Class Core class required by the workload
+	Class *CpuClass `json:"class,omitempty"`
+
+	// Cores Required CPU cores
+	Cores *float32 `json:"cores,omitempty"`
+
+	// Name Name of the container this CPU requirement applies to
+	Name *string `json:"name,omitempty"`
+
+	// Type Whether requested cores must be isolated or can be shared
+	Type *CpuType `json:"type,omitempty"`
+}
+
+// CpuClass Core class required by the workload
+type CpuClass string
+
+// CpuType Whether requested cores must be isolated or can be shared
+type CpuType string
+
 // HelmApplicationDeploymentProfileComponent Helm Application Deployment Profile Component
 type HelmApplicationDeploymentProfileComponent struct {
 	// Name Name of the component
@@ -356,6 +396,18 @@ type HelmApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+}
+
+// RequiredResources Required resources for a deployment profile
+type RequiredResources struct {
+	// Cpu CPU requirements for the deployment profile
+	Cpu *[]Cpu `json:"cpu,omitempty"`
+
+	// Memory Required memory for the deployment profile
+	Memory *string `json:"memory,omitempty"`
+
+	// Storage Required storage for the deployment profile
+	Storage *string `json:"storage,omitempty"`
 }
 
 // GetApiV1ClientsClientIdBundlesDigestParams defines parameters for GetApiV1ClientsClientIdBundlesDigest.

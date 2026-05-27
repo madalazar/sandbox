@@ -636,6 +636,45 @@ components:
             wait:
               type: boolean
               description: Wait for the component to be ready
+      cpu:
+        type: object
+        description: CPU requirement for a workload or deployment profile
+        properties:
+          name:
+            type: string
+            description: Name of the container this CPU requirement applies to
+          cores:
+            type: number
+            format: float
+            description: Required CPU cores
+          class:
+            type: string
+            enum: [performance, efficiency, low-power]
+            description: Core class required by the workload
+          type:
+            type: string
+            enum: [isolated, shared]
+            description: Whether requested cores must be isolated or can be shared
+          architectures:
+            type: array
+            items:
+              type: string
+            description: Supported CPU architectures
+      requiredResources:
+        type: object
+        description: Required resources for a deployment profile
+        properties:
+          cpu:
+            type: array
+            items:
+              $ref: '#/components/schemas/cpu'
+            description: CPU requirements for the deployment profile
+          memory:
+            type: string
+            description: Required memory for the deployment profile
+          storage:
+            type: string
+            description: Required storage for the deployment profile
     appDeploymentProfile:
       type: object
       description: Application Deployment Profile
@@ -652,6 +691,9 @@ components:
               - $ref: '#/components/schemas/helmApplicationDeploymentProfileComponent'
               - $ref: '#/components/schemas/composeApplicationDeploymentProfileComponent'
           description: Components of the deployment profile
+          requiredResources:
+            $ref: '#/components/schemas/requiredResources'
+            description: Required resources for this deployment profile
     appParameterTarget:
       type: object
       description: Application Parameter Target
