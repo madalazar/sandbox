@@ -77,6 +77,14 @@ rules:
 - apiGroups: ["k8s.nginx.org"]
   resources: ["*"]
   verbs: ["*"]
+
+# NRI plugni related
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "update", "patch", "delete"]
+- apiGroups: ["config.nri"]
+  resources: ["topologyawarepolicies"]
+  verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
