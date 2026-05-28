@@ -1,0 +1,210 @@
+apiVersion: margo.org/v1-alpha1
+kind: ApplicationDescription
+metadata:
+  id: rt-benchmark-compose-suite
+  name: RT Benchmark Compose Suite
+  description: >
+    Docker Compose based real-time benchmarking suite with cyclictest for latency
+    measurement and stress for background CPU load.
+  version: 1.0.0
+  catalog:
+    application:
+      tagline: RT benchmarking via Docker Compose workloads
+      descriptionFile: ./resources/description.md
+      releaseNotes: ./resources/release-notes.md
+      licenseFile: ./resources/license.txt
+      tags: ["benchmark", "real-time", "docker-compose", "cyclictest", "stress"]
+    organization:
+      - name: Industrial Edge Controls
+
+deploymentProfiles:
+  - type: compose
+    id: rt-benchmark-compose
+    description: Deploy cyclictest and stress as separate Docker Compose components
+    components:
+      - name: cyclictest
+        properties:
+          packageLocation: /rt-benchmark-compose-app/cyclictest/docker-compose.yaml
+      - name: stress
+        properties:
+          packageLocation: /rt-benchmark-compose-app/stress/docker-compose.yaml
+
+    requiredResources:
+      cpu:
+        - name: cyclictest
+          cores: 1
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        - name: stress
+          cores: 1
+          class: performance
+          type: shared
+          architectures:
+            - amd64
+            - x86_64
+      memory: 1024Mi
+      storage: 1Gi
+
+parameters:
+  cyclictestImage:
+    value: harbor.machine:8443/library/cyclictest:latest
+    targets:
+      - pointer: CYCLICTEST_IMAGE
+        components: ["cyclictest"]
+
+  # cyclictestCpuset:
+  #   value: "1"
+  #   targets:
+  #     - pointer: CYCLICTEST_CPUSET
+  #       components: ["cyclictest"]
+
+  cyclictestOutputHostPath:
+    value: /tmp/output
+    targets:
+      - pointer: CYCLICTEST_OUTPUT_HOST_PATH
+        components: ["cyclictest"]
+
+  cyclictestOutputDir:
+    value: /tmp/output
+    targets:
+      - pointer: OUTPUT_DIR
+        components: ["cyclictest"]
+
+  cyclictestThreads:
+    value: 1
+    targets:
+      - pointer: CYCLICTEST_THREADS
+        components: ["cyclictest"]
+
+  cyclictestPriority:
+    value: 99
+    targets:
+      - pointer: CYCLICTEST_PRIORITY
+        components: ["cyclictest"]
+
+  cyclictestInterval:
+    value: 300
+    targets:
+      - pointer: CYCLICTEST_INTERVAL
+        components: ["cyclictest"]
+
+  cyclictestLoops:
+    value: 100000
+    targets:
+      - pointer: CYCLICTEST_LOOPS
+        components: ["cyclictest"]
+
+  cyclictestHistogram:
+    value: 400
+    targets:
+      - pointer: CYCLICTEST_HISTOGRAM
+        components: ["cyclictest"]
+
+  cyclictestCustom:
+    value: -m
+    targets:
+      - pointer: CYCLICTEST_CUSTOM
+        components: ["cyclictest"]
+
+  stressImage:
+    value: harbor.machine:8443/library/stress:latest
+    targets:
+      - pointer: STRESS_IMAGE
+        components: ["stress"]
+
+  # stressCpuset:
+  #   value: "2"
+  #   targets:
+  #     - pointer: STRESS_CPUSET
+  #       components: ["stress"]
+
+  stressCpuWorkers:
+    value: 8
+    targets:
+      - pointer: STRESS_CPU_WORKERS
+        components: ["stress"]
+
+  stressDuration:
+    value: 300s
+    targets:
+      - pointer: STRESS_DURATION
+        components: ["stress"]
+
+configuration:
+  sections:
+    - name: Cyclictest Configuration
+      settings:
+        - parameter: cyclictestImage
+          name: Cyclictest Image
+          description: Container image reference for cyclictest (repository:tag)
+          schema: requiredText
+        - parameter: cyclictestCpuset
+          name: Cyclictest CPU Set
+          description: CPU core set for cyclictest container (for example 1 or 1-2)
+          schema: requiredText
+        - parameter: cyclictestOutputHostPath
+          name: Cyclictest Output Host Path
+          description: Host path bind mounted to collect cyclictest logs
+          schema: requiredText
+        - parameter: cyclictestThreads
+          name: Cyclictest Threads
+          description: Number of cyclictest worker threads
+          schema: positiveInteger
+        - parameter: cyclictestPriority
+          name: Cyclictest Priority
+          description: Real-time priority used by cyclictest
+          schema: positiveInteger
+        - parameter: cyclictestInterval
+          name: Cyclictest Interval (us)
+          description: Sampling interval in microseconds
+          schema: positiveInteger
+        - parameter: cyclictestLoops
+          name: Cyclictest Loops
+          description: Number of benchmark loops
+          schema: positiveInteger
+        - parameter: cyclictestHistogram
+          name: Cyclictest Histogram
+          description: Histogram bucket count
+          schema: positiveInteger
+        - parameter: cyclictestCustom
+          name: Cyclictest Extra Flags
+          description: Additional flags passed through --custom
+          schema: optionalText
+
+    - name: Stress Configuration
+      settings:
+        - parameter: stressImage
+          name: Stress Image
+          description: Container image reference for stress (repository:tag)
+          schema: requiredText
+        - parameter: stressCpuset
+          name: Stress CPU Set
+          description: CPU core set for stress container (for example 2 or 2-3)
+          schema: requiredText
+        - parameter: stressCpuWorkers
+          name: Stress CPU Workers
+          description: Number of CPU workers for stress
+          schema: positiveInteger
+        - parameter: stressDuration
+          name: Stress Duration
+          description: Duration for stress run (for example 300s)
+          schema: requiredText
+
+  schema:
+    - name: requiredText
+      dataType: string
+      allowEmpty: false
+      maxLength: 256
+
+    - name: optionalText
+      dataType: string
+      allowEmpty: true
+      maxLength: 256
+
+    - name: positiveInteger
+      dataType: integer
+      allowEmpty: false
+      minValue: 1
