@@ -2,6 +2,7 @@
 # modules/device/agent.sh - Device agent management functions
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/capabilities.sh"
 
 # ----------------------------
 # GHCR Image References
@@ -160,6 +161,8 @@ start_device_agent_docker_service() {
     return 1
   fi
 
+  update_capabilities_cpu_from_host || return 1
+
   cp ../poc/device/agent/config/capabilities.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
 
@@ -251,6 +254,8 @@ build_start_device_agent_k3s_service() {
 
     set_capabilities_roles "Standalone Cluster"
     update_agent_sbi_url
+
+    update_capabilities_cpu_from_host || return 1
 
     echo "Copying configuration files..."
     mkdir -p config

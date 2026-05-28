@@ -106,6 +106,7 @@ workload_Fleet_Management_Client_IMAGE_REF="${GHCR_REGISTRY}/${GHCR_ORG}/${workl
 source "${SCRIPT_DIR}/lib/common.sh"
 
 # Load all WFM modules
+source "${SCRIPT_DIR}/modules/cpu-topology.sh"
 source "${SCRIPT_DIR}/modules/docker.sh"
 source "${SCRIPT_DIR}/modules/go.sh"
 source "${SCRIPT_DIR}/modules/helm.sh"
@@ -115,6 +116,7 @@ source "${SCRIPT_DIR}/modules/harbor.sh"
 source "${SCRIPT_DIR}/modules/certificates.sh"
 source "${SCRIPT_DIR}/modules/agent.sh"
 source "${SCRIPT_DIR}/modules/observability.sh"
+source "${SCRIPT_DIR}/modules/nri.sh"
 
 
 export GOINSECURE='github.com/margo/*'
@@ -299,6 +301,47 @@ create_device_ecdsa_certs() {
 
 
 }
+# ---------------------------------------------------------------------------
+# NRI k3s guard - ensures we are in a k3s environment with the agent running
+# ---------------------------------------------------------------------------
+_require_k3s_agent() {
+  if [[ "${DEVICE_TYPE:-}" != "k3s" ]]; then
+    echo "[ERROR] This operation requires a k3s device. Current device type: '${DEVICE_TYPE:-unset}'"
+    return 1
+  fi
+  if ! kubectl get pod -n kube-system -l app=workload-fleet-management-client \
+       --field-selector=status.phase=Running -o name 2>/dev/null | grep -q .; then
+    echo "[ERROR] No running workload-fleet-management-client pod found in kube-system."
+    echo "        Start the device agent first (option 5)."
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# NRI menu wrappers (k3s-only)
+# ---------------------------------------------------------------------------
+_nri_install_menu() {
+  if ! _require_k3s_agent; then return 1; fi
+  local default_policy="$HOME/sandbox/balloon-policy.yaml"
+  read -rp "Path to balloon values file (leave blank to auto-generate) [${default_policy}]: " balloon_values
+  balloon_values="${balloon_values:-$default_policy}"
+  install_balloon_nri_plugin "$balloon_values"
+}
+
+_nri_update_menu() {
+  if ! _require_k3s_agent; then return 1; fi
+  local default_policy="$HOME/sandbox/balloon-policy.yaml"
+  read -rp "Path to balloon values file [${default_policy}]: " balloon_values
+  balloon_values="${balloon_values:-$default_policy}"
+  update_balloon_nri_plugin "$balloon_values"
+}
+
+_nri_uninstall_menu() {
+  if ! _require_k3s_agent; then return 1; fi
+  uninstall_balloon_nri_plugin
+}
+
 pause() {
   echo
   read -rp "Press Enter to continue..." _
@@ -322,8 +365,12 @@ show_menu() {
   echo "10) cleanup-residual"
   echo "11) create_device_rsa_certs"
   echo "12) create_device_ecdsa_certs"
-  echo "13) Exit"
-  read -rp "Enter choice [1-13]: " choice
+  echo "--- k3s-only (requires running device agent) ---"
+  echo "13) NRI-Balloon-Plugin-Install (auto-generates policy if not present)"
+  echo "14) NRI-Balloon-Plugin-Update"
+  echo "15) NRI-Balloon-Plugin-Uninstall"
+  echo "16) Exit"
+  read -rp "Enter choice [1-16]: " choice
   case $choice in
     1) install_prerequisites;;
     2) uninstall_prerequisites;;
@@ -337,7 +384,10 @@ show_menu() {
     10) cleanup_residual;;
     11) create_device_rsa_certs ;;
     12) create_device_ecdsa_certs ;;
-    13) echo "👋 Goodbye!"; exit 0 ;;
+    13) _nri_install_menu ;;
+    14) _nri_update_menu ;;
+    15) _nri_uninstall_menu ;;
+    16) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "Invalid choice" ;;
   esac
 
@@ -385,9 +435,21 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
     cleanup) cleanup_residual ;;
     create-rsa-certs) create_device_rsa_certs ;;
     create-ecdsa-certs) create_device_ecdsa_certs ;;
+    nri-install)
+      if ! _require_k3s_agent; then exit 1; fi
+      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
+      ;;
+    nri-update)
+      if ! _require_k3s_agent; then exit 1; fi
+      update_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
+      ;;
+    nri-uninstall)
+      if ! _require_k3s_agent; then exit 1; fi
+      uninstall_balloon_nri_plugin
+      ;;
     *)
       echo "[ERROR] Unknown command: $2"
-      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install, nri-update, nri-uninstall"
       exit 1
       ;;
   esac

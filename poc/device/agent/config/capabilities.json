@@ -12,10 +12,12 @@
                 {
                     "architecture": "amd64",
                     "cores": 2,
+                    "class": "performance",
                     "type": "isolated"
                 },
                 {
-                    "cores": 24,
+                    "architecture": "amd64",
+                    "cores": 118,
                     "class": "performance",
                     "type": "shared"
                 }
