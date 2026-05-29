@@ -78,10 +78,11 @@ rules:
   resources: ["*"]
   verbs: ["*"]
 
-# NRI plugni related
+# app permissions
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["create", "get", "list", "update", "patch", "delete"]
+# NRI plugin permissions
 - apiGroups: ["config.nri"]
   resources: ["topologyawarepolicies"]
   verbs: ["*"]
