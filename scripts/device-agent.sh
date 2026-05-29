@@ -91,7 +91,7 @@ DOCKER_VERSION="${DOCKER_VERSION:-29.1.2}"
 DOCKER_COMPOSE_VERSION="${DOCKER_COMPOSE_VERSION:-5.0.0}"
 
 # Stable version as of December 2024
-K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.36.1+k3s1}"
 
 # ----------------------------
 # GHCR Image References
@@ -100,7 +100,7 @@ GHCR_REGISTRY="ghcr.io"
 GHCR_ORG="margo"
 workload_Fleet_Management_Client_IMAGE="margo.org/workload-fleet-management-client"
 workload_Fleet_Management_Client_IMAGE_TAG="latest"
-workload_Fleet_Management_Client_IMAGE_REF="${GHCR_REGISTRY}/${GHCR_ORG}/${workload_Fleet_Management_Client_IMAGE}:${workload_Fleet_Management_Client_IMAGE_TAG}"
+workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_IMAGE}:${workload_Fleet_Management_Client_IMAGE_TAG}"
 
 # Load shared library
 source "${SCRIPT_DIR}/lib/common.sh"
@@ -171,16 +171,16 @@ install_basic_utilities() {
 # ----------------------------
 install_prerequisites() {
   echo "Installing prerequisites: k3s and others ..."
-  validate_pre_required_vars
-  install_go
-  install_basic_utilities
-  install_docker_and_compose
-  clone_dev_repo
+  # validate_pre_required_vars
+  # install_go
+  # install_basic_utilities
+  # install_docker_and_compose
+  # clone_dev_repo
   # Only install k3s for k3s device type
-  if [ "$DEVICE_TYPE" = "k3s" ]; then
-    setup_k3s
-    configure_harbor_trust_for_k3s
-  fi
+  # if [ "$DEVICE_TYPE" = "k3s" ]; then
+    # setup_k3s
+    # configure_harbor_trust_for_k3s
+  # fi
 
   echo 'prerequisites installation completed.'
 }
