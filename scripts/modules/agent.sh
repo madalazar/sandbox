@@ -229,23 +229,32 @@ build_start_device_agent_k3s_service() {
     else
       # Original GHCR logic
 
-    echo "Importing image into k3s..."
+      echo "Importing image into k3s..."
 
-    if command -v crictl >/dev/null 2>&1; then
+      if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${workload_Fleet_Management_Client_IMAGE_REF}$"; then
+        echo "✅ Image found locally in Docker: ${workload_Fleet_Management_Client_IMAGE_REF}"
+        echo "Importing local image into k3s containerd..."
+        if docker save "${workload_Fleet_Management_Client_IMAGE_REF}" | sudo k3s ctr images import -; then
+          echo "✅ Image imported into k3s cluster from local Docker"
+        else
+          echo "❌ Failed to import local Docker image into k3s"
+          return 1
+        fi
+      elif command -v crictl >/dev/null 2>&1; then
         echo "Using crictl to pull image directly into k3s..."
         sudo crictl pull "${workload_Fleet_Management_Client_IMAGE_REF}"
 
         if [ $? -eq 0 ]; then
-            echo "✅ Image imported into k3s cluster via crictl"
+          echo "✅ Image imported into k3s cluster via crictl"
         else
-            echo "❌ Failed to import image via crictl"
-            return 1
+          echo "❌ Failed to import image via crictl"
+          return 1
         fi
-    else
-        echo "⚠️  crictl not found, skipping import step"
-        echo "ℹ️  K3s will pull image directly from GHCR during Helm deployment"
+      else
+        echo "⚠️  Local Docker image not found and crictl not available"
+        echo "ℹ️  K3s will pull image directly from registry during Helm deployment"
+      fi
     fi
-  fi
     cd helmchart
     if [ $? -ne 0 ]; then
       echo "❌ Failed to navigate to helmchart directory"
