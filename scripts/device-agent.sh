@@ -302,17 +302,16 @@ create_device_ecdsa_certs() {
 }
 
 # ---------------------------------------------------------------------------
-# NRI k3s guard - ensures we are in a k3s environment with the agent running
+# NRI k3s guard - ensures we are in a k3s environment with cluster access
 # ---------------------------------------------------------------------------
-_require_k3s_agent() {
+_require_k3s_cluster() {
   if [[ "${DEVICE_TYPE:-}" != "k3s" ]]; then
     echo "[ERROR] This operation requires a k3s device. Current device type: '${DEVICE_TYPE:-unset}'"
     return 1
   fi
-  if ! kubectl get pod -l app=workload-fleet-management-client-pod \
-       --field-selector=status.phase=Running -o name 2>/dev/null | grep -q .; then
-    echo "[ERROR] No running workload-fleet-management-client pod found in kube-system."
-    echo "        Start the device agent first (option 5)."
+  if ! kubectl get nodes -o name >/dev/null 2>&1; then
+    echo "[ERROR] Kubernetes cluster is not reachable."
+    echo "        Ensure k3s is running and kubectl is configured."
     return 1
   fi
   return 0
@@ -322,7 +321,7 @@ _require_k3s_agent() {
 # NRI menu wrappers (k3s-only)
 # ---------------------------------------------------------------------------
 _nri_install_menu() {
-  if ! _require_k3s_agent; then return 1; fi
+  if ! _require_k3s_cluster; then return 1; fi
   local default_policy="$HOME/sandbox/balloon-policy.yaml"
   read -rp "Path to balloon values file (leave blank to auto-generate) [${default_policy}]: " balloon_values
   balloon_values="${balloon_values:-$default_policy}"
@@ -330,16 +329,45 @@ _nri_install_menu() {
 }
 
 _nri_update_menu() {
-  if ! _require_k3s_agent; then return 1; fi
+  if ! _require_k3s_cluster; then return 1; fi
   local default_policy="$HOME/sandbox/balloon-policy.yaml"
   read -rp "Path to balloon values file [${default_policy}]: " balloon_values
   balloon_values="${balloon_values:-$default_policy}"
   update_balloon_nri_plugin "$balloon_values"
 }
 
-_nri_uninstall_menu() {
-  if ! _require_k3s_agent; then return 1; fi
+_nri_is_installed() {
+  local release="nri-resource-policy-balloons"
+
+  if command -v helm >/dev/null 2>&1; then
+    if helm status "$release" -n kube-system >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  if command -v kubectl >/dev/null 2>&1; then
+    if kubectl get pods -n kube-system -l "app.kubernetes.io/instance=${release}" --no-headers 2>/dev/null | grep -q .; then
+      return 0
+    fi
+    if kubectl get pods -n kube-system -l "app.kubernetes.io/name=nri-resource-policy-balloons" --no-headers 2>/dev/null | grep -q .; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+_nri_uninstall_if_present() {
+  if ! _nri_is_installed; then
+    echo "[INFO] NRI Balloon plugin not detected (no Helm release or NRI pods found). Nothing to uninstall."
+    return 0
+  fi
+
   uninstall_balloon_nri_plugin
+}
+
+_nri_uninstall_menu() {
+  _nri_uninstall_if_present
 }
 
 pause() {
@@ -365,8 +393,8 @@ show_menu() {
   echo "10) cleanup-residual"
   echo "11) create_device_rsa_certs"
   echo "12) create_device_ecdsa_certs"
-  echo "--- k3s-only (requires running device agent) ---"
-  echo "13) NRI-Balloon-Plugin-Install (auto-generates policy if not present)"
+  echo "--- k3s-only NRI options ---"
+  echo "13) NRI-Balloon-Plugin-Install (cluster reachable, agent pod not required)"
   echo "14) NRI-Balloon-Plugin-Update"
   echo "15) NRI-Balloon-Plugin-Uninstall"
   echo "16) Exit"
@@ -436,16 +464,15 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
     create-rsa-certs) create_device_rsa_certs ;;
     create-ecdsa-certs) create_device_ecdsa_certs ;;
     nri-install)
-      if ! _require_k3s_agent; then exit 1; fi
+      if ! _require_k3s_cluster; then exit 1; fi
       install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
       ;;
     nri-update)
-      if ! _require_k3s_agent; then exit 1; fi
+      if ! _require_k3s_cluster; then exit 1; fi
       update_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
       ;;
     nri-uninstall)
-      if ! _require_k3s_agent; then exit 1; fi
-      uninstall_balloon_nri_plugin
+      _nri_uninstall_if_present
       ;;
     *)
       echo "[ERROR] Unknown command: $2"

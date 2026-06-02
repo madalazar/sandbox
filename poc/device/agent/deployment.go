@@ -25,6 +25,7 @@ type DeploymentManager struct {
 	database      database.DatabaseIfc
 	helmClient    *workloads.HelmClient
 	composeClient *workloads.DockerComposeCliClient
+	policyReader  BalloonPolicyReader
 	log           *zap.SugaredLogger
 	stopChan      chan struct{}
 	//  Mutex to prevent concurrent reconciliation
@@ -35,12 +36,14 @@ func NewDeploymentManager(
 	db database.DatabaseIfc,
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
+	policyReader BalloonPolicyReader,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
 	return &DeploymentManager{
 		database:       db,
 		helmClient:     helmClient,
 		composeClient:  composeClient,
+		policyReader:   policyReader,
 		log:            log,
 		stopChan:       make(chan struct{}),
 		reconcileLocks: sync.Map{},
