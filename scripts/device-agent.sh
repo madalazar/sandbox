@@ -106,7 +106,6 @@ workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_I
 source "${SCRIPT_DIR}/lib/common.sh"
 
 # Load all WFM modules
-source "${SCRIPT_DIR}/modules/cpu-topology.sh"
 source "${SCRIPT_DIR}/modules/docker.sh"
 source "${SCRIPT_DIR}/modules/go.sh"
 source "${SCRIPT_DIR}/modules/helm.sh"
@@ -301,6 +300,7 @@ create_device_ecdsa_certs() {
 
 
 }
+
 # ---------------------------------------------------------------------------
 # NRI k3s guard - ensures we are in a k3s environment with the agent running
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ _require_k3s_agent() {
     echo "[ERROR] This operation requires a k3s device. Current device type: '${DEVICE_TYPE:-unset}'"
     return 1
   fi
-  if ! kubectl get pod -n kube-system -l app=workload-fleet-management-client \
+  if ! kubectl get pod -l app=workload-fleet-management-client-pod \
        --field-selector=status.phase=Running -o name 2>/dev/null | grep -q .; then
     echo "[ERROR] No running workload-fleet-management-client pod found in kube-system."
     echo "        Start the device agent first (option 5)."

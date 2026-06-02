@@ -42,10 +42,56 @@ generate_balloon_policy() {
   read_cpu_topology_cache "$cache_file"
 
   local -a sorted_ids=("${_TOPO_SORTED_IDS[@]}")
+  local reserved_cpu=0
 
-  # ---- build cpuset string -----------------------------------------------
-  local all_cpuset
-  all_cpuset="$(printf '%s\n' "${sorted_ids[@]}" | paste -sd ',' -)"
+  # ---- build cpuset strings ----------------------------------------------
+  _nri_compact_cpuset() {
+    local -a ids=("$@")
+    local n="${#ids[@]}"
+    [[ "$n" -eq 0 ]] && { echo ""; return; }
+
+    local start="${ids[0]}"
+    local prev="${ids[0]}"
+    local out=""
+    local i curr
+
+    for ((i = 1; i < n; i++)); do
+      curr="${ids[i]}"
+      if (( curr == prev + 1 )); then
+        prev="$curr"
+        continue
+      fi
+
+      [[ -n "$out" ]] && out+=","
+      if (( start == prev )); then
+        out+="$start"
+      else
+        out+="${start}-${prev}"
+      fi
+
+      start="$curr"
+      prev="$curr"
+    done
+
+    [[ -n "$out" ]] && out+=","
+    if (( start == prev )); then
+      out+="$start"
+    else
+      out+="${start}-${prev}"
+    fi
+
+    echo "$out"
+  }
+
+  local -a available_ids=("${sorted_ids[@]}")
+
+  if [[ "${#available_ids[@]}" -eq 0 ]]; then
+    echo "[ERROR] No CPUs available for availableResources."
+    return 1
+  fi
+
+  local available_cpuset
+  available_cpuset="$(_nri_compact_cpuset "${available_ids[@]}")"
 
   # ---- NRI-specific helpers ----------------------------------------------
   _nri_cache_path() {
@@ -84,7 +130,7 @@ HEADER
     cat <<PREAMBLE
 nri:
   runtime:
-    patchConfig: true
+    patchConfig: false
   plugin:
     index: 10
 
@@ -93,17 +139,16 @@ config:
   pinMemory: false
 
   availableResources:
-    cpu: "cpuset:${all_cpuset}"
+    cpu: "cpuset:${available_cpuset}"
 
   reservedResources:
-    cpu: "cpuset:0"
+    cpu: "cpuset:${reserved_cpu}"
 
   balloonTypes:
 PREAMBLE
 
-    local cpu_id
     for cpu_id in "${sorted_ids[@]}"; do
-      [[ "$cpu_id" -eq 0 ]] && continue
+      [[ "$cpu_id" -eq "$reserved_cpu" ]] && continue
       local meta="${_TOPO_CORE_META[$cpu_id]}"
       local b_arch="${meta%%|*}" rest="${meta#*|}"
       local b_class="${rest%%|*}" b_type="${rest##*|}"
@@ -128,9 +173,8 @@ BALLOON
   echo "Summary of balloons:"
   printf "  %-8s  %-14s  %-12s  %-10s  %s\n" "CoreID" "Architecture" "Class" "Type" "Balloon name"
   printf "  %-8s  %-14s  %-12s  %-10s  %s\n" "------" "------------" "-----" "----" "------------"
-  local cpu_id
   for cpu_id in "${sorted_ids[@]}"; do
-    [[ "$cpu_id" -eq 0 ]] && continue
+    [[ "$cpu_id" -eq "$reserved_cpu" ]] && continue
     local meta="${_TOPO_CORE_META[$cpu_id]}"
     local b_arch="${meta%%|*}" rest="${meta#*|}"
     local b_class="${rest%%|*}" b_type="${rest##*|}"

@@ -94,6 +94,7 @@ update_capabilities_cpu_from_host() {
       replaced = 0
     }
     {
+      # Handle cpu as an array: "cpu": [
       if (in_cpu == 0 && $0 ~ /"cpu"[[:space:]]*:[[:space:]]*\[/) {
         print "            \"cpu\": ["
         line_count = split(cpu_json, cpu_lines, "\\n")
@@ -106,8 +107,22 @@ update_capabilities_cpu_from_host() {
         next
       }
 
+      # Handle cpu as an object: "cpu": { or "cpu" : {
+      if (in_cpu == 0 && $0 ~ /"cpu"[[:space:]]*:[[:space:]]*\{/) {
+        print "            \"cpu\": ["
+        line_count = split(cpu_json, cpu_lines, "\\n")
+        for (i = 1; i <= line_count; i++) {
+          print cpu_lines[i]
+        }
+        print "            ],"
+        in_cpu = 1
+        replaced = 1
+        next
+      }
+
+      # Skip lines until we find the closing bracket/brace
       if (in_cpu == 1) {
-        if ($0 ~ /^[[:space:]]*][[:space:]]*,?[[:space:]]*$/) {
+        if ($0 ~ /^[[:space:]]*[\}\]][[:space:]]*,?[[:space:]]*$/) {
           in_cpu = 2
         }
         next
