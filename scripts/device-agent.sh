@@ -151,6 +151,36 @@ install_basic_utilities() {
   sudo apt install -y curl git dos2unix build-essential gcc libc6-dev
   echo "Installation complete: curl, git, and build tools installed."
 
+  # Install mikefarah/yq for YAML processing used by NRI policy generation.
+  if command -v yq >/dev/null 2>&1; then
+    echo "yq already installed: $(command -v yq)"
+  else
+    local yq_arch
+    case "$(uname -m)" in
+      x86_64|amd64) yq_arch="amd64" ;;
+      aarch64|arm64) yq_arch="arm64" ;;
+      *)
+        echo "[ERROR] Unsupported architecture for yq install: $(uname -m)"
+        return 1
+        ;;
+    esac
+
+    local yq_version="v4.44.3"
+    local yq_url="https://github.com/mikefarah/yq/releases/download/${yq_version}/yq_linux_${yq_arch}"
+    echo "Installing yq (${yq_version}) from ${yq_url} ..."
+    sudo curl -fsSL "$yq_url" -o /usr/local/bin/yq
+    sudo chmod +x /usr/local/bin/yq
+    echo "Installation complete: yq installed at /usr/local/bin/yq"
+  fi
+
+  # Install jq for JSON processing used by NRI policy generation helpers.
+  if command -v jq >/dev/null 2>&1; then
+    echo "jq already installed: $(command -v jq)"
+  else
+    sudo apt install -y jq
+    echo "Installation complete: jq installed."
+  fi
+
   # Install hwloc (provides lstopo) for CPU topology classification.
   # lstopo -v is used by cpu-topology.sh to infer core class (performance/
   # efficiency/low-power) from CPUID/MIDR CPU kind data.
@@ -335,7 +365,11 @@ _nri_install_menu() {
   local default_policy="$HOME/sandbox/balloon-policy.yaml"
   read -rp "Path to balloon values file (leave blank to auto-generate) [${default_policy}]: " balloon_values
   balloon_values="${balloon_values:-$default_policy}"
-  install_balloon_nri_plugin "$balloon_values"
+  local margo_package_paths=""
+  if [[ ! -f "$balloon_values" ]]; then
+    read -rp "Path(s) to margo app package(s), comma-separated (each contains margo-package/margo.yaml): " margo_package_paths
+  fi
+  install_balloon_nri_plugin "$balloon_values" "$margo_package_paths"
 }
 
 _nri_update_menu() {
@@ -475,7 +509,7 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
     create-ecdsa-certs) create_device_ecdsa_certs ;;
     nri-install)
       if ! _require_k3s_cluster; then exit 1; fi
-      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
+      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}" "${4:-}"
       ;;
     nri-update)
       if ! _require_k3s_cluster; then exit 1; fi
@@ -486,7 +520,7 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
       ;;
     *)
       echo "[ERROR] Unknown command: $2"
-      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install, nri-update, nri-uninstall"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install [values-file] [margo-app-package-paths-csv], nri-update, nri-uninstall"
       exit 1
       ;;
   esac
