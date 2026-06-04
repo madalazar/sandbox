@@ -2,7 +2,7 @@
 # modules/cpu-topology.sh - Shared CPU topology helpers
 #
 # Provides three layers:
-#   1. Pure helpers  — arch mapping, cpuset parsing, freq classification
+#   1. Pure helpers  — arch mapping, cpuset parsing, freq classification, lstopo classification
 #   2. Cache builder — build_cpu_topology_cache: full sysfs inspection → TSV file
 #   3. Cache reader  — read_cpu_topology_cache:  TSV → globals used by consumers
 #
@@ -57,6 +57,66 @@ mark_cpu_set_from_range_list() {
   done
 }
 
+# Return the isolcpus range extracted from /proc/cmdline, if present.
+# Supports forms like:
+#   isolcpus=1,3
+#   isolcpus=domain,managed_irq,1-3
+get_isolcpus_range_from_proc_cmdline() {
+  local cmdline
+  cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+  [[ -z "$cmdline" ]] && return 0
+
+  local token
+  for token in $cmdline; do
+    if [[ "$token" == isolcpus=* ]]; then
+      echo "${token#isolcpus=}"
+      return 0
+    fi
+  done
+}
+
+# Return current cgroup cpuset range for this process.
+# Prefers cpuset.cpus.effective, falls back to cpuset.cpus.
+get_current_cgroup_cpuset_range() {
+  local rel="/"
+  local line
+  while IFS= read -r line; do
+    # cgroup v2 format: 0::/path
+    if [[ "$line" =~ ^0::(.*)$ ]]; then
+      rel="${BASH_REMATCH[1]}"
+      [[ -z "$rel" ]] && rel="/"
+      break
+    fi
+  done < /proc/self/cgroup
+
+  local base="/sys/fs/cgroup"
+  local dir="$base"
+  if [[ "$rel" != "/" ]]; then
+    dir="$base$rel"
+  fi
+
+  local cpuset_range=""
+  local walk_dir="$dir"
+  while true; do
+    if [[ -r "$walk_dir/cpuset.cpus.effective" ]]; then
+      cpuset_range="$(tr -d '[:space:]' <"$walk_dir/cpuset.cpus.effective" 2>/dev/null || true)"
+    fi
+    if [[ -z "$cpuset_range" && -r "$walk_dir/cpuset.cpus" ]]; then
+      cpuset_range="$(tr -d '[:space:]' <"$walk_dir/cpuset.cpus" 2>/dev/null || true)"
+    fi
+
+    [[ -n "$cpuset_range" ]] && break
+    [[ "$walk_dir" == "$base" ]] && break
+
+    walk_dir="$(dirname "$walk_dir")"
+    # Guard against escaping cgroup root due to unexpected paths.
+    [[ "$walk_dir" == "/" ]] && break
+    [[ "$walk_dir" != "$base" && "$walk_dir" != "$base"/* ]] && break
+  done
+
+  echo "$cpuset_range"
+}
+
 # Return the frequency tier for a given freq value given a sorted-descending
 # array of unique frequencies.
 # Usage: classify_cpu_frequency_tier "$freq" sorted_freqs_array_name
@@ -79,6 +139,115 @@ classify_cpu_frequency_tier() {
   fi
 }
 
+# Classify physical CPU cores by querying lstopo -v (hwloc).
+#
+# Reads "CPU kind #N efficiency E cpuset 0x..." blocks from lstopo output and
+# maps each CPU ID to a Margo class string (performance / efficiency / low-power).
+#
+# Classification rules (per CPU kind, sorted by efficiency value):
+#   Intel CoreType="IntelCore"             → performance
+#   Intel CoreType="IntelAtom"  (top Atom) → efficiency
+#   Intel CoreType="IntelAtom"  (low Atom, only when ≥3 kinds) → low-power
+#   Generic: highest efficiency            → performance
+#   Generic: lowest efficiency (≥3 kinds)  → low-power
+#   Generic: lowest efficiency (2 kinds)   → efficiency
+#   Generic: middle efficiency             → efficiency
+#
+# Usage: classify_cores_via_lstopo result_assoc_array_name
+# Returns 0 on success, 1 if lstopo is unavailable or output is unparseable.
+classify_cores_via_lstopo() {
+  local -n _lcr="$1"   # caller's associative array: cpu_id → class
+
+  command -v lstopo >/dev/null 2>&1 || return 1
+
+  local lstopo_out
+  lstopo_out="$(lstopo -v --no-io 2>/dev/null)" || return 1
+
+  # --- Phase 1: collect CPU kind metadata ---------------------------------
+  declare -A _lk_eff=() _lk_cpuset=() _lk_coretype=()
+  local current_kind="" in_kind=0
+
+  while IFS= read -r line; do
+    # Match: "CPU kind #N efficiency E cpuset 0x..."
+    if [[ "$line" =~ ^CPU[[:space:]]kind[[:space:]]#([0-9]+)[[:space:]]efficiency[[:space:]]([0-9]+)[[:space:]]cpuset[[:space:]]([^[:space:]]+) ]]; then
+      current_kind="${BASH_REMATCH[1]}"
+      _lk_eff["$current_kind"]="${BASH_REMATCH[2]}"
+      _lk_cpuset["$current_kind"]="${BASH_REMATCH[3]}"
+      _lk_coretype["$current_kind"]=""
+      in_kind=1
+    # Match: indented "CoreType = "IntelCore"" or "info CoreType = "IntelCore""
+    elif [[ $in_kind -eq 1 && "$line" =~ CoreType[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
+      _lk_coretype["$current_kind"]="${BASH_REMATCH[1]}"
+    # Non-indented line that is not a CPU kind line → exit kind context
+    elif [[ $in_kind -eq 1 && -n "$line" && ! "$line" =~ ^[[:space:]] ]]; then
+      in_kind=0; current_kind=""
+    fi
+  done <<< "$lstopo_out"
+
+  local num_kinds=${#_lk_eff[@]}
+  [[ $num_kinds -eq 0 ]] && return 1
+
+  # --- Phase 2: determine class per kind ----------------------------------
+  local max_eff=0 min_eff=999999 k e
+  for k in "${!_lk_eff[@]}"; do
+    e="${_lk_eff[$k]}"
+    if (( e > max_eff )); then max_eff=$e; fi
+    if (( e < min_eff )); then min_eff=$e; fi
+  done
+
+  declare -A _lk_class=()
+  for k in "${!_lk_eff[@]}"; do
+    e="${_lk_eff[$k]}"
+    local ct="${_lk_coretype[$k]}" class
+    if   [[ "$ct" == "IntelCore" ]]; then
+      class="performance"
+    elif [[ "$ct" == "IntelAtom" ]]; then
+      # LP E-cores only exist when Intel exposes ≥3 kinds; they land at min efficiency
+      if (( num_kinds >= 3 && e == min_eff )); then class="low-power"
+      else class="efficiency"
+      fi
+    elif (( e == max_eff )); then
+      class="performance"
+    elif (( num_kinds >= 3 && e == min_eff )); then
+      class="low-power"
+    else
+      class="efficiency"
+    fi
+    _lk_class["$k"]="$class"
+  done
+
+  # --- Phase 3: expand cpusets → cpu_id → class ---------------------------
+  # Cpuset format: comma-separated hex 32-bit words, most-significant first.
+  # Empty segments between commas represent zero words.
+  local found_any=0
+  for k in "${!_lk_cpuset[@]}"; do
+    local cpuset="${_lk_cpuset[$k]}" cls="${_lk_class[$k]}"
+    local -a raw_words=()
+    IFS=',' read -ra raw_words <<< "$cpuset"
+    local n_words=${#raw_words[@]}
+    local wi=0
+    for (( i = n_words - 1; i >= 0; i-- )); do
+      local word="${raw_words[$i]}"
+      if [[ -n "$word" ]]; then
+        local val=$(( word ))   # bash handles 0x prefix
+        if (( val != 0 )); then
+          local bit
+          for (( bit = 0; bit < 32; bit++ )); do
+            if (( (val >> bit) & 1 )); then
+              local cpu_num=$(( wi * 32 + bit ))
+              _lcr["$cpu_num"]="$cls"
+              found_any=1
+            fi
+          done
+        fi
+      fi
+      wi=$(( wi + 1 ))
+    done
+  done
+
+  if [[ $found_any -eq 1 ]]; then return 0; else return 1; fi
+}
+
 # ---------------------------------------------------------------------------
 # 2. Cache builder
 # ---------------------------------------------------------------------------
@@ -93,12 +262,22 @@ build_cpu_topology_cache() {
   local arch
   arch="$(map_machine_arch_to_capability_arch "$(uname -m)")"
 
-  # ---- isolated CPU set --------------------------------------------------
-  local isolated_range=""
+  # ---- derive isolated CPU set (union of kernel + sysfs sources) --------
+  local isolated_range_sysfs=""
   [[ -r /sys/devices/system/cpu/isolated ]] && \
-    isolated_range="$(tr -d '[:space:]' </sys/devices/system/cpu/isolated 2>/dev/null || true)"
+    isolated_range_sysfs="$(tr -d '[:space:]' </sys/devices/system/cpu/isolated 2>/dev/null || true)"
+  local isolated_range_cmdline=""
+  isolated_range_cmdline="$(get_isolcpus_range_from_proc_cmdline)"
+
   declare -A _btc_isolated=()
-  mark_cpu_set_from_range_list "$isolated_range" _btc_isolated
+  mark_cpu_set_from_range_list "$isolated_range_sysfs" _btc_isolated
+  mark_cpu_set_from_range_list "$isolated_range_cmdline" _btc_isolated
+
+  # ---- derive cgroup-visible CPU set -------------------------------------
+  local cgroup_cpuset_range=""
+  cgroup_cpuset_range="$(get_current_cgroup_cpuset_range)"
+  declare -A _btc_cgroup_allowed=()
+  mark_cpu_set_from_range_list "$cgroup_cpuset_range" _btc_cgroup_allowed
 
   # ---- enumerate physical cores (collapse HT siblings) -------------------
   declare -A _btc_seen=()
@@ -135,10 +314,33 @@ build_cpu_topology_cache() {
   while IFS= read -r id; do sorted_ids+=("$id"); done \
     < <(printf '%s\n' "${physical_ids[@]}" | sort -n)
 
-  # ---- frequency classification ------------------------------------------
-  declare -A _btc_freq_count=() _btc_freq_map=()
+  # Restrict to CPUs visible to the current cgroup when cpuset is populated.
+  local -a filtered_ids=()
   local cpu_id
-  for cpu_id in "${sorted_ids[@]}"; do
+  if [[ ${#_btc_cgroup_allowed[@]} -gt 0 ]]; then
+    for cpu_id in "${sorted_ids[@]}"; do
+      [[ -n "${_btc_cgroup_allowed[$cpu_id]:-}" ]] && filtered_ids+=("$cpu_id")
+    done
+  else
+    filtered_ids=("${sorted_ids[@]}")
+  fi
+
+  # ---- class classification: lstopo (authoritative) or max-freq (fallback) --
+  # lstopo reads CPUID/MIDR registers and emits CPU kinds with efficiency values
+  # and optional CoreType attributes (IntelCore/IntelAtom on hybrid Intel).
+  # Max-freq is used as a fallback when lstopo is unavailable.
+  declare -A _btc_lstopo_class=()
+  local _btc_use_lstopo=0
+  if classify_cores_via_lstopo _btc_lstopo_class; then
+    _btc_use_lstopo=1
+    echo "[INFO] CPU class: lstopo classification used ($(command -v lstopo))"
+  else
+    echo "[INFO] CPU class: lstopo unavailable or single-kind — using max-freq fallback"
+  fi
+
+  # Frequency data — always collected as fallback / cross-check
+  declare -A _btc_freq_count=() _btc_freq_map=()
+  for cpu_id in "${filtered_ids[@]}"; do
     local freq_file="/sys/devices/system/cpu/cpu${cpu_id}/cpufreq/cpuinfo_max_freq"
     local freq="0"
     if [[ -r "$freq_file" ]]; then
@@ -156,17 +358,32 @@ build_cpu_topology_cache() {
   # ---- write TSV ---------------------------------------------------------
   {
     echo "# cpu-topology cache — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ') by $(uname -n)"
+    if [[ -n "$isolated_range_sysfs" ]]; then
+      echo "# isolated source: /sys/devices/system/cpu/isolated=$isolated_range_sysfs"
+    fi
+    if [[ -n "$isolated_range_cmdline" ]]; then
+      echo "# isolated source: /proc/cmdline isolcpus=$isolated_range_cmdline"
+    fi
+    if [[ -n "$cgroup_cpuset_range" ]]; then
+      echo "# cgroup source: cpuset.cpus.effective=$cgroup_cpuset_range"
+    else
+      echo "# cgroup source: cpuset unavailable/empty (using all discovered physical cores)"
+    fi
     printf '# %s\t%s\t%s\t%s\n' "core_id" "arch" "class" "type"
-    for cpu_id in "${sorted_ids[@]}"; do
+    for cpu_id in "${filtered_ids[@]}"; do
       local ctype="shared"
       [[ -n "${_btc_isolated[$cpu_id]:-}" ]] && ctype="isolated"
       local class
-      class="$(classify_cpu_frequency_tier "${_btc_freq_map[$cpu_id]}" _btc_sorted_freqs)"
+      if [[ $_btc_use_lstopo -eq 1 && -n "${_btc_lstopo_class[$cpu_id]:-}" ]]; then
+        class="${_btc_lstopo_class[$cpu_id]}"
+      else
+        class="$(classify_cpu_frequency_tier "${_btc_freq_map[$cpu_id]}" _btc_sorted_freqs)"
+      fi
       printf '%s\t%s\t%s\t%s\n' "$cpu_id" "$arch" "$class" "$ctype"
     done
   } > "$output_file"
 
-  echo "[INFO] CPU topology cached: $output_file (${#sorted_ids[@]} physical cores)"
+  echo "[INFO] CPU topology cached: $output_file (${#filtered_ids[@]} physical cores)"
 }
 
 # ---------------------------------------------------------------------------

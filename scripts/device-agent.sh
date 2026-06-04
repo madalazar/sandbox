@@ -151,6 +151,16 @@ install_basic_utilities() {
   sudo apt install -y curl git dos2unix build-essential gcc libc6-dev
   echo "Installation complete: curl, git, and build tools installed."
 
+  # Install hwloc (provides lstopo) for CPU topology classification.
+  # lstopo -v is used by cpu-topology.sh to infer core class (performance/
+  # efficiency/low-power) from CPUID/MIDR CPU kind data.
+  if command -v lstopo >/dev/null 2>&1; then
+    echo "lstopo already installed: $(command -v lstopo)"
+  else
+    sudo apt install -y hwloc
+    echo "Installation complete: hwloc (lstopo) installed."
+  fi
+
   # Only install Helm for k3s device type
   if [ "$DEVICE_TYPE" = "k3s" ]; then
     INSTALL_HELM_V3_15_1=true
