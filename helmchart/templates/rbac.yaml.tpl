@@ -84,7 +84,7 @@ rules:
   verbs: ["create", "get", "list", "update", "patch", "delete"]
 # NRI plugin permissions
 - apiGroups: ["config.nri"]
-  resources: ["topologyawarepolicies"]
+  resources: ["balloonspolicies"]
   verbs: ["*"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
