@@ -384,15 +384,16 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			}()
 
 			dm.logNriAnnotationPlan(helmComp.Name, releaseName, nriAnnotations)
+			flatAnnotations := dm.flattenNriAnnotations(nriAnnotations)
+			podAnnotationsValues := dm.mergePodAnnotations(values["podAnnotations"], flatAnnotations)
+			values["podAnnotations"] = podAnnotationsValues
 			dm.log.Infow(
-				"Generated temporary Helm values override file for NRI annotations (not applied yet)",
+				"Applied NRI balloon annotations to Helm values",
 				"componentName", helmComp.Name,
 				"releaseName", releaseName,
 				"overrideFile", overrideFile,
+				"podAnnotations", podAnnotationsValues,
 			)
-
-			// Disabled for now: keep generated override only for verification/logging.
-			// values["podAnnotations"] = dm.flattenNriAnnotations(nriAnnotations)
 		} else {
 			dm.log.Infow(
 				"No NRI balloon annotations resolved for component",
@@ -996,14 +997,17 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 		return "", fmt.Errorf("policy contains no balloon types")
 	}
 
-	var requestedClass string
-	if req.Class != nil {
-		requestedClass = strings.TrimSpace(string(*req.Class))
+	requestedName := ""
+	if req.Name != nil {
+		requestedName = strings.TrimSpace(*req.Name)
+	}
+	if requestedName == "" {
+		return "", fmt.Errorf("cpu.name is required for balloon selection")
 	}
 
-	var requestedType string
-	if req.Type != nil {
-		requestedType = strings.TrimSpace(string(*req.Type))
+	expectedBalloonName := ""
+	if requestedName != "" {
+		expectedBalloonName = fmt.Sprintf("balloon_%s", requestedName)
 	}
 
 	requiredCores := int64(1)
@@ -1011,129 +1015,30 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 		requiredCores = int64(math.Ceil(float64(*req.Cores)))
 	}
 
-	totalCandidates := len(policy.BalloonTypes)
-	classMatched := 0
-	typeMatched := 0
-	fixedSizeMatched := 0
-	cpuCountMatched := 0
-	diagnostics := make([]string, 0, 8)
-
 	for _, balloon := range policy.BalloonTypes {
-		candidateClass := strings.TrimSpace(balloon.PreferCoreType)
-		if candidateClass == "" {
-			candidateClass = inferCoreClassFromBalloonName(balloon.Name)
-		}
-		if requestedClass != "" && candidateClass != "" && !strings.EqualFold(candidateClass, requestedClass) {
-			appendBalloonDiagnostic(
-				&diagnostics,
-				fmt.Sprintf("%s rejected: class=%q requested=%q", balloon.Name, candidateClass, requestedClass),
-			)
+		if !strings.EqualFold(strings.TrimSpace(balloon.Name), expectedBalloonName) {
 			continue
 		}
-		classMatched++
-
-		candidateIsolated := balloon.PreferIsolCpus
-		if inferred, ok := inferIsolationFromBalloonName(balloon.Name); ok {
-			// Generated policies encode iso/shrd in the balloon name. Prefer that signal
-			// so matching remains correct even if preferIsolCpus in the CR defaults to false.
-			candidateIsolated = &inferred
-		}
-
-		if requestedType != "" && candidateIsolated != nil {
-			requiresIsolated := strings.EqualFold(requestedType, "isolated")
-			if *candidateIsolated != requiresIsolated {
-				appendBalloonDiagnostic(
-					&diagnostics,
-					fmt.Sprintf("%s rejected: isolated=%t requested=%t", balloon.Name, *candidateIsolated, requiresIsolated),
-				)
-				continue
-			}
-		}
-		typeMatched++
-
-		if balloon.MinCPUs == nil || balloon.MaxCPUs == nil || *balloon.MinCPUs != *balloon.MaxCPUs {
-			appendBalloonDiagnostic(
-				&diagnostics,
-				fmt.Sprintf("%s rejected: minCPUs=%s maxCPUs=%s", balloon.Name, formatOptionalInt64(balloon.MinCPUs), formatOptionalInt64(balloon.MaxCPUs)),
-			)
-			continue
-		}
-		fixedSizeMatched++
 
 		matchingCount := countUniqueCPURefs(balloon.PreferCloseToDevices)
 		if matchingCount < requiredCores {
-			appendBalloonDiagnostic(
-				&diagnostics,
-				fmt.Sprintf("%s rejected: matchingCPURefs=%d required=%d preferCloseToDevices=%v", balloon.Name, matchingCount, requiredCores, balloon.PreferCloseToDevices),
+			return "", fmt.Errorf(
+				"balloon %q matched cpu.name=%q but does not cover required cores=%d (matchingCPURefs=%d)",
+				balloon.Name,
+				requestedName,
+				requiredCores,
+				matchingCount,
 			)
-			continue
 		}
-		cpuCountMatched++
-		if matchingCount >= requiredCores {
-			return balloon.Name, nil
-		}
+
+		return balloon.Name, nil
 	}
 
 	return "", fmt.Errorf(
-		"no balloon covers required cores=%d class=%q type=%q (total=%d classMatched=%d typeMatched=%d fixedSizeMatched=%d cpuCountMatched=%d samples=%v)",
-		requiredCores,
-		requestedClass,
-		requestedType,
-		totalCandidates,
-		classMatched,
-		typeMatched,
-		fixedSizeMatched,
-		cpuCountMatched,
-		diagnostics,
+		"no balloon found matching cpu.name=%q (expected balloon=%q)",
+		requestedName,
+		expectedBalloonName,
 	)
-}
-
-func appendBalloonDiagnostic(dst *[]string, message string) {
-	if len(*dst) >= 8 {
-		return
-	}
-	*dst = append(*dst, message)
-}
-
-func formatOptionalInt64(value *int64) string {
-	if value == nil {
-		return "<nil>"
-	}
-	return strconv.FormatInt(*value, 10)
-}
-
-func inferCoreClassFromBalloonName(name string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(name)), "_")
-	if len(parts) < 3 {
-		return ""
-	}
-
-	switch parts[1] {
-	case "p":
-		return "performance"
-	case "e":
-		return "efficiency"
-	case "l":
-		return "low-power"
-	default:
-		return ""
-	}
-}
-
-func inferIsolationFromBalloonName(name string) (bool, bool) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(name)), "_")
-	if len(parts) < 3 {
-		return false, false
-	}
-
-	switch parts[2] {
-	case "iso":
-		return true, true
-	case "shrd":
-		return false, true
-	default:
-		return false, false
-	}
 }
 
 func countUniqueCPURefs(paths []string) int64 {
@@ -1170,6 +1075,42 @@ func (dm *DeploymentManager) flattenNriAnnotations(annotations NriAnnotations) m
 		}
 	}
 	return out
+}
+
+func (dm *DeploymentManager) mergePodAnnotations(
+	existing interface{},
+	annotations map[string]string,
+) map[string]interface{} {
+	merged := map[string]interface{}{}
+
+	switch typed := existing.(type) {
+	case nil:
+		// No existing pod annotations to merge.
+	case map[string]string:
+		for k, v := range typed {
+			merged[k] = v
+		}
+	case map[string]interface{}:
+		for k, v := range typed {
+			merged[k] = fmt.Sprintf("%v", v)
+		}
+	case map[interface{}]interface{}:
+		for k, v := range typed {
+			key := fmt.Sprintf("%v", k)
+			merged[key] = fmt.Sprintf("%v", v)
+		}
+	default:
+		dm.log.Warnw(
+			"Existing podAnnotations value has unsupported type; replacing with resolved NRI annotations",
+			"type", fmt.Sprintf("%T", existing),
+		)
+	}
+
+	for k, v := range annotations {
+		merged[k] = v
+	}
+
+	return merged
 }
 
 func (dm *DeploymentManager) generateNriValuesOverrideFile(
