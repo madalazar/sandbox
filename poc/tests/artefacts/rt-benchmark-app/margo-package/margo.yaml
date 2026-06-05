@@ -4,32 +4,40 @@ metadata:
   id: rt-benchmark-suite
   name: RT Benchmark Suite
   description: >
-    Real-time benchmarking suite combining the Caterpillar latency benchmark and
-    the stress-ng CPU/memory stressor. Caterpillar measures scheduling latency on
-    an isolated performance core while stress-ng generates background workload on
-    a separate core to simulate real-world contention.
+    Real-time benchmarking suite combining the Caterpillar and cyclictest latency
+    benchmarks with the stress-ng CPU/memory stressor. Caterpillar and cyclictest
+    measure scheduling latency on isolated performance cores while stress-ng
+    generates background workload on a separate core to simulate real-world
+    contention.
   version: 1.0.0
   catalog:
     application:
       icon: ./resources/rt-benchmark-logo.png
-      tagline: Real-time latency benchmarking with stress-ng background load
+      tagline: Real-time latency benchmarking with cyclictest and stress-ng background load
       descriptionFile: ./resources/description.md
       releaseNotes: ./resources/release-notes.md
       licenseFile: ./resources/license.md
-      tags: ["benchmark", "real-time", "stress-testing", "performance", "caterpillar"]
+      tags: ["benchmark", "real-time", "stress-testing", "performance", "caterpillar", "cyclictest"]
     organization:
       - name: Industrial Edge Controls
 
 deploymentProfiles:
   - type: helm.v3
     description: >
-      Deploys Caterpillar (latency benchmark) and stress-ng (background stressor)
-      as two independent Helm releases on the same edge device.
+      Deploys Caterpillar and cyclictest latency benchmarks plus stress-ng as
+      independent Helm releases on the same edge device.
     components:
       - name: caterpillar
         properties:
           repository: oci://harbor.machine:8443/library/caterpillar-benchmark
           revision: 1.0.0
+          wait: false
+          timeout: 4h
+
+      - name: cyclictest
+        properties:
+          repository: oci://harbor.machine:8443/library/cyclictest
+          revision: 0.1.0
           wait: false
           timeout: 4h
 
@@ -44,6 +52,14 @@ deploymentProfiles:
       cpu:
         # Caterpillar needs one isolated performance core for accurate latency measurement
         - name: caterpillar
+          cores: 1
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        # cyclictest also needs one isolated performance core for accurate latency measurement
+        - name: cyclictest
           cores: 1
           class: performance
           type: isolated
@@ -75,6 +91,81 @@ parameters:
       - pointer: image.tag
         components: ["caterpillar"]
 
+  # ── cyclictest image ────────────────────────────────────────────────────────
+  cyclictestImageRepository:
+    value: "harbor.machine:8443/library/cyclictest"
+    targets:
+      - pointer: image.repository
+        components: ["cyclictest"]
+
+  cyclictestImageTag:
+    value: "latest"
+    targets:
+      - pointer: image.tag
+        components: ["cyclictest"]
+
+   # ── stress-ng image ──────────────────────────────────────────────────────────
+  # stressngImageRepository:
+  #   value: "ghcr.io/colinianking/stress-ng"
+  #   targets:
+  #     - pointer: image.repository
+  #       components: ["stressng"]
+
+  # stressngImageTag:
+  #   value: "latest"
+  #   targets:
+  #     - pointer: image.tag
+  #       components: ["stressng"]
+
+  # ── cyclictest benchmark settings ──────────────────────────────────────────
+  # cyclictestCpuset:
+  #   value: "2"
+  #   targets:
+  #     - pointer: cyclictest.cpuset
+  #       components: ["cyclictest"]
+
+  # cyclictestThreads:
+  #   value: 4
+  #   targets:
+  #     - pointer: cyclictest.threads
+  #       components: ["cyclictest"]
+
+  # cyclictestPriority:
+  #   value: 99
+  #   targets:
+  #     - pointer: cyclictest.priority
+  #       components: ["cyclictest"]
+
+  # cyclictestInterval:
+  #   value: 1000
+  #   targets:
+  #     - pointer: cyclictest.interval
+  #       components: ["cyclictest"]
+
+  # cyclictestLoops:
+  #   value: 100000
+  #   targets:
+  #     - pointer: cyclictest.loops
+  #       components: ["cyclictest"]
+
+  # cyclictestHistogramMax:
+  #   value: 400
+  #   targets:
+  #     - pointer: cyclictest.histogramMax
+  #       components: ["cyclictest"]
+
+  # cyclictestCustom:
+  #   value: "-m"
+  #   targets:
+  #     - pointer: cyclictest.custom
+  #       components: ["cyclictest"]
+
+  # cyclictestOutputHostPath:
+  #   value: "/tmp/cyclictest-output"
+  #   targets:
+  #     - pointer: cyclictest.output.hostPath
+  #       components: ["cyclictest"]
+
   # ── Caterpillar benchmark settings ──────────────────────────────────────────
   # caterpillarCpuset:
   #   value: "3"
@@ -93,19 +184,6 @@ parameters:
   #   targets:
   #     - pointer: output.hostPath
   #       components: ["caterpillar"]
-
-  # ── stress-ng image ──────────────────────────────────────────────────────────
-  # stressngImageRepository:
-  #   value: "ghcr.io/colinianking/stress-ng"
-  #   targets:
-  #     - pointer: image.repository
-  #       components: ["stressng"]
-
-  # stressngImageTag:
-  #   value: "latest"
-  #   targets:
-  #     - pointer: image.tag
-  #       components: ["stressng"]
 
   # ── stress-ng stressor settings ──────────────────────────────────────────────
   # stressngCpuset:
@@ -165,6 +243,62 @@ configuration:
         - parameter: caterpillarOutputHostPath
           name: Output Host Path
           description: Host-side directory where benchmark result files are written
+          schema: requiredText
+
+    - name: cyclictest — Container Image
+      settings:
+        - parameter: cyclictestImageRepository
+          name: Image Repository
+          description: OCI registry path for the cyclictest container image
+          schema: requiredText
+
+        - parameter: cyclictestImageTag
+          name: Image Tag
+          description: Container image tag / version
+          schema: requiredText
+
+    - name: cyclictest — Benchmark
+      settings:
+        - parameter: cyclictestCpuset
+          name: CPU Set
+          description: >
+            CPU core(s) to pin cyclictest to via --test_core (e.g. "2", "1-3", "1,3").
+            Leave empty to let the chart auto-select.
+          schema: optionalText
+
+        - parameter: cyclictestThreads
+          name: Thread Count
+          description: Number of cyclictest worker threads
+          schema: positiveInteger
+
+        - parameter: cyclictestPriority
+          name: Priority
+          description: Real-time priority used by cyclictest
+          schema: positiveInteger
+
+        - parameter: cyclictestInterval
+          name: Interval (us)
+          description: Sampling interval in microseconds
+          schema: positiveInteger
+
+        - parameter: cyclictestLoops
+          name: Loops
+          description: Number of cyclictest loops
+          schema: positiveInteger
+
+        - parameter: cyclictestHistogramMax
+          name: Histogram Maximum
+          description: Histogram bucket maximum in microseconds
+          schema: positiveInteger
+
+        - parameter: cyclictestCustom
+          name: Extra Flags
+          description: Additional flags passed directly to cyclictest
+          schema: optionalText
+
+        - parameter: cyclictestOutputHostPath
+          name: Output Host Path
+          description: Host-side directory where cyclictest log files are written
           schema: requiredText
 
     - name: stress-ng — Container Image
