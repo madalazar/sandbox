@@ -105,11 +105,27 @@ _nri_extract_cpu_requirements_from_margo() {
   local margo_yaml="$1"
   local out_tsv="$2"
 
+  if [[ ! -e "$margo_yaml" ]]; then
+    echo "[ERROR] margo.yaml does not exist: $margo_yaml" >&2
+    return 1
+  fi
+
+  if [[ ! -r "$margo_yaml" ]]; then
+    echo "[ERROR] margo.yaml is not readable by user '$(id -un)': $margo_yaml" >&2
+    echo "        Fix permissions (example):" >&2
+    echo "          chmod a+r '$margo_yaml'" >&2
+    echo "          chmod a+x '$(dirname "$margo_yaml")'" >&2
+    return 1
+  fi
+
   if ! command -v yq >/dev/null 2>&1; then
     echo "[ERROR] yq is required but not installed." >&2
     echo "        Install: https://github.com/mikefarah/yq#install" >&2
     return 1
   fi
+
+  local yq_err_file
+  yq_err_file="$(mktemp)"
 
   if ! yq -r '
     .deploymentProfiles[]? |
@@ -117,10 +133,22 @@ _nri_extract_cpu_requirements_from_margo() {
     .requiredResources.cpu[]? |
     [(.name // ""), ((.cores // "") | tostring), (.class // ""), (.type // "")] |
     @tsv
-  ' "$margo_yaml" > "$out_tsv"; then
+  ' - < "$margo_yaml" > "$out_tsv" 2>"$yq_err_file"; then
+    if grep -qi "permission denied" "$yq_err_file"; then
+      echo "[ERROR] Permission denied while reading margo.yaml: $margo_yaml" >&2
+      echo "        Ensure the current user can traverse parent directories and read the file." >&2
+      sed 's/^/        yq: /' "$yq_err_file" >&2
+      rm -f "$yq_err_file"
+      return 1
+    fi
+
     echo "[ERROR] Failed to parse margo.yaml: $margo_yaml" >&2
+    sed 's/^/        yq: /' "$yq_err_file" >&2
+    rm -f "$yq_err_file"
     return 1
   fi
+
+  rm -f "$yq_err_file"
 
   if ! awk -F'\t' '
     NF != 4 { bad = 1; next }
