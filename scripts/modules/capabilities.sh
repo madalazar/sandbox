@@ -72,12 +72,7 @@ update_capabilities_cpu_from_host() {
       cpu_json+=$',\n'
     fi
 
-    cpu_json+="                {\n"
-    cpu_json+="                    \"architecture\": \"${cpu_arch}\",\n"
-    cpu_json+="                    \"cores\": ${cpu_cores},\n"
-    cpu_json+="                    \"class\": \"${cpu_class}\",\n"
-    cpu_json+="                    \"type\": \"${cpu_type}\"\n"
-    cpu_json+="                }"
+    cpu_json+="{\"architecture\":\"${cpu_arch}\",\"cores\":${cpu_cores},\"class\":\"${cpu_class}\",\"type\":\"${cpu_type}\"}"
   done
 
   if [[ -z "$cpu_json" ]]; then
@@ -85,56 +80,39 @@ update_capabilities_cpu_from_host() {
     return 1
   fi
 
+  local cpu_array_json="[$cpu_json]"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required to update capabilities.json"
+    return 1
+  fi
+
   local tmp_file
   tmp_file="$(mktemp)"
 
-  if ! awk -v cpu_json="$cpu_json" '
-    BEGIN {
-      in_cpu = 0
-      replaced = 0
-    }
-    {
-      # Handle cpu as an array: "cpu": [
-      if (in_cpu == 0 && $0 ~ /"cpu"[[:space:]]*:[[:space:]]*\[/) {
-        print "            \"cpu\": ["
-        line_count = split(cpu_json, cpu_lines, "\\n")
-        for (i = 1; i <= line_count; i++) {
-          print cpu_lines[i]
-        }
-        print "            ],"
-        in_cpu = 1
-        replaced = 1
-        next
-      }
+  if ! jq --argjson cpu "$cpu_array_json" '
+    def cpu_item_ok:
+      (type == "object")
+      and (.architecture | type == "string")
+      and (.cores | type == "number")
+      and (.class | type == "string")
+      and (.type | type == "string");
 
-      # Handle cpu as an object: "cpu": { or "cpu" : {
-      if (in_cpu == 0 && $0 ~ /"cpu"[[:space:]]*:[[:space:]]*\{/) {
-        print "            \"cpu\": ["
-        line_count = split(cpu_json, cpu_lines, "\\n")
-        for (i = 1; i <= line_count; i++) {
-          print cpu_lines[i]
-        }
-        print "            ],"
-        in_cpu = 1
-        replaced = 1
-        next
-      }
+    def cpu_shape_similar_at($path):
+      (getpath($path) | type) == "object"
+      and (
+        ((getpath($path + ["cpu"]) | type) == "array" and (getpath($path + ["cpu"]) | all(.[]; cpu_item_ok)))
+        or
+        ((getpath($path + ["cpu"]) | type) == "object" and (getpath($path + ["cpu"]) | cpu_item_ok))
+      );
 
-      # Skip lines until we find the closing bracket/brace
-      if (in_cpu == 1) {
-        if ($0 ~ /^[[:space:]]*[\}\]][[:space:]]*,?[[:space:]]*$/) {
-          in_cpu = 2
-        }
-        next
-      }
-
-      print
-    }
-    END {
-      if (replaced == 0) {
-        exit 2
-      }
-    }
+    if cpu_shape_similar_at(["properties", "resources"]) then
+      setpath(["properties", "resources", "cpu"]; $cpu)
+    elif cpu_shape_similar_at(["resources"]) then
+      setpath(["resources", "cpu"]; $cpu)
+    else
+      error("Refusing CPU update: existing properties.resources.cpu/resources.cpu schema is not similar to expected CPU capability entries")
+    end
   ' "$capabilities_file" > "$tmp_file"; then
     rm -f "$tmp_file"
     echo "ERROR: Failed to update resources.cpu in $capabilities_file"
