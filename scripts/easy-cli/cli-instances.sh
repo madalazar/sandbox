@@ -116,8 +116,8 @@ deploy_instance() {
   read -p "Enter the device ID for deployment: " device_id
   
   if [ -z "$device_id" ]; then
-    echo "❌ Device ID is required"
-    return 1
+    echo "❌ Device ID is required. Will let symphony pick an appropriate device..."
+    # return 1
   fi
   
   # Get app package details and extract metadata.name
