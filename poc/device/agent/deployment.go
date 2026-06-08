@@ -593,6 +593,10 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			deploymentId,
 		)
 
+		if err := dm.database.ClearCpuAssignments(deploymentId); err != nil {
+			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
+		}
+
 		// Update desired state to REMOVED before deleting
 		if record.DesiredState != nil {
 			componentNames := dm.extractComponentNames(record.DesiredState.AppDeploymentManifest)
@@ -701,6 +705,9 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			fmt.Sprintf("Removal completed with errors: %v", removeErr),
 		)
 	} else {
+		if err := dm.database.ClearCpuAssignments(deploymentId); err != nil {
+			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
+		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
 
@@ -1230,3 +1237,4 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 
 	return envVars
 }
+

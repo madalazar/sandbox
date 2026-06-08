@@ -34,9 +34,15 @@ type DeploymentRecord struct {
 	DesiredState        *AppDeploymentState
 	CurrentState        *AppDeploymentState
 	ComponentViseStatus map[string]sbi.ComponentStatus
+	CpuAssignments      map[string][]int // requirement.Name -> CPU indices
 	Phase               string // "deploying", "running", "failed", "removing", "removed"
 	Message             string
 	LastUpdated         time.Time
+}
+
+type CoreKey struct {
+	Class string
+	Type  string
 }
 
 type DeploymentBundleRecord struct {
@@ -54,6 +60,7 @@ const (
 	DeploymentChangeTypeComponentPhaseChanged DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
 	DeploymentChangeTypeDesiredStateAdded     DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
 	DeploymentChangeTypeCurrentStateAdded     DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
+	DeploymentChangeTypeCpuAssignmentsChanged DeploymentRecordChangeType = "CPU-ASSIGNMENTS-CHANGED"
 )
 
 type DeviceSettingsRecord struct {
@@ -86,6 +93,9 @@ type DatabaseIfc interface {
 	SetCurrentState(deploymentId string, state AppDeploymentState)
 	SetPhase(deploymentId, phase, message string)
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
+	SetCpuAssignments(deploymentId string, assignments map[string][]int) error
+	ClearCpuAssignments(deploymentId string) error
+	AllocatedCpus(cpuIndexToCoreKey map[int]CoreKey) map[CoreKey]map[int]string
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -265,7 +275,14 @@ func (db *Database) load() {
 	if err := json.Unmarshal(data, &dump); err != nil {
 		return
 	}
+	if dump.Deployments == nil {
+		dump.Deployments = make(map[string]*DeploymentRecord)
+	}
 	db.deployments = dump.Deployments
+
+	if dump.DeviceSettings == nil {
+		dump.DeviceSettings = &DeviceSettingsRecord{}
+	}
 	db.deviceSettings = dump.DeviceSettings
 }
 
@@ -305,6 +322,7 @@ func (db *Database) SetDesiredState(deploymentId string, state AppDeploymentStat
 			AppID:               deploymentId,
 			DeploymentID:        deploymentId,
 			ComponentViseStatus: make(map[string]sbi.ComponentStatus),
+			CpuAssignments:      make(map[string][]int),
 			Phase:               "pending",
 			LastUpdated:         time.Now(),
 		}
@@ -385,6 +403,79 @@ func (db *Database) SetComponentStatus(
 
 	// Notify subscribers so StatusReporter can re-report with updated component status
 	db.notify(deploymentId, record, DeploymentChangeTypeComponentPhaseChanged)
+}
+
+func (db *Database) SetCpuAssignments(deploymentId string, assignments map[string][]int) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	if record.CpuAssignments == nil {
+		record.CpuAssignments = make(map[string][]int)
+	}
+
+	next := make(map[string][]int, len(assignments))
+	for requirement, cpus := range assignments {
+		copied := make([]int, len(cpus))
+		copy(copied, cpus)
+		next[requirement] = copied
+	}
+	record.CpuAssignments = next
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, DeploymentChangeTypeCpuAssignmentsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
+func (db *Database) ClearCpuAssignments(deploymentId string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	record.CpuAssignments = make(map[string][]int)
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, DeploymentChangeTypeCpuAssignmentsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
+func (db *Database) AllocatedCpus(cpuIndexToCoreKey map[int]CoreKey) map[CoreKey]map[int]string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	allocated := make(map[CoreKey]map[int]string)
+	for deploymentID, deployment := range db.deployments {
+		for requirement, cpuIndices := range deployment.CpuAssignments {
+			owner := deploymentID
+			if strings.TrimSpace(requirement) != "" {
+				owner = fmt.Sprintf("%s/%s", deploymentID, requirement)
+			}
+
+			for _, cpuIndex := range cpuIndices {
+				coreKey, exists := cpuIndexToCoreKey[cpuIndex]
+				if !exists {
+					continue
+				}
+
+				if allocated[coreKey] == nil {
+					allocated[coreKey] = make(map[int]string)
+				}
+				allocated[coreKey][cpuIndex] = owner
+			}
+		}
+	}
+
+	return allocated
 }
 
 func (db *Database) GetDeployment(deploymentId string) (*DeploymentRecord, error) {

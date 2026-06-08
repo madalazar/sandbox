@@ -18,6 +18,7 @@ import (
 
 	"net/http"
 
+	"github.com/margo/sandbox/poc/device/agent/device"
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	wfm "github.com/margo/sandbox/poc/wfm/cli"
@@ -36,6 +37,7 @@ type Agent struct {
 	auth           *DeviceClientSettings
 	config         types.Config
 	database       database.DatabaseIfc
+	capabilityPublisher device.CapacityPublisherIfc
 	balloonPolicy  *balloonPolicyInformer
 	policyReader   BalloonPolicyReader
 	syncer         StateSyncerIfc
@@ -212,6 +214,13 @@ func NewAgent(configPath string) (*Agent, error) {
 
 	// Create components
 	deployer := NewDeploymentManager(db, helmClient, composeClient, balloonPolicy, log)
+	capabilityPublisher := device.NewCapacityPublisher(
+		deviceSettings,
+		deviceSettings.deviceClientId,
+		db,
+		cfg.Capabilities.ReadFromFile,
+		log,
+	)
 	monitor := NewDeploymentMonitor(db, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,
@@ -231,6 +240,7 @@ func NewAgent(configPath string) (*Agent, error) {
 		monitor:        monitor,
 		auth:           deviceSettings,
 		statusReporter: statusReporter,
+		capabilityPublisher: capabilityPublisher,
 		log:            log,
 		config:         *cfg,
 	}, nil
@@ -239,31 +249,9 @@ func NewAgent(configPath string) (*Agent, error) {
 func (a *Agent) Start() error {
 	a.log.Info("Starting Workload Fleet Management Client")
 
-	var deviceId string
-	var err error
-
-	// 1. Onboard device
-	deviceSettings, err := a.database.GetDeviceSettings()
-	if err != nil {
-		return err
-	}
-	deviceId = deviceSettings.DeviceClientId
-
-	// 2. Report capabilities
-	capabilities, err := types.LoadCapabilities(a.config.Capabilities.ReadFromFile)
-	if err != nil {
-		a.log.Errorw(
-			"failed to load the capabilities file, please resolve the issue as the capabilities will not be reported until next restart",
-			"err",
-			err.Error(),
-		)
-	} else {
-		capabilities.Properties.Id = deviceId
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := a.auth.ReportCapabilities(ctx, *capabilities); err != nil {
-			a.log.Errorw("failed to report the capabilities, ", "err", err.Error())
-		}
+	// 1. Start publisher first so it can load capabilities/topology and publish once.
+	if a.capabilityPublisher != nil {
+		a.capabilityPublisher.Start()
 	}
 
 	if a.balloonPolicy != nil {
@@ -275,7 +263,7 @@ func (a *Agent) Start() error {
 		}
 	}
 
-	// 3. Start all components
+	// 2. Start all components
 	a.statusReporter.Start()
 	a.deployer.Start()
 	a.monitor.Start()
@@ -302,6 +290,9 @@ func (a *Agent) Stop() error {
 	a.syncer.Stop()
 	a.deployer.Stop()
 	a.monitor.Stop()
+	if a.capabilityPublisher != nil {
+		a.capabilityPublisher.Stop()
+	}
 	a.statusReporter.Stop()
 	a.database.TriggerDataPersist()
 
