@@ -334,6 +334,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) error {
+	assignments := map[string][]int{}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -372,6 +374,21 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
+
+		componentAssignments, err := dm.resolveComponentIsolatedCpuAssignments(
+			deploymentId,
+			helmComp.Name,
+			appDeployment.Spec.DeploymentProfile.RequiredResources,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to resolve isolated CPU assignments for component %s: %w", helmComp.Name, err)
+		}
+		for requirementName, cpus := range componentAssignments {
+			copied := make([]int, len(cpus))
+			copy(copied, cpus)
+			assignments[requirementName] = copied
+		}
+
 		if hasNriAnnotations {
 			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, nriAnnotations)
 			if err != nil {
@@ -440,7 +457,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			if err != nil {
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
 			}
-			return nil
+			// we had return nil here before, which made it look like
+			// either we don't support multiple components per deployment
+			// or we support one update/deployment component
+			// had to comment it allow for core accumulation of cpu assignmetns
+			continue
 		}
 
 		// New deployment
@@ -476,6 +497,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			releaseName,
 		)
 	}
+
+	if err := dm.database.SetCpuAssignments(deploymentId, assignments); err != nil {
+		return fmt.Errorf("failed to persist cpu assignments for helm deployment: %w", err)
+	}
+
 	return nil
 }
 
@@ -945,6 +971,137 @@ func filterCPURequirementsForComponent(
 	return matching
 }
 
+func filterIsolatedCPURequirements(reqs []sbi.Cpu) []sbi.Cpu {
+	if len(reqs) == 0 {
+		return nil
+	}
+
+	isolationOnly := make([]sbi.Cpu, 0, len(reqs))
+	for _, req := range reqs {
+		if req.Type == nil || *req.Type != sbi.CpuTypeIsolated {
+			continue
+		}
+		isolationOnly = append(isolationOnly, req)
+	}
+
+	return isolationOnly
+}
+
+func (dm *DeploymentManager) resolveComponentIsolatedCpuAssignments(
+	deploymentId string,
+	componentName string,
+	requiredResources *sbi.RequiredResources,
+) (map[string][]int, error) {
+	assignments := map[string][]int{}
+
+	componentCPUReqs := filterCPURequirementsForComponent(requiredResources, componentName)
+	isolationOnly := filterIsolatedCPURequirements(componentCPUReqs)
+	if len(isolationOnly) == 0 {
+		return assignments, nil
+	}
+
+	if dm.policyReader == nil {
+		dm.log.Debugw("Skipping isolated CPU assignment resolution: policy reader not configured",
+			"componentName", componentName)
+		return assignments, nil
+	}
+
+	// we can parse the policy only once (before dm.resolveComponentBalloonAnnotaton ) and just use it
+	// in both dm.resolveComponentBalloonAnnotaton and   dm.resolveComponentIsolatedCpuAssignments
+	policy := dm.policyReader.Parsed()
+	if policy == nil {
+		dm.log.Debugw("Skipping isolated CPU assignment resolution: no BalloonsPolicy snapshot available",
+			"componentName", componentName)
+		return assignments, nil
+	}
+
+	for _, req := range isolationOnly {
+		if req.Name == nil {
+			continue
+		}
+
+		requirementName := strings.TrimSpace(*req.Name)
+		if requirementName == "" {
+			continue
+		}
+
+		_, cpus, err := selectBalloonForGroupWithCPURefs(req, policy)
+		if err != nil {
+			return assignments, fmt.Errorf("isolated CPU assignment resolution failed for requirement %q: %w",
+				requirementName, err)
+		}
+
+		assignments[requirementName] = cpus
+	}
+
+	if err := dm.validateSelectedIsolatedAssignments(deploymentId, isolationOnly, assignments); err != nil {
+		return nil, err
+	}
+
+	return assignments, nil
+}
+
+func (dm *DeploymentManager) validateSelectedIsolatedAssignments(
+	deploymentId string,
+	isolationOnly []sbi.Cpu,
+	assignments map[string][]int,
+) error {
+	// Validate only the selected cores for this component and reject overlaps.
+	cpuIndexToCoreKey := map[int]database.CoreKey{}
+	for _, req := range isolationOnly {
+		if req.Name == nil || req.Class == nil || req.Type == nil {
+			continue
+		}
+		requirementName := strings.TrimSpace(*req.Name)
+		if requirementName == "" {
+			continue
+		}
+		selected, ok := assignments[requirementName]
+		if !ok {
+			continue
+		}
+		coreKey := database.CoreKey{Class: string(*req.Class), Type: string(*req.Type)}
+		for _, idx := range selected {
+			cpuIndexToCoreKey[idx] = coreKey
+		}
+	}
+
+	alreadyAllocated := dm.database.AllocatedCpus(cpuIndexToCoreKey)
+	for _, req := range isolationOnly {
+		if req.Name == nil || req.Class == nil || req.Type == nil {
+			continue
+		}
+
+		requirementName := strings.TrimSpace(*req.Name)
+		if requirementName == "" {
+			continue
+		}
+
+		selected, ok := assignments[requirementName]
+		if !ok {
+			continue
+		}
+
+		coreKey := database.CoreKey{Class: string(*req.Class), Type: string(*req.Type)}
+		takenIndices := alreadyAllocated[coreKey]
+		for _, idx := range selected {
+			owner, taken := takenIndices[idx]
+			if !taken {
+				continue
+			}
+			if owner == deploymentId || strings.HasPrefix(owner, deploymentId+"/") {
+				continue
+			}
+			return fmt.Errorf(
+				"insufficient isolated CPUs: cpu index %d required by %q is already allocated to deployment %q",
+				idx, requirementName, owner,
+			)
+		}
+	}
+
+	return nil
+}
+
 func resolveNriAnnotations(cpuReqs []sbi.Cpu, policy *ParsedBalloonPolicy) (NriAnnotations, error) {
 	out := NriAnnotations{
 		PodLevel:       map[string]string{},
@@ -997,6 +1154,15 @@ func resolveNriAnnotations(cpuReqs []sbi.Cpu, policy *ParsedBalloonPolicy) (NriA
 }
 
 func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, error) {
+	balloonName, _, err := selectBalloonForGroupWithCPURefs(req, policy)
+	if err != nil {
+		return "", err
+	}
+
+	return balloonName, nil
+}
+
+func selectBalloonForGroupWithCPURefs(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, []int, error) {
 	if policy == nil {
 		return "", fmt.Errorf("policy is not available")
 	}
@@ -1027,9 +1193,10 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 			continue
 		}
 
-		matchingCount := countUniqueCPURefs(balloon.PreferCloseToDevices)
+		matchedCPURefs := uniqueSortedCPURefs(balloon.PreferCloseToDevices)
+		matchingCount := int64(len(matchedCPURefs))
 		if matchingCount < requiredCores {
-			return "", fmt.Errorf(
+			return "", nil, fmt.Errorf(
 				"balloon %q matched cpu.name=%q but does not cover required cores=%d (matchingCPURefs=%d)",
 				balloon.Name,
 				requestedName,
@@ -1038,10 +1205,11 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 			)
 		}
 
-		return balloon.Name, nil
+		selected := append([]int(nil), matchedCPURefs[:requiredCores]...)
+		return balloon.Name, selected, nil
 	}
 
-	return "", fmt.Errorf(
+	return "", nil, fmt.Errorf(
 		"no balloon found matching cpu.name=%q (expected balloon=%q)",
 		requestedName,
 		expectedBalloonName,
@@ -1049,18 +1217,22 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 }
 
 func countUniqueCPURefs(paths []string) int64 {
+	return int64(len(uniqueSortedCPURefs(paths)))
+}
+
+func uniqueSortedCPURefs(paths []string) []int {
 	if len(paths) == 0 {
-		return 0
+		return nil
 	}
 
-	seen := map[int64]struct{}{}
+	seen := map[int]struct{}{}
 	for _, path := range paths {
 		matches := cpuIndexRegex.FindAllStringSubmatch(path, -1)
 		for _, m := range matches {
 			if len(m) != 2 {
 				continue
 			}
-			idx, err := strconv.ParseInt(m[1], 10, 64)
+			idx, err := strconv.Atoi(m[1])
 			if err != nil {
 				continue
 			}
@@ -1068,7 +1240,13 @@ func countUniqueCPURefs(paths []string) int64 {
 		}
 	}
 
-	return int64(len(seen))
+	refs := make([]int, 0, len(seen))
+	for idx := range seen {
+		refs = append(refs, idx)
+	}
+	sort.Ints(refs)
+
+	return refs
 }
 
 func (dm *DeploymentManager) flattenNriAnnotations(annotations NriAnnotations) map[string]string {

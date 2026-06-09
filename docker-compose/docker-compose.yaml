@@ -18,6 +18,7 @@ services:
       - /home/robot/rt-benchmark-compose-app:/rt-benchmark-compose-app:ro
       - ./config/config.yaml:/config/config.yaml
       - ./config/capabilities.json:/config/capabilities.json
+      - ./config/cpu-topology-agent.json:/config/cpu-topology-agent.json
       - ./config/device-private.key:/config/device-private.key
       - ./config/device-public.crt:/config/device-public.crt
       - ./config/device-ecdsa.key:/config/device-ecdsa.key

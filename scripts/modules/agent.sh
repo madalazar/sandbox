@@ -3,6 +3,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/capabilities.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/cpu-topology-agent-artifact.sh"
 
 # ----------------------------
 # GHCR Image References
@@ -162,8 +163,10 @@ start_device_agent_docker_service() {
   fi
 
   update_capabilities_cpu_from_host || return 1
+  generate_cpu_topology_agent_artifact || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
+  cp ../poc/device/agent/config/cpu-topology-agent.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
 
   mkdir -p data
@@ -265,6 +268,7 @@ build_start_device_agent_k3s_service() {
     update_agent_sbi_url
 
     update_capabilities_cpu_from_host || return 1
+    generate_cpu_topology_agent_artifact || return 1
 
     echo "Copying configuration files..."
     mkdir -p config

@@ -97,7 +97,7 @@ func (cp *CapacityPublisher) loadCapabilitiesAndTopology() {
 	cpuIndexToCoreKey := make(map[int]database.CoreKey)
 	topologyArtifactPath := strings.TrimSpace(os.Getenv("MARGO_CPU_TOPOLOGY_ARTIFACT"))
 	if topologyArtifactPath == "" {
-		topologyArtifactPath = filepath.Clean(os.ExpandEnv("${HOME}/sandbox/cpu-topology-agent.json"))
+		topologyArtifactPath = filepath.Clean("./config/cpu-topology-agent.json")
 	}
 	coreInfo, topologyErr := readCoreInfoFromAgentArtifact(topologyArtifactPath)
 	if topologyErr != nil {
