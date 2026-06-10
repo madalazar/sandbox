@@ -16,6 +16,7 @@ import (
 
 	"github.com/kr/pretty"
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/device"
 	"github.com/margo/sandbox/shared-lib/workloads"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
@@ -36,12 +37,13 @@ type DeploymentManagerIfc interface {
 }
 
 type DeploymentManager struct {
-	database      database.DatabaseIfc
-	helmClient    *workloads.HelmClient
-	composeClient *workloads.DockerComposeCliClient
-	policyReader  BalloonPolicyReader
-	log           *zap.SugaredLogger
-	stopChan      chan struct{}
+	database       database.DatabaseIfc
+	helmClient     *workloads.HelmClient
+	composeClient  *workloads.DockerComposeCliClient
+	policyReader   BalloonPolicyReader
+	topologyLookup device.TopologyLookup
+	log            *zap.SugaredLogger
+	stopChan       chan struct{}
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
 }
@@ -51,6 +53,7 @@ func NewDeploymentManager(
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
 	policyReader BalloonPolicyReader,
+	topologyLookup device.TopologyLookup,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
 	return &DeploymentManager{
@@ -58,6 +61,7 @@ func NewDeploymentManager(
 		helmClient:     helmClient,
 		composeClient:  composeClient,
 		policyReader:   policyReader,
+		topologyLookup: topologyLookup,
 		log:            log,
 		stopChan:       make(chan struct{}),
 		reconcileLocks: sync.Map{},
@@ -510,6 +514,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) error {
+	composeAssignments := map[string][]int{}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -553,6 +559,60 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
+		dm.log.Debugw("cpu indices", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+
+		if len(dm.topologyLookup.CPUIndices) > 0 {
+			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+			assignments, err := dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
+				appDeployment.Spec.DeploymentProfile.RequiredResources,
+			)
+
+			dm.log.Debugw("assignments for current component", "assignments", assignments)
+
+			if err != nil {
+				return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
+			}
+
+			if len(assignments) > 0 {
+				pinnedFile, err := os.CreateTemp(
+					"",
+					fmt.Sprintf(
+						"compose-pinned-%s-%s-*.yaml",
+						sanitizeFileToken(composeComp.Name),
+						sanitizeFileToken(deploymentId),
+					),
+				)
+				if err != nil {
+					return fmt.Errorf("failed to create temporary pinned compose file for component %s: %w", composeComp.Name, err)
+				}
+				pinnedPath := filepath.Clean(pinnedFile.Name())
+				if closeErr := pinnedFile.Close(); closeErr != nil {
+					return fmt.Errorf("failed to close temporary pinned compose file for component %s: %w", composeComp.Name, closeErr)
+				}
+				defer func(path string) {
+					if removeErr := os.Remove(path); removeErr != nil {
+						dm.log.Warnw("Failed to remove temporary pinned compose file", "path", path, "err", removeErr)
+					}
+				}(pinnedPath)
+				if err := rewriteComposeFile(composeFilename, pinnedPath, assignments); err != nil {
+					return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
+				}
+
+				for requirement, cpus := range toAssignmentMap(assignments) {
+					copied := make([]int, len(cpus))
+					copy(copied, cpus)
+					composeAssignments[requirement] = copied
+				}
+
+				// Persist before compose up/update so failed deploy attempts remain deterministic.
+				dm.log.Debugw("persist before update")
+				if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
+					return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
+				}
+
+				composeFilename = pinnedPath
+			}
+		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
@@ -602,6 +662,15 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			projectName,
 		)
 	}
+
+	if len(dm.topologyLookup.CPUIndices) > 0 {
+		dm.log.Infow("**about to set cpu assignement", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+		if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
+			return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
+		}
+	}
+
+	dm.log.Infow("composed finished")
 	return nil
 }
 
@@ -1164,10 +1233,10 @@ func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, er
 
 func selectBalloonForGroupWithCPURefs(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, []int, error) {
 	if policy == nil {
-		return "", fmt.Errorf("policy is not available")
+		return "", nil, fmt.Errorf("policy is not available")
 	}
 	if len(policy.BalloonTypes) == 0 {
-		return "", fmt.Errorf("policy contains no balloon types")
+		return "", nil, fmt.Errorf("policy contains no balloon types")
 	}
 
 	requestedName := ""
@@ -1175,7 +1244,7 @@ func selectBalloonForGroupWithCPURefs(req sbi.Cpu, policy *ParsedBalloonPolicy) 
 		requestedName = strings.TrimSpace(*req.Name)
 	}
 	if requestedName == "" {
-		return "", fmt.Errorf("cpu.name is required for balloon selection")
+		return "", nil, fmt.Errorf("cpu.name is required for balloon selection")
 	}
 
 	expectedBalloonName := ""
@@ -1390,6 +1459,22 @@ func sortedAnnotationPairs(m map[string]string) []string {
 	return pairs
 }
 
+func summarizeTopologyCPUIndices(cpuIndices map[database.CoreKey][]int) []string {
+	if len(cpuIndices) == 0 {
+		return nil
+	}
+
+	summary := make([]string, 0, len(cpuIndices))
+	for key, cpus := range cpuIndices {
+		sorted := append([]int(nil), cpus...)
+		sort.Ints(sorted)
+		summary = append(summary, fmt.Sprintf("%s/%s=%v", key.Class, key.Type, sorted))
+	}
+	sort.Strings(summary)
+
+	return summary
+}
+
 // Helper function to convert parameters to environment variables
 func (dm *DeploymentManager) convertParametersToEnvVars(
 	params map[string]interface{},
@@ -1415,4 +1500,3 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 
 	return envVars
 }
-

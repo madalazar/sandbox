@@ -12,7 +12,7 @@ GHCR_REGISTRY="ghcr.io"
 GHCR_ORG="margo"
 workload_Fleet_Management_Client_IMAGE="margo.org/workload-fleet-management-client"
 workload_Fleet_Management_Client_IMAGE_TAG="latest"
-workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_IMAGE_REF:-${GHCR_REGISTRY}/${GHCR_ORG}/${workload_Fleet_Management_Client_IMAGE}:${workload_Fleet_Management_Client_IMAGE_TAG}}"
+workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_IMAGE_REF:-${workload_Fleet_Management_Client_IMAGE}:${workload_Fleet_Management_Client_IMAGE_TAG}}"
 
 # ----------------------------
 # Configuration Functions
@@ -94,15 +94,15 @@ build_device_agent_docker() {
   echo 'Checking if workload-fleet-management-client image already exists in GHCR...'
   echo "Checking GHCR image: ${workload_Fleet_Management_Client_IMAGE_REF}"
 
-  if docker manifest inspect "${workload_Fleet_Management_Client_IMAGE_REF}" >/dev/null 2>&1; then
-    echo "Image exists in GHCR"
-  else
-    echo "Image does NOT exist in GHCR"
-    return 1
-  fi
+  # if docker manifest inspect "${workload_Fleet_Management_Client_IMAGE_REF}" >/dev/null 2>&1; then
+  #   echo "Image exists in GHCR"
+  # else
+  #   echo "Image does NOT exist in GHCR"
+  #   return 1
+  # fi
 
-  echo "⬇️ Pulling image from GHCR..."
-  docker pull "${workload_Fleet_Management_Client_IMAGE_REF}" || return 1
+  # echo "⬇️ Pulling image from GHCR..."
+  # docker pull "${workload_Fleet_Management_Client_IMAGE_REF}" || return 1
   echo "✅ Image ready locally: ${workload_Fleet_Management_Client_IMAGE_REF}"
 }
 

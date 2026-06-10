@@ -212,15 +212,36 @@ func NewAgent(configPath string) (*Agent, error) {
 		// (len(deviceSettings.oAuthClientSecret) != 0) && (len(deviceSettings.oauthTokenUrl) != 0),
 	)
 
+	//TODO: I'm starting to think that we need an abstract topology source (balloon policy for helm or topology artifact for compose)
+
+	topologyArtifactPath := device.ResolveTopologyArtifactPath()
+	topologyLookup, topologyErr := device.LoadCPUIndicesFromTopologyArtifact(topologyArtifactPath)
+	if topologyErr != nil {
+		log.Warnw("failed to load CPU topology artifact; topology is required for CPU assignment and capacity reporting",
+			"path", topologyArtifactPath, "err", topologyErr)
+		return nil, fmt.Errorf("load topology artifact %s: %w", topologyArtifactPath, topologyErr)
+	}
+	log.Infow("Loaded CPU topology artifact", "path", topologyArtifactPath, "coreCount", len(topologyLookup.CPUIndexToCoreKey))
+
+	deviceCapabilities, capabilitiesErr := types.LoadCapabilities(cfg.Capabilities.ReadFromFile)
+	if capabilitiesErr != nil {
+		log.Errorw("failed to load capabilities file; capacity publish is disabled until restart",
+			"path", cfg.Capabilities.ReadFromFile, "err", capabilitiesErr)
+	}
+	
 	// Create components
-	deployer := NewDeploymentManager(db, helmClient, composeClient, balloonPolicy, log)
-	capabilityPublisher := device.NewCapacityPublisher(
+	deployer := NewDeploymentManager(db, helmClient, composeClient, balloonPolicy, topologyLookup, log)
+	capabilityPublisher, err := device.NewCapacityPublisher(
 		deviceSettings,
 		deviceSettings.deviceClientId,
 		db,
-		cfg.Capabilities.ReadFromFile,
+		deviceCapabilities,
+		topologyLookup.CPUIndexToCoreKey,
 		log,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize capacity publisher: %w", err)
+	}
 	monitor := NewDeploymentMonitor(db, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,

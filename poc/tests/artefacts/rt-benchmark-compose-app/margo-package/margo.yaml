@@ -86,7 +86,7 @@ parameters:
         components: ["cyclictest"]
 
   cyclictestInterval:
-    value: 300
+    value: 900
     targets:
       - pointer: CYCLICTEST_INTERVAL
         components: ["cyclictest"]
@@ -144,7 +144,7 @@ configuration:
         - parameter: cyclictestCpuset
           name: Cyclictest CPU Set
           description: CPU core set for cyclictest container (for example 1 or 1-2)
-          schema: requiredText
+          schema: optionalText
         - parameter: cyclictestOutputHostPath
           name: Cyclictest Output Host Path
           description: Host path bind mounted to collect cyclictest logs
@@ -183,7 +183,7 @@ configuration:
         - parameter: stressCpuset
           name: Stress CPU Set
           description: CPU core set for stress container (for example 2 or 2-3)
-          schema: requiredText
+          schema: optionalText
         - parameter: stressCpuWorkers
           name: Stress CPU Workers
           description: Number of CPU workers for stress
