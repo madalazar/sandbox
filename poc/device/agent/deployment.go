@@ -356,7 +356,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		// Generate release name
 		releaseName := fmt.Sprintf("%s-%s", helmComp.Name, deploymentId[:8])
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,

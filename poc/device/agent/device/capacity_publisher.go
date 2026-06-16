@@ -23,13 +23,13 @@ type CapabilitiesReporter interface {
 }
 
 type CapacityPublisher struct {
-	auth              CapabilitiesReporter
-	deviceID          string
-	database          database.DatabaseIfc
+	auth               CapabilitiesReporter
+	deviceID           string
+	database           database.DatabaseIfc
 	deviceCapabilities *sbi.DeviceCapabilitiesManifest
-	cpuIndexToCoreKey map[int]database.CoreKey
-	log               *zap.SugaredLogger
-	stopChan          chan struct{}
+	cpuIndexToCoreKey  map[int]database.CoreKey
+	log                *zap.SugaredLogger
+	stopChan           chan struct{}
 }
 
 func NewCapacityPublisher(
@@ -48,13 +48,13 @@ func NewCapacityPublisher(
 	}
 
 	return &CapacityPublisher{
-		auth:              auth,
-		deviceID:          strings.TrimSpace(deviceID),
-		database:          db,
+		auth:               auth,
+		deviceID:           strings.TrimSpace(deviceID),
+		database:           db,
 		deviceCapabilities: deviceCapabilities,
-		cpuIndexToCoreKey: cpuIndexToCoreKey,
-		log:               log,
-		stopChan:          make(chan struct{}),
+		cpuIndexToCoreKey:  cpuIndexToCoreKey,
+		log:                log,
+		stopChan:           make(chan struct{}),
 	}, nil
 }
 
@@ -92,24 +92,24 @@ func (cp *CapacityPublisher) PublishNow(ctx context.Context) error {
 		return fmt.Errorf("clone device capabilities: %w", err)
 	}
 
-	allocated := cp.database.AllocatedCpus(cp.cpuIndexToCoreKey)
-	for idx := range manifest.Properties.Resources.Cpu {
-		cpu := &manifest.Properties.Resources.Cpu[idx]
-		if cpu.Type == nil || cpu.Class == nil {
-			continue
-		}
-		if string(*cpu.Type) != string(sbi.CpuTypeIsolated) {
-			continue
-		}
+	// allocated := cp.database.AllocatedCpus(cp.cpuIndexToCoreKey)
+	// for idx := range manifest.Properties.Resources.Cpu {
+	// 	cpu := &manifest.Properties.Resources.Cpu[idx]
+	// 	if cpu.Type == nil || cpu.Class == nil {
+	// 		continue
+	// 	}
+	// 	if string(*cpu.Type) != string(sbi.CpuTypeIsolated) {
+	// 		continue
+	// 	}
 
-		key := database.CoreKey{Class: string(*cpu.Class), Type: string(*cpu.Type)}
-		used := float32(len(allocated[key]))
-		remaining := cpu.Cores - used
-		if remaining < 0 {
-			remaining = 0
-		}
-		cpu.Cores = remaining
-	}
+	// 	key := database.CoreKey{Class: string(*cpu.Class), Type: string(*cpu.Type)}
+	// 	used := float32(len(allocated[key]))
+	// 	remaining := cpu.Cores - used
+	// 	if remaining < 0 {
+	// 		remaining = 0
+	// 	}
+	// 	cpu.Cores = remaining
+	// }
 
 	manifest.Properties.Id = cp.deviceID
 	if err := cp.auth.ReportCapabilities(ctx, *manifest); err != nil {
@@ -134,11 +134,13 @@ func (cp *CapacityPublisher) onDeploymentChange(
 	default:
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := cp.PublishNow(ctx); err != nil {
-		cp.log.Warnw("failed to republish capabilities after CPU assignment update", "deploymentId", deploymentId, "err", err)
-	}
+	// TODO: don't update capabilities, we're to use the deployments
+	cp.log.Infow("CPU assignment change detected, republishing capabilities...", "deploymentId", deploymentId)
+	// if err := cp.PublishNow(ctx); err != nil {
+	// 	cp.log.Warnw("failed to republish capabilities after CPU assignment update", "deploymentId", deploymentId, "err", err)
+	// }
 }
 
 func cloneCapabilities(base *sbi.DeviceCapabilitiesManifest) (*sbi.DeviceCapabilitiesManifest, error) {
