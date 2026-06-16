@@ -10,7 +10,7 @@
         "resources": {
             "memory": 64,
             "storage": 2000,
-            "cpus": [
+            "cpu": [
                 {
                     "architecture": "amd64",
                     "cores": 2,
