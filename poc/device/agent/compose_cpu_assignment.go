@@ -226,6 +226,10 @@ func RewriteComposeYAML(in io.Reader, out io.Writer, assignments []CpuAssignment
 		if err := setServiceCPuset(serviceNode, cpuset); err != nil {
 			return fmt.Errorf("set cpuset for service %q: %w", serviceName, err)
 		}
+
+		if err := setServiceEnvironmentVariable(serviceNode, "TEST_CPUSET", cpuset); err != nil {
+			return fmt.Errorf("set TEST_CPUSET environment variable for service %q: %w", serviceName, err)
+		}
 	}
 
 	encoder := yamlv3.NewEncoder(out)
@@ -292,6 +296,55 @@ func setServiceCPuset(serviceNode *yamlv3.Node, cpuset string) error {
 	serviceNode.Content = append(serviceNode.Content,
 		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: "cpuset"},
 		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: cpuset},
+	)
+	return nil
+}
+
+func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, varValue string) error {
+	if serviceNode.Kind != yamlv3.MappingNode {
+		return fmt.Errorf("service definition must be a mapping")
+	}
+
+	// Find or create the environment section
+	var envNode *yamlv3.Node
+	for i := 0; i+1 < len(serviceNode.Content); i += 2 {
+		if serviceNode.Content[i].Value == "environment" {
+			envNode = serviceNode.Content[i+1]
+			break
+		}
+	}
+
+	// If environment doesn't exist, create it
+	if envNode == nil {
+		envNode = &yamlv3.Node{
+			Kind:    yamlv3.MappingNode,
+			Tag:     "!!map",
+			Content: []*yamlv3.Node{},
+		}
+		serviceNode.Content = append(serviceNode.Content,
+			&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: "environment"},
+			envNode,
+		)
+	}
+
+	if envNode.Kind != yamlv3.MappingNode {
+		return fmt.Errorf("service environment must be a mapping")
+	}
+
+	// Look for existing variable
+	for i := 0; i+1 < len(envNode.Content); i += 2 {
+		if envNode.Content[i].Value == varName {
+			envNode.Content[i+1].Kind = yamlv3.ScalarNode
+			envNode.Content[i+1].Tag = "!!str"
+			envNode.Content[i+1].Value = varValue
+			return nil
+		}
+	}
+
+	// If not found, add it
+	envNode.Content = append(envNode.Content,
+		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varName},
+		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varValue},
 	)
 	return nil
 }

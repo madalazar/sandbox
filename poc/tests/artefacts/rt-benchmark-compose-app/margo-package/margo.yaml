@@ -28,6 +28,9 @@ deploymentProfiles:
       - name: stress
         properties:
           packageLocation: /rt-benchmark-compose-app/stress/docker-compose.yaml
+      - name: caterpillar
+        properties:
+          packageLocation: /rt-benchmark-compose-app/caterpillar/docker-compose.yaml
 
     requiredResources:
       cpu:
@@ -42,6 +45,13 @@ deploymentProfiles:
           cores: 1
           class: performance
           type: shared
+          architectures:
+            - amd64
+            - x86_64
+        - name: caterpillar
+          cores: 1
+          class: performance
+          type: isolated
           architectures:
             - amd64
             - x86_64
@@ -133,6 +143,30 @@ parameters:
       - pointer: STRESS_DURATION
         components: ["stress"]
 
+  caterpillarImage:
+    value: harbor.machine:8443/library/caterpillar:latest
+    targets:
+      - pointer: CATERPILLAR_IMAGE
+        components: ["caterpillar"]
+
+  chrt:
+    value: true
+    targets:
+      - pointer: CHRT
+        components: ["caterpillar"]
+
+  priority:
+    value: 99
+    targets:
+      - pointer: PRIORITY
+        components: ["caterpillar"]
+
+  caterpillarSamples:
+    value: 900
+    targets:
+      - pointer: CATERPILLAR_SAMPLES
+        components: ["caterpillar"]
+
 configuration:
   sections:
     - name: Cyclictest Configuration
@@ -193,6 +227,25 @@ configuration:
           description: Duration for stress run (for example 300s)
           schema: requiredText
 
+    - name: Caterpillar Configuration
+      settings:
+        - parameter: caterpillarImage
+          name: Caterpillar Image
+          description: Container image reference for caterpillar (repository:tag)
+          schema: requiredText
+        - parameter: chrt
+          name: Enable CHRT
+          description: Enable chrt for real-time scheduling
+          schema: booleanValue
+        - parameter: priority
+          name: Priority
+          description: Real-time priority used by caterpillar
+          schema: positiveInteger
+        - parameter: caterpillarSamples
+          name: Caterpillar Samples
+          description: Number of samples to collect
+          schema: positiveInteger
+
   schema:
     - name: requiredText
       dataType: string
@@ -208,3 +261,7 @@ configuration:
       dataType: integer
       allowEmpty: false
       minValue: 1
+
+    - name: booleanValue
+      dataType: boolean
+      allowEmpty: false
