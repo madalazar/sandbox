@@ -1,0 +1,355 @@
+apiVersion: margo.org/v1-alpha1
+kind: ApplicationDescription
+metadata:
+  id: rt-benchmark-icore-suite
+  name: RT Benchmark Invalid Number of IsoCores requested Suite
+  description: >
+    Real-time benchmarking suite combining the Caterpillar and cyclictest latency
+    benchmarks with the stress-ng CPU/memory stressor. Caterpillar and cyclictest
+    measure scheduling latency on isolated performance cores while stress-ng
+    generates background workload on a separate core to simulate real-world
+    contention.
+  version: 1.0.0
+  catalog:
+    application:
+      icon: ./resources/rt-benchmark-logo.png
+      tagline: Real-time latency benchmarking with cyclictest and stress-ng background load
+      descriptionFile: ./resources/description.md
+      releaseNotes: ./resources/release-notes.md
+      licenseFile: ./resources/license.md
+      tags: ["benchmark", "real-time", "stress-testing", "performance", "caterpillar", "cyclictest"]
+    organization:
+      - name: Industrial Edge Controls
+
+deploymentProfiles:
+  - type: helm.v3
+    id: rt-benchmark-icore
+    description: >
+      Deploys Caterpillar and cyclictest latency benchmarks plus stress-ng as
+      independent Helm releases on the same edge device.
+    components:
+      - name: caterpillar
+        properties:
+          repository: oci://harbor.machine:8443/library/caterpillar-benchmark
+          revision: 1.0.0
+          wait: false
+          timeout: 4h
+
+      - name: cyclictest
+        properties:
+          repository: oci://harbor.machine:8443/library/cyclictest
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+      - name: stressng
+        properties:
+          repository: oci://harbor.machine:8443/library/stressng
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+    requiredResources:
+      cpu:
+        # Caterpillar needs one isolated performance core for accurate latency measurement
+        - name: caterpillar
+          cores: 1
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        # cyclictest also needs one isolated performance core for accurate latency measurement
+        - name: cyclictest
+          cores: 10
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        # stress-ng runs as a shared background stressor on a separate core
+        - name: stressng
+          cores: 1
+          class: performance
+          type: shared
+          architectures:
+            - amd64
+            - x86_64
+      memory: 1024Mi
+      storage: 2Gi
+
+parameters:
+  # ── Caterpillar image ────────────────────────────────────────────────────────
+  caterpillarImageRepository:
+    value: "harbor.machine:8443/library/caterpillar"
+    targets:
+      - pointer: image.repository
+        components: ["caterpillar"]
+
+  caterpillarImageTag:
+    value: "latest"
+    targets:
+      - pointer: image.tag
+        components: ["caterpillar"]
+
+  # ── cyclictest image ────────────────────────────────────────────────────────
+  cyclictestImageRepository:
+    value: "harbor.machine:8443/library/cyclictest"
+    targets:
+      - pointer: image.repository
+        components: ["cyclictest"]
+
+  cyclictestImageTag:
+    value: "latest"
+    targets:
+      - pointer: image.tag
+        components: ["cyclictest"]
+
+   # ── stress-ng image ──────────────────────────────────────────────────────────
+  # stressngImageRepository:
+  #   value: "ghcr.io/colinianking/stress-ng"
+  #   targets:
+  #     - pointer: image.repository
+  #       components: ["stressng"]
+
+  # stressngImageTag:
+  #   value: "latest"
+  #   targets:
+  #     - pointer: image.tag
+  #       components: ["stressng"]
+
+  # ── cyclictest benchmark settings ──────────────────────────────────────────
+  # cyclictestCpuset:
+  #   value: "2"
+  #   targets:
+  #     - pointer: cyclictest.cpuset
+  #       components: ["cyclictest"]
+
+  # cyclictestThreads:
+  #   value: 4
+  #   targets:
+  #     - pointer: cyclictest.threads
+  #       components: ["cyclictest"]
+
+  # cyclictestPriority:
+  #   value: 99
+  #   targets:
+  #     - pointer: cyclictest.priority
+  #       components: ["cyclictest"]
+
+  # cyclictestInterval:
+  #   value: 1000
+  #   targets:
+  #     - pointer: cyclictest.interval
+  #       components: ["cyclictest"]
+
+  # cyclictestLoops:
+  #   value: 100000
+  #   targets:
+  #     - pointer: cyclictest.loops
+  #       components: ["cyclictest"]
+
+  # cyclictestHistogramMax:
+  #   value: 400
+  #   targets:
+  #     - pointer: cyclictest.histogramMax
+  #       components: ["cyclictest"]
+
+  # cyclictestCustom:
+  #   value: "-m"
+  #   targets:
+  #     - pointer: cyclictest.custom
+  #       components: ["cyclictest"]
+
+  # cyclictestOutputHostPath:
+  #   value: "/tmp/cyclictest-output"
+  #   targets:
+  #     - pointer: cyclictest.output.hostPath
+  #       components: ["cyclictest"]
+
+  # ── Caterpillar benchmark settings ──────────────────────────────────────────
+  # caterpillarCpuset:
+  #   value: "3"
+  #   targets:
+  #     - pointer: caterpillar.cpuset
+  #       components: ["caterpillar"]
+
+  # caterpillarSamples:
+  #   value: 7200
+  #   targets:
+  #     - pointer: caterpillar.samples
+  #       components: ["caterpillar"]
+
+  # caterpillarOutputHostPath:
+  #   value: "/tmp/caterpillar-output"
+  #   targets:
+  #     - pointer: output.hostPath
+  #       components: ["caterpillar"]
+
+  # ── stress-ng stressor settings ──────────────────────────────────────────────
+  # stressngCpuset:
+  #   value: "1"
+  #   targets:
+  #     - pointer: stressng.cpuset
+  #       components: ["stressng"]
+
+  # stressngCpuWorkers:
+  #   value: 1
+  #   targets:
+  #     - pointer: stressng.cpuWorkers
+  #       components: ["stressng"]
+
+  # stressngMemcpy:
+  #   value: 6
+  #   targets:
+  #     - pointer: stressng.memcpy
+  #       components: ["stressng"]
+
+  # stressngDuration:
+  #   value: 1500
+  #   targets:
+  #     - pointer: stressng.duration
+  #       components: ["stressng"]
+
+configuration:
+  sections:
+    - name: Caterpillar — Container Image
+      settings:
+        - parameter: caterpillarImageRepository
+          name: Image Repository
+          description: OCI registry path for the Caterpillar container image
+          schema: requiredText
+
+        - parameter: caterpillarImageTag
+          name: Image Tag
+          description: Container image tag / version
+          schema: requiredText
+
+    - name: Caterpillar — Benchmark
+      settings:
+        - parameter: caterpillarCpuset
+          name: CPU Set
+          description: >
+            CPU core(s) to pin the benchmark thread to via -c (e.g. "3", "1-3", "1,3").
+            Leave empty to let the OS scheduler decide.
+          schema: optionalText
+
+        - parameter: caterpillarSamples
+          name: Sample Count
+          description: >
+            Number of latency samples to collect.
+            Approximately 200 ≈ 5 min, 7200 ≈ 3 hours.
+          schema: positiveInteger
+
+        - parameter: caterpillarOutputHostPath
+          name: Output Host Path
+          description: Host-side directory where benchmark result files are written
+          schema: requiredText
+
+    - name: cyclictest — Container Image
+      settings:
+        - parameter: cyclictestImageRepository
+          name: Image Repository
+          description: OCI registry path for the cyclictest container image
+          schema: requiredText
+
+        - parameter: cyclictestImageTag
+          name: Image Tag
+          description: Container image tag / version
+          schema: requiredText
+
+    - name: cyclictest — Benchmark
+      settings:
+        - parameter: cyclictestCpuset
+          name: CPU Set
+          description: >
+            CPU core(s) to pin cyclictest to via --test_core (e.g. "2", "1-3", "1,3").
+            Leave empty to let the chart auto-select.
+          schema: optionalText
+
+        - parameter: cyclictestThreads
+          name: Thread Count
+          description: Number of cyclictest worker threads
+          schema: positiveInteger
+
+        - parameter: cyclictestPriority
+          name: Priority
+          description: Real-time priority used by cyclictest
+          schema: positiveInteger
+
+        - parameter: cyclictestInterval
+          name: Interval (us)
+          description: Sampling interval in microseconds
+          schema: positiveInteger
+
+        - parameter: cyclictestLoops
+          name: Loops
+          description: Number of cyclictest loops
+          schema: positiveInteger
+
+        - parameter: cyclictestHistogramMax
+          name: Histogram Maximum
+          description: Histogram bucket maximum in microseconds
+          schema: positiveInteger
+
+        - parameter: cyclictestCustom
+          name: Extra Flags
+          description: Additional flags passed directly to cyclictest
+          schema: optionalText
+
+        - parameter: cyclictestOutputHostPath
+          name: Output Host Path
+          description: Host-side directory where cyclictest log files are written
+          schema: requiredText
+
+    - name: stress-ng — Container Image
+      settings:
+        - parameter: stressngImageRepository
+          name: Image Repository
+          description: OCI registry path for the stress-ng container image
+          schema: requiredText
+
+        - parameter: stressngImageTag
+          name: Image Tag
+          description: Container image tag / version
+          schema: requiredText
+
+    - name: stress-ng — Stressor
+      settings:
+        - parameter: stressngCpuset
+          name: CPU Set (taskset)
+          description: >
+            CPU core(s) for the stress-ng process via --taskset (e.g. "1", "0-1", "0,2").
+            Leave empty to omit --taskset.
+          schema: optionalText
+
+        - parameter: stressngCpuWorkers
+          name: CPU Stressor Workers
+          description: Number of --cpu stressor worker threads
+          schema: positiveInteger
+
+        - parameter: stressngMemcpy
+          name: Memcpy Stressor Workers
+          description: Number of --memcpy stressor worker threads
+          schema: positiveInteger
+
+        - parameter: stressngDuration
+          name: Duration (seconds)
+          description: Total duration for the stress run passed to --timeout
+          schema: positiveInteger
+
+  schema:
+    - name: requiredText
+      dataType: string
+      allowEmpty: false
+      maxLength: 256
+
+    - name: optionalText
+      dataType: string
+      allowEmpty: true
+      maxLength: 256
+
+    - name: positiveInteger
+      dataType: integer
+      allowEmpty: false
+      minValue: 1
