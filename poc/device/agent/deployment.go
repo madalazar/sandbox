@@ -369,7 +369,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
 		podAnnotations, componentAssignments, hasNriAnnotations, err := dm.resolveComponentBalloonAnnotations(
-			helmComp.Name, appDeployment.Spec.DeploymentProfile.RequiredResources, assignments)
+			deploymentId, helmComp.Name, appDeployment.Spec.DeploymentProfile.RequiredResources, assignments)
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}

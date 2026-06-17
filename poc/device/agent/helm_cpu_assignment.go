@@ -13,8 +13,8 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
-func (dm *DeploymentManager) resolveComponentBalloonAnnotations(componentName string, requiredResources *sbi.RequiredResources,
-	inFlightAssignments map[string][]int,
+func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID string, componentName string,
+	requiredResources *sbi.RequiredResources, inFlightAssignments map[string][]int,
 ) (map[string]string, map[string][]int, bool, error) {
 
 	annotations := map[string]string{}
@@ -75,20 +75,32 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(componentName st
 		)
 	}
 
-	allocatedIsolated := map[int]struct{}{}
+	allocatedIsolated := map[int]string{}
 	allocatedByKey := dm.database.AllocatedCpus(dm.topologyLookup.CPUIndexToCoreKey)
 	for key, indices := range allocatedByKey {
 		if !strings.EqualFold(strings.TrimSpace(key.Type), string(sbi.CpuTypeIsolated)) {
 			continue
 		}
-		for idx := range indices {
-			allocatedIsolated[idx] = struct{}{}
+		for idx, owner := range indices {
+			allocatedIsolated[idx] = owner
 		}
 	}
 
-	for _, cpus := range inFlightAssignments {
+	for requirement, cpus := range inFlightAssignments {
+		owner := deploymentID
+		if strings.TrimSpace(requirement) != "" {
+			owner = deploymentID + "/" + strings.TrimSpace(requirement)
+		}
+
 		for _, idx := range cpus {
-			allocatedIsolated[idx] = struct{}{}
+			coreKey, exists := dm.topologyLookup.CPUIndexToCoreKey[idx]
+			if !exists {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(coreKey.Type), string(sbi.CpuTypeIsolated)) {
+				continue
+			}
+			allocatedIsolated[idx] = owner
 		}
 	}
 
@@ -112,6 +124,7 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(componentName st
 	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
 		requirementName = strings.TrimSpace(*req.Name)
 	}
+	expectedOwner := deploymentID + "/" + requirementName
 
 	selectedBalloonName := ""
 	selectedBalloonCPUs := []int(nil)
@@ -128,7 +141,11 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(componentName st
 
 		hasAllocatedCPU := false
 		for _, idx := range refs {
-			if _, exists := allocatedIsolated[idx]; exists {
+			owner, exists := allocatedIsolated[idx]
+			if !exists {
+				continue
+			}
+			if owner != "" && owner != deploymentID && owner != expectedOwner {
 				hasAllocatedCPU = true
 				break
 			}
