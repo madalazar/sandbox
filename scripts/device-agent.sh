@@ -365,11 +365,7 @@ _nri_install_menu() {
   local default_policy="$HOME/sandbox/balloon-policy.yaml"
   read -rp "Path to balloon values file (leave blank to auto-generate) [${default_policy}]: " balloon_values
   balloon_values="${balloon_values:-$default_policy}"
-  local margo_package_paths=""
-  if [[ ! -f "$balloon_values" ]]; then
-    read -rp "Path(s) to margo app package(s), comma-separated (each contains margo-package/margo.yaml): " margo_package_paths
-  fi
-  install_balloon_nri_plugin "$balloon_values" "$margo_package_paths"
+  install_balloon_nri_plugin "$balloon_values"
 }
 
 _nri_update_menu() {
@@ -509,7 +505,7 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
     create-ecdsa-certs) create_device_ecdsa_certs ;;
     nri-install)
       if ! _require_k3s_cluster; then exit 1; fi
-      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}" "${4:-}"
+      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
       ;;
     nri-update)
       if ! _require_k3s_cluster; then exit 1; fi
@@ -520,7 +516,7 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
       ;;
     *)
       echo "[ERROR] Unknown command: $2"
-      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install [values-file] [margo-app-package-paths-csv], nri-update, nri-uninstall"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install [values-file], nri-update, nri-uninstall"
       exit 1
       ;;
   esac

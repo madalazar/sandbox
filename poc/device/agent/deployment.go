@@ -4,12 +4,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +19,6 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
 	"go.uber.org/zap"
-	yaml "gopkg.in/yaml.v2"
 )
 
 var cpuIndexRegex = regexp.MustCompile(`cpu(\d+)`)
@@ -371,22 +368,12 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		nriAnnotations, hasNriAnnotations, err := dm.resolveComponentBalloonAnnotations(
-			helmComp.Name,
-			appDeployment.Spec.DeploymentProfile.RequiredResources,
-		)
+		podAnnotations, componentAssignments, hasNriAnnotations, err := dm.resolveComponentBalloonAnnotations(
+			helmComp.Name, appDeployment.Spec.DeploymentProfile.RequiredResources, assignments)
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
 
-		componentAssignments, err := dm.resolveComponentIsolatedCpuAssignments(
-			deploymentId,
-			helmComp.Name,
-			appDeployment.Spec.DeploymentProfile.RequiredResources,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to resolve isolated CPU assignments for component %s: %w", helmComp.Name, err)
-		}
 		for requirementName, cpus := range componentAssignments {
 			copied := make([]int, len(cpus))
 			copy(copied, cpus)
@@ -394,7 +381,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		if hasNriAnnotations {
-			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, nriAnnotations)
+			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, podAnnotations)
 			if err != nil {
 				return fmt.Errorf("failed to generate NRI values override file for component %s: %w", helmComp.Name, err)
 			}
@@ -404,28 +391,17 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				}
 			}()
 
-			dm.logNriAnnotationPlan(helmComp.Name, releaseName, nriAnnotations)
-			flatAnnotations := dm.flattenNriAnnotations(nriAnnotations)
-			podAnnotationsValues := dm.mergePodAnnotations(values["podAnnotations"], flatAnnotations)
+			dm.logNriAnnotationPlan(helmComp.Name, releaseName, podAnnotations)
+			podAnnotationsValues := dm.mergePodAnnotations(values["podAnnotations"], podAnnotations)
 			values["podAnnotations"] = podAnnotationsValues
-			dm.log.Infow(
-				"Applied NRI balloon annotations to Helm values",
-				"componentName", helmComp.Name,
-				"releaseName", releaseName,
-				"overrideFile", overrideFile,
-				"podAnnotations", podAnnotationsValues,
-			)
+			dm.log.Infow("Applied NRI balloon annotations to Helm values", "componentName", helmComp.Name,
+				"releaseName", releaseName, "overrideFile", overrideFile, "podAnnotations", podAnnotationsValues)
 		} else {
-			dm.log.Infow(
-				"No NRI balloon annotations resolved for component",
-				"componentName", helmComp.Name,
-				"releaseName", releaseName,
-			)
+			dm.log.Infow("No NRI balloon annotations resolved for component", "componentName", helmComp.Name,
+				"releaseName", releaseName)
 		}
 
-		dm.log.Infow("Deploying with unique resource names",
-			"releaseName", releaseName,
-			"fullnameOverride", releaseName)
+		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
 		// Deploy/Update
 		release, err := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
@@ -469,13 +445,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		// New deployment
-		dm.log.Infow(
-			"Installing new Helm release",
-			"releaseName",
-			releaseName,
-			"deploymentId",
-			deploymentId,
-		)
+		dm.log.Infow("Installing new Helm release", "releaseName", releaseName, "deploymentId", deploymentId)
 		revision := "latest"
 		if helmComp.Properties.Revision != nil {
 			revision = *helmComp.Properties.Revision
@@ -493,13 +463,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		if err != nil {
 			return err
 		}
-		dm.log.Infow(
-			"Helm deployment successful",
-			"appId",
-			deploymentId,
-			"releaseName",
-			releaseName,
-		)
+
+		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
 	}
 
 	if err := dm.database.SetCpuAssignments(deploymentId, assignments); err != nil {
@@ -923,483 +888,6 @@ func strPtr(s string) *string {
 	return &s
 }
 
-func (dm *DeploymentManager) resolveComponentBalloonAnnotations(
-	componentName string,
-	requiredResources *sbi.RequiredResources,
-) (NriAnnotations, bool, error) {
-	empty := NriAnnotations{PodLevel: map[string]string{}, ContainerLevel: map[string]map[string]string{}}
-
-	componentCPUReqs := filterCPURequirementsForComponent(requiredResources, componentName)
-	dm.log.Debugw(
-		"Resolved component CPU requirements from deployment profile for NRI balloon resolution",
-		"componentName", componentName,
-		"hasRequiredResources", requiredResources != nil,
-		"cpuRequirementCount", len(componentCPUReqs),
-		"cpuRequirements", summarizeCpuRequirements(componentCPUReqs),
-	)
-
-	if len(componentCPUReqs) == 0 {
-		dm.log.Infow(
-			"Skipping NRI balloon resolution: component has no matching deployment-profile CPU requirements",
-			"componentName", componentName,
-		)
-		return empty, false, nil
-	}
-
-	if dm.policyReader == nil {
-		dm.log.Debugw("Skipping NRI balloon resolution: policy reader not configured", "componentName", componentName)
-		return empty, false, nil
-	}
-
-	policy := dm.policyReader.Parsed()
-	if policy == nil {
-		dm.log.Infow("Skipping NRI balloon resolution: no BalloonsPolicy snapshot available", "componentName", componentName)
-		return empty, false, nil
-	}
-
-	dm.log.Debugw(
-		"Attempting NRI balloon resolution",
-		"componentName", componentName,
-		"policyName", policy.Name,
-		"balloonTypeCount", len(policy.BalloonTypes),
-		"cpuRequirementCount", len(componentCPUReqs),
-		"cpuRequirements", summarizeCpuRequirements(componentCPUReqs),
-	)
-
-	annotations, err := resolveNriAnnotations(componentCPUReqs, policy)
-	if err != nil {
-		dm.log.Warnw(
-			"NRI balloon resolution failed",
-			"componentName", componentName,
-			"policyName", policy.Name,
-			"cpuRequirements", summarizeCpuRequirements(componentCPUReqs),
-			"err", err,
-		)
-		return empty, false, err
-	}
-
-	has := len(annotations.PodLevel) > 0 || len(annotations.ContainerLevel) > 0
-	if has {
-		dm.log.Infow(
-			"NRI balloon resolution succeeded",
-			"componentName", componentName,
-			"podAnnotationCount", len(annotations.PodLevel),
-			"containerAnnotationCount", len(annotations.ContainerLevel),
-		)
-	} else {
-		dm.log.Infow(
-			"NRI balloon resolution produced no annotations",
-			"componentName", componentName,
-			"cpuRequirements", summarizeCpuRequirements(componentCPUReqs),
-		)
-	}
-	return annotations, has, nil
-}
-
-func summarizeCpuRequirements(reqs []sbi.Cpu) []map[string]interface{} {
-	out := make([]map[string]interface{}, 0, len(reqs))
-	for _, req := range reqs {
-		entry := map[string]interface{}{}
-		if req.Name != nil {
-			entry["containerName"] = strings.TrimSpace(*req.Name)
-		} else {
-			entry["containerName"] = ""
-		}
-		if req.Class != nil {
-			entry["class"] = string(*req.Class)
-		}
-		if req.Type != nil {
-			entry["type"] = string(*req.Type)
-		}
-		if req.Cores != nil {
-			entry["cores"] = *req.Cores
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
-func filterCPURequirementsForComponent(
-	requiredResources *sbi.RequiredResources,
-	componentName string,
-) []sbi.Cpu {
-	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
-		return nil
-	}
-
-	matching := make([]sbi.Cpu, 0)
-	for _, req := range *requiredResources.Cpu {
-		if req.Name == nil {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(*req.Name), componentName) {
-			matching = append(matching, req)
-		}
-	}
-
-	return matching
-}
-
-func filterIsolatedCPURequirements(reqs []sbi.Cpu) []sbi.Cpu {
-	if len(reqs) == 0 {
-		return nil
-	}
-
-	isolationOnly := make([]sbi.Cpu, 0, len(reqs))
-	for _, req := range reqs {
-		if req.Type == nil || *req.Type != sbi.CpuTypeIsolated {
-			continue
-		}
-		isolationOnly = append(isolationOnly, req)
-	}
-
-	return isolationOnly
-}
-
-func (dm *DeploymentManager) resolveComponentIsolatedCpuAssignments(
-	deploymentId string,
-	componentName string,
-	requiredResources *sbi.RequiredResources,
-) (map[string][]int, error) {
-	assignments := map[string][]int{}
-
-	componentCPUReqs := filterCPURequirementsForComponent(requiredResources, componentName)
-	isolationOnly := filterIsolatedCPURequirements(componentCPUReqs)
-	if len(isolationOnly) == 0 {
-		return assignments, nil
-	}
-
-	if dm.policyReader == nil {
-		dm.log.Debugw("Skipping isolated CPU assignment resolution: policy reader not configured",
-			"componentName", componentName)
-		return assignments, nil
-	}
-
-	// we can parse the policy only once (before dm.resolveComponentBalloonAnnotaton ) and just use it
-	// in both dm.resolveComponentBalloonAnnotaton and   dm.resolveComponentIsolatedCpuAssignments
-	policy := dm.policyReader.Parsed()
-	if policy == nil {
-		dm.log.Debugw("Skipping isolated CPU assignment resolution: no BalloonsPolicy snapshot available",
-			"componentName", componentName)
-		return assignments, nil
-	}
-
-	for _, req := range isolationOnly {
-		if req.Name == nil {
-			continue
-		}
-
-		requirementName := strings.TrimSpace(*req.Name)
-		if requirementName == "" {
-			continue
-		}
-
-		_, cpus, err := selectBalloonForGroupWithCPURefs(req, policy)
-		if err != nil {
-			return assignments, fmt.Errorf("isolated CPU assignment resolution failed for requirement %q: %w",
-				requirementName, err)
-		}
-
-		assignments[requirementName] = cpus
-	}
-
-	if err := dm.validateSelectedIsolatedAssignments(deploymentId, isolationOnly, assignments); err != nil {
-		return nil, err
-	}
-
-	return assignments, nil
-}
-
-func (dm *DeploymentManager) validateSelectedIsolatedAssignments(
-	deploymentId string,
-	isolationOnly []sbi.Cpu,
-	assignments map[string][]int,
-) error {
-	// Validate only the selected cores for this component and reject overlaps.
-	cpuIndexToCoreKey := map[int]database.CoreKey{}
-	for _, req := range isolationOnly {
-		if req.Name == nil || req.Class == nil || req.Type == nil {
-			continue
-		}
-		requirementName := strings.TrimSpace(*req.Name)
-		if requirementName == "" {
-			continue
-		}
-		selected, ok := assignments[requirementName]
-		if !ok {
-			continue
-		}
-		coreKey := database.CoreKey{Class: string(*req.Class), Type: string(*req.Type)}
-		for _, idx := range selected {
-			cpuIndexToCoreKey[idx] = coreKey
-		}
-	}
-
-	alreadyAllocated := dm.database.AllocatedCpus(cpuIndexToCoreKey)
-	for _, req := range isolationOnly {
-		if req.Name == nil || req.Class == nil || req.Type == nil {
-			continue
-		}
-
-		requirementName := strings.TrimSpace(*req.Name)
-		if requirementName == "" {
-			continue
-		}
-
-		selected, ok := assignments[requirementName]
-		if !ok {
-			continue
-		}
-
-		coreKey := database.CoreKey{Class: string(*req.Class), Type: string(*req.Type)}
-		takenIndices := alreadyAllocated[coreKey]
-		for _, idx := range selected {
-			owner, taken := takenIndices[idx]
-			if !taken {
-				continue
-			}
-			if owner == deploymentId || strings.HasPrefix(owner, deploymentId+"/") {
-				continue
-			}
-			return fmt.Errorf(
-				"insufficient isolated CPUs: cpu index %d required by %q is already allocated to deployment %q",
-				idx, requirementName, owner,
-			)
-		}
-	}
-
-	return nil
-}
-
-func resolveNriAnnotations(cpuReqs []sbi.Cpu, policy *ParsedBalloonPolicy) (NriAnnotations, error) {
-	out := NriAnnotations{
-		PodLevel:       map[string]string{},
-		ContainerLevel: map[string]map[string]string{},
-	}
-	if policy == nil {
-		return out, nil
-	}
-
-	grouped := map[string][]sbi.Cpu{}
-	for _, req := range cpuReqs {
-		containerName := ""
-		if req.Name != nil {
-			containerName = strings.TrimSpace(*req.Name)
-		}
-		grouped[containerName] = append(grouped[containerName], req)
-	}
-
-	for containerName, group := range grouped {
-		if len(group) == 0 {
-			continue
-		}
-
-		balloonName, err := selectBalloonForGroup(group[0], policy)
-		if err != nil {
-			scope := "pod"
-			if containerName != "" {
-				scope = "container " + containerName
-			}
-			return out, fmt.Errorf("balloon resolution failed for %s: %w", scope, err)
-		}
-
-		key := "balloon.balloons.resource-policy.nri.io/pod"
-		if containerName != "" {
-			key = fmt.Sprintf("balloon.balloons.resource-policy.nri.io/container.%s", containerName)
-		}
-
-		if containerName == "" {
-			out.PodLevel[key] = balloonName
-			continue
-		}
-
-		if out.ContainerLevel[containerName] == nil {
-			out.ContainerLevel[containerName] = map[string]string{}
-		}
-		out.ContainerLevel[containerName][key] = balloonName
-	}
-
-	return out, nil
-}
-
-func selectBalloonForGroup(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, error) {
-	balloonName, _, err := selectBalloonForGroupWithCPURefs(req, policy)
-	if err != nil {
-		return "", err
-	}
-
-	return balloonName, nil
-}
-
-func selectBalloonForGroupWithCPURefs(req sbi.Cpu, policy *ParsedBalloonPolicy) (string, []int, error) {
-	if policy == nil {
-		return "", nil, fmt.Errorf("policy is not available")
-	}
-	if len(policy.BalloonTypes) == 0 {
-		return "", nil, fmt.Errorf("policy contains no balloon types")
-	}
-
-	requestedName := ""
-	if req.Name != nil {
-		requestedName = strings.TrimSpace(*req.Name)
-	}
-	if requestedName == "" {
-		return "", nil, fmt.Errorf("cpu.name is required for balloon selection")
-	}
-
-	expectedBalloonName := ""
-	if requestedName != "" {
-		expectedBalloonName = fmt.Sprintf("balloon_%s", requestedName)
-	}
-
-	requiredCores := int64(1)
-	if req.Cores != nil && *req.Cores > 0 {
-		requiredCores = int64(math.Ceil(float64(*req.Cores)))
-	}
-
-	for _, balloon := range policy.BalloonTypes {
-		if !strings.EqualFold(strings.TrimSpace(balloon.Name), expectedBalloonName) {
-			continue
-		}
-
-		matchedCPURefs := uniqueSortedCPURefs(balloon.PreferCloseToDevices)
-		matchingCount := int64(len(matchedCPURefs))
-		if matchingCount < requiredCores {
-			return "", nil, fmt.Errorf(
-				"balloon %q matched cpu.name=%q but does not cover required cores=%d (matchingCPURefs=%d)",
-				balloon.Name,
-				requestedName,
-				requiredCores,
-				matchingCount,
-			)
-		}
-
-		selected := append([]int(nil), matchedCPURefs[:requiredCores]...)
-		return balloon.Name, selected, nil
-	}
-
-	return "", nil, fmt.Errorf(
-		"no balloon found matching cpu.name=%q (expected balloon=%q)",
-		requestedName,
-		expectedBalloonName,
-	)
-}
-
-func countUniqueCPURefs(paths []string) int64 {
-	return int64(len(uniqueSortedCPURefs(paths)))
-}
-
-func uniqueSortedCPURefs(paths []string) []int {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	seen := map[int]struct{}{}
-	for _, path := range paths {
-		matches := cpuIndexRegex.FindAllStringSubmatch(path, -1)
-		for _, m := range matches {
-			if len(m) != 2 {
-				continue
-			}
-			idx, err := strconv.Atoi(m[1])
-			if err != nil {
-				continue
-			}
-			seen[idx] = struct{}{}
-		}
-	}
-
-	refs := make([]int, 0, len(seen))
-	for idx := range seen {
-		refs = append(refs, idx)
-	}
-	sort.Ints(refs)
-
-	return refs
-}
-
-func (dm *DeploymentManager) flattenNriAnnotations(annotations NriAnnotations) map[string]string {
-	out := map[string]string{}
-	for k, v := range annotations.PodLevel {
-		out[k] = v
-	}
-	for _, perContainer := range annotations.ContainerLevel {
-		for k, v := range perContainer {
-			out[k] = v
-		}
-	}
-	return out
-}
-
-func (dm *DeploymentManager) mergePodAnnotations(
-	existing interface{},
-	annotations map[string]string,
-) map[string]interface{} {
-	merged := map[string]interface{}{}
-
-	switch typed := existing.(type) {
-	case nil:
-		// No existing pod annotations to merge.
-	case map[string]string:
-		for k, v := range typed {
-			merged[k] = v
-		}
-	case map[string]interface{}:
-		for k, v := range typed {
-			merged[k] = fmt.Sprintf("%v", v)
-		}
-	case map[interface{}]interface{}:
-		for k, v := range typed {
-			key := fmt.Sprintf("%v", k)
-			merged[key] = fmt.Sprintf("%v", v)
-		}
-	default:
-		dm.log.Warnw(
-			"Existing podAnnotations value has unsupported type; replacing with resolved NRI annotations",
-			"type", fmt.Sprintf("%T", existing),
-		)
-	}
-
-	for k, v := range annotations {
-		merged[k] = v
-	}
-
-	return merged
-}
-
-func (dm *DeploymentManager) generateNriValuesOverrideFile(
-	deploymentID string,
-	componentName string,
-	annotations NriAnnotations,
-) (string, error) {
-	flat := dm.flattenNriAnnotations(annotations)
-	if len(flat) == 0 {
-		return "", fmt.Errorf("no annotations to write")
-	}
-
-	payload := map[string]interface{}{
-		"podAnnotations": flat,
-	}
-
-	bytes, err := yaml.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal NRI override yaml: %w", err)
-	}
-
-	pattern := fmt.Sprintf("nri-override-%s-%s-*.yaml", sanitizeFileToken(componentName), sanitizeFileToken(deploymentID))
-	file, err := os.CreateTemp("", pattern)
-	if err != nil {
-		return "", fmt.Errorf("failed to create temporary NRI override file: %w", err)
-	}
-	defer file.Close()
-
-	if _, err := file.Write(bytes); err != nil {
-		return "", fmt.Errorf("failed to write NRI override yaml: %w", err)
-	}
-
-	return filepath.Clean(file.Name()), nil
-}
-
 func sanitizeFileToken(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1412,51 +900,6 @@ func sanitizeFileToken(value string) string {
 		return "unknown"
 	}
 	return cleaned
-}
-
-func (dm *DeploymentManager) logNriAnnotationPlan(
-	componentName string,
-	releaseName string,
-	annotations NriAnnotations,
-) {
-	podKeys := sortedAnnotationPairs(annotations.PodLevel)
-	dm.log.Infow("Resolved pod-level NRI annotations",
-		"componentName", componentName,
-		"releaseName", releaseName,
-		"annotations", podKeys,
-	)
-
-	containerNames := make([]string, 0, len(annotations.ContainerLevel))
-	for name := range annotations.ContainerLevel {
-		containerNames = append(containerNames, name)
-	}
-	sort.Strings(containerNames)
-
-	for _, containerName := range containerNames {
-		dm.log.Infow("Resolved container-level NRI annotations",
-			"componentName", componentName,
-			"releaseName", releaseName,
-			"containerName", containerName,
-			"annotations", sortedAnnotationPairs(annotations.ContainerLevel[containerName]),
-		)
-	}
-}
-
-func sortedAnnotationPairs(m map[string]string) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	pairs := make([]string, 0, len(keys))
-	for _, k := range keys {
-		pairs = append(pairs, fmt.Sprintf("%s=%s", k, m[k]))
-	}
-	return pairs
 }
 
 func summarizeTopologyCPUIndices(cpuIndices map[database.CoreKey][]int) []string {
