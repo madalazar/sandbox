@@ -20,12 +20,8 @@ type CpuAssignment struct {
 	Cpus        []int
 }
 
-func (dm *DeploymentManager) resolveComponentCpuAssignments(
-	deploymentID string,
-	componentName string,
-	composeFilePath string,
-	requiredResources *sbi.RequiredResources,
-) ([]CpuAssignment, error) {
+func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string, componentName string, composeFilePath string,
+	requiredResources *sbi.RequiredResources, existingAssignments map[string][]int) ([]CpuAssignment, error) {
 	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
 		return nil, nil
 	}
@@ -83,10 +79,29 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(
 	}
 
 	taken := dm.database.AllocatedCpus(dm.topologyLookup.CPUIndexToCoreKey)
+	for requirement, cpuIndices := range existingAssignments {
+		owner := deploymentID
+		if strings.TrimSpace(requirement) != "" {
+			owner = deploymentID + "/" + strings.TrimSpace(requirement)
+		}
+
+		for _, cpuIndex := range cpuIndices {
+			coreKey, exists := dm.topologyLookup.CPUIndexToCoreKey[cpuIndex]
+			if !exists {
+				continue
+			}
+			if taken[coreKey] == nil {
+				taken[coreKey] = make(map[int]string)
+			}
+			taken[coreKey][cpuIndex] = owner
+		}
+	}
+
 	assignments := make([]CpuAssignment, 0, len(reqs))
 
 	for _, req := range reqs {
 		requirementName := strings.TrimSpace(*req.Name)
+		expectedOwner := deploymentID + "/" + requirementName
 		if req.Class == nil {
 			return nil, fmt.Errorf("isolated CPU requirement %q is missing class", requirementName)
 		}
@@ -112,7 +127,7 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(
 			if takenByKey, exists := taken[coreKey]; exists {
 				owner = takenByKey[cpu]
 			}
-			if owner != "" && owner != deploymentID && !strings.HasPrefix(owner, deploymentID+"/") {
+			if owner != "" && owner != deploymentID && owner != expectedOwner {
 				continue
 			}
 			selected = append(selected, cpu)

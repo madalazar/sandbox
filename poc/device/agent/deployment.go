@@ -501,7 +501,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(composeComp.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -529,8 +529,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if len(dm.topologyLookup.CPUIndices) > 0 {
 			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
 			assignments, err := dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
-				appDeployment.Spec.DeploymentProfile.RequiredResources,
-			)
+				appDeployment.Spec.DeploymentProfile.RequiredResources, composeAssignments)
 
 			dm.log.Debugw("assignments for current component", "assignments", assignments)
 
