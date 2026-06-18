@@ -7,13 +7,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/margo/sandbox/poc/device/agent/database"
 )
 
 type TopologyLookup struct {
-	CPUIndices       map[database.CoreKey][]int
-	CPUIndexToCoreKey map[int]database.CoreKey
+	IsolatedCPUIndices []int
+	IsolatedCPUSet     map[int]struct{}
 }
 
 type TopologyCoreInfo struct {
@@ -51,7 +49,7 @@ func ReadCoreInfoFromAgentArtifact(path string) ([]TopologyCoreInfo, error) {
 	for _, core := range artifact.Cores {
 		core.Class = strings.TrimSpace(core.Class)
 		core.Type = strings.TrimSpace(core.Type)
-		if core.Class == "" || core.Type == "" {
+		if core.ID < 0 {
 			continue
 		}
 		cores = append(cores, core)
@@ -65,22 +63,26 @@ func ReadCoreInfoFromAgentArtifact(path string) ([]TopologyCoreInfo, error) {
 }
 
 func CPUIndicesFromCoreInfo(cores []TopologyCoreInfo) TopologyLookup {
-	cpuIndices := make(map[database.CoreKey][]int)
-	cpuIndexToCoreKey := make(map[int]database.CoreKey)
+	isolatedSet := make(map[int]struct{})
+	isolatedIndices := make([]int, 0, len(cores))
 
 	for _, core := range cores {
-		key := database.CoreKey{Class: core.Class, Type: core.Type}
-		cpuIndices[key] = append(cpuIndices[key], core.ID)
-		cpuIndexToCoreKey[core.ID] = key
+		coreType := strings.ToLower(strings.TrimSpace(core.Type))
+		if coreType != "" && coreType != "isolated" {
+			continue
+		}
+		if _, exists := isolatedSet[core.ID]; exists {
+			continue
+		}
+		isolatedSet[core.ID] = struct{}{}
+		isolatedIndices = append(isolatedIndices, core.ID)
 	}
 
-	for key := range cpuIndices {
-		sort.Ints(cpuIndices[key])
-	}
+	sort.Ints(isolatedIndices)
 
 	return TopologyLookup{
-		CPUIndices:       cpuIndices,
-		CPUIndexToCoreKey: cpuIndexToCoreKey,
+		IsolatedCPUIndices: isolatedIndices,
+		IsolatedCPUSet:     isolatedSet,
 	}
 }
 

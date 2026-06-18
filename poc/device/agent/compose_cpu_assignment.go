@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -26,7 +25,7 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		return nil, nil
 	}
 
-	if len(dm.topologyLookup.CPUIndices) == 0 || len(dm.topologyLookup.CPUIndexToCoreKey) == 0 {
+	if len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
 		return nil, nil
 	}
 
@@ -78,7 +77,7 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		return nil, nil
 	}
 
-	taken := dm.database.AllocatedCpus(dm.topologyLookup.CPUIndexToCoreKey)
+	taken := dm.database.AllocatedCpus()
 	for requirement, cpuIndices := range existingAssignments {
 		owner := deploymentID
 		if strings.TrimSpace(requirement) != "" {
@@ -86,14 +85,10 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		}
 
 		for _, cpuIndex := range cpuIndices {
-			coreKey, exists := dm.topologyLookup.CPUIndexToCoreKey[cpuIndex]
-			if !exists {
+			if _, exists := dm.topologyLookup.IsolatedCPUSet[cpuIndex]; !exists {
 				continue
 			}
-			if taken[coreKey] == nil {
-				taken[coreKey] = make(map[int]string)
-			}
-			taken[coreKey][cpuIndex] = owner
+			taken[cpuIndex] = owner
 		}
 	}
 
@@ -102,31 +97,20 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 	for _, req := range reqs {
 		requirementName := strings.TrimSpace(*req.Name)
 		expectedOwner := deploymentID + "/" + requirementName
-		if req.Class == nil {
-			return nil, fmt.Errorf("isolated CPU requirement %q is missing class", requirementName)
-		}
-
-		coreKey := database.CoreKey{Class: strings.TrimSpace(string(*req.Class)), Type: string(sbi.CpuTypeIsolated)}
-		if coreKey.Class == "" {
-			return nil, fmt.Errorf("isolated CPU requirement %q has empty class", requirementName)
-		}
 
 		requiredCores := int64(1)
 		if req.Cores != nil && *req.Cores > 0 {
 			requiredCores = int64(math.Ceil(float64(*req.Cores)))
 		}
 
-		candidates := dm.topologyLookup.CPUIndices[coreKey]
+		candidates := dm.topologyLookup.IsolatedCPUIndices
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("no isolated CPUs available for requirement %q (class=%q)", requirementName, coreKey.Class)
+			return nil, fmt.Errorf("no isolated CPUs available for requirement %q", requirementName)
 		}
 
 		selected := make([]int, 0, requiredCores)
 		for _, cpu := range candidates {
-			owner := ""
-			if takenByKey, exists := taken[coreKey]; exists {
-				owner = takenByKey[cpu]
-			}
+			owner := taken[cpu]
 			if owner != "" && owner != deploymentID && owner != expectedOwner {
 				continue
 			}
@@ -137,14 +121,11 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		}
 
 		if len(selected) < int(requiredCores) {
-			return nil, fmt.Errorf("no free isolated CPUs available for requirement %q (class=%q, required=%d)", requirementName, coreKey.Class, requiredCores)
+			return nil, fmt.Errorf("no free isolated CPUs available for requirement %q (required=%d)", requirementName, requiredCores)
 		}
 
-		if taken[coreKey] == nil {
-			taken[coreKey] = make(map[int]string)
-		}
 		for _, cpu := range selected {
-			taken[coreKey][cpu] = deploymentID + "/" + requirementName
+			taken[cpu] = deploymentID + "/" + requirementName
 		}
 
 		assignments = append(assignments, CpuAssignment{

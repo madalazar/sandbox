@@ -36,6 +36,12 @@ map_machine_arch_to_capability_arch() {
   esac
 }
 
+is_isolated_core_type() {
+  local core_type="$1"
+  core_type="${core_type,,}"
+  [[ "$core_type" == "isolated" ]]
+}
+
 # Populate an associative array with every CPU id in a range-list string
 # (e.g. "0-3,7,10-11").
 # Usage: mark_cpu_set_from_range_list "$range_str" my_assoc_array

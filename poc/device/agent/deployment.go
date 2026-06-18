@@ -524,10 +524,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
-		dm.log.Debugw("cpu indices", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+		dm.log.Debugw("isolated cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 
-		if len(dm.topologyLookup.CPUIndices) > 0 {
-			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+		if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
+			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 			assignments, err := dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
 				appDeployment.Spec.DeploymentProfile.RequiredResources, composeAssignments)
 
@@ -627,8 +627,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		)
 	}
 
-	if len(dm.topologyLookup.CPUIndices) > 0 {
-		dm.log.Infow("**about to set cpu assignement", "cpu indices", summarizeTopologyCPUIndices(dm.topologyLookup.CPUIndices))
+	if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
+		dm.log.Infow("**about to set cpu assignement", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 		if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
 			return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
 		}
@@ -901,20 +901,15 @@ func sanitizeFileToken(value string) string {
 	return cleaned
 }
 
-func summarizeTopologyCPUIndices(cpuIndices map[database.CoreKey][]int) []string {
+func summarizeIsolatedCPUIndices(cpuIndices []int) []int {
 	if len(cpuIndices) == 0 {
 		return nil
 	}
 
-	summary := make([]string, 0, len(cpuIndices))
-	for key, cpus := range cpuIndices {
-		sorted := append([]int(nil), cpus...)
-		sort.Ints(sorted)
-		summary = append(summary, fmt.Sprintf("%s/%s=%v", key.Class, key.Type, sorted))
-	}
-	sort.Strings(summary)
+	sorted := append([]int(nil), cpuIndices...)
+	sort.Ints(sorted)
 
-	return summary
+	return sorted
 }
 
 // Helper function to convert parameters to environment variables

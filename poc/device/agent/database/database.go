@@ -35,14 +35,9 @@ type DeploymentRecord struct {
 	CurrentState        *AppDeploymentState
 	ComponentViseStatus map[string]sbi.ComponentStatus
 	CpuAssignments      map[string][]int // requirement.Name -> CPU indices
-	Phase               string // "deploying", "running", "failed", "removing", "removed"
+	Phase               string           // "deploying", "running", "failed", "removing", "removed"
 	Message             string
 	LastUpdated         time.Time
-}
-
-type CoreKey struct {
-	Class string
-	Type  string
 }
 
 type DeploymentBundleRecord struct {
@@ -95,7 +90,7 @@ type DatabaseIfc interface {
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
 	SetCpuAssignments(deploymentId string, assignments map[string][]int) error
 	ClearCpuAssignments(deploymentId string) error
-	AllocatedCpus(cpuIndexToCoreKey map[int]CoreKey) map[CoreKey]map[int]string
+	AllocatedCpus() map[int]string
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -449,11 +444,11 @@ func (db *Database) ClearCpuAssignments(deploymentId string) error {
 	return nil
 }
 
-func (db *Database) AllocatedCpus(cpuIndexToCoreKey map[int]CoreKey) map[CoreKey]map[int]string {
+func (db *Database) AllocatedCpus() map[int]string {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	allocated := make(map[CoreKey]map[int]string)
+	allocated := make(map[int]string)
 	for deploymentID, deployment := range db.deployments {
 		for requirement, cpuIndices := range deployment.CpuAssignments {
 			owner := deploymentID
@@ -462,15 +457,7 @@ func (db *Database) AllocatedCpus(cpuIndexToCoreKey map[int]CoreKey) map[CoreKey
 			}
 
 			for _, cpuIndex := range cpuIndices {
-				coreKey, exists := cpuIndexToCoreKey[cpuIndex]
-				if !exists {
-					continue
-				}
-
-				if allocated[coreKey] == nil {
-					allocated[coreKey] = make(map[int]string)
-				}
-				allocated[coreKey][cpuIndex] = owner
+				allocated[cpuIndex] = owner
 			}
 		}
 	}

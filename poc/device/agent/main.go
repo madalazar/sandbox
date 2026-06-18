@@ -218,7 +218,7 @@ func NewAgent(configPath string) (*Agent, error) {
 			"path", topologyArtifactPath, "err", topologyErr)
 		return nil, fmt.Errorf("load topology artifact %s: %w", topologyArtifactPath, topologyErr)
 	}
-	log.Infow("Loaded CPU topology artifact", "path", topologyArtifactPath, "coreCount", len(topologyLookup.CPUIndexToCoreKey))
+	log.Infow("Loaded CPU topology artifact", "path", topologyArtifactPath, "isolatedCoreCount", len(topologyLookup.IsolatedCPUIndices))
 
 	// Create components
 	deployer := NewDeploymentManager(db, helmClient, composeClient, balloonPolicy, topologyLookup, log)

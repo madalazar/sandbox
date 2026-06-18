@@ -76,14 +76,12 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 	}
 
 	allocatedIsolated := map[int]string{}
-	allocatedByKey := dm.database.AllocatedCpus(dm.topologyLookup.CPUIndexToCoreKey)
-	for key, indices := range allocatedByKey {
-		if !strings.EqualFold(strings.TrimSpace(key.Type), string(sbi.CpuTypeIsolated)) {
+	allocated := dm.database.AllocatedCpus()
+	for idx, owner := range allocated {
+		if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
 			continue
 		}
-		for idx, owner := range indices {
-			allocatedIsolated[idx] = owner
-		}
+		allocatedIsolated[idx] = owner
 	}
 
 	for requirement, cpus := range inFlightAssignments {
@@ -93,11 +91,7 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		}
 
 		for _, idx := range cpus {
-			coreKey, exists := dm.topologyLookup.CPUIndexToCoreKey[idx]
-			if !exists {
-				continue
-			}
-			if !strings.EqualFold(strings.TrimSpace(coreKey.Type), string(sbi.CpuTypeIsolated)) {
+			if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
 				continue
 			}
 			allocatedIsolated[idx] = owner

@@ -25,6 +25,9 @@ export_cpu_topology_agent_json() {
 	local id
 	for id in "${_TOPO_SORTED_IDS[@]}"; do
 		IFS='|' read -r _arch _class _type <<<"${_TOPO_CORE_META[$id]}"
+		if ! is_isolated_core_type "${_type}"; then
+			continue
+		fi
 		cores_json="$({
 			jq -c \
 				--argjson id "$id" \
