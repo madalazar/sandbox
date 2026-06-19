@@ -3,6 +3,48 @@
 SCRIPT_DIR_CPU_TOPO_AGENT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./cpu-topology.sh
 source "$SCRIPT_DIR_CPU_TOPO_AGENT/cpu-topology.sh"
+# shellcheck source=./cache-topology.sh
+source "$SCRIPT_DIR_CPU_TOPO_AGENT/cache-topology.sh"
+
+# Read cache topology from TSV and build caches JSON array.
+_build_caches_json() {
+	local cache_tsv_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
+	local caches_json='[]'
+
+	if [[ ! -f "$cache_tsv_file" ]]; then
+		echo "$caches_json"
+		return 0
+	fi
+
+	local level id allocation size_kb ways way_size_kb
+	while IFS=$'\t' read -r level id allocation size_kb ways way_size_kb; do
+		# Skip comment lines and incomplete entries
+		[[ "$level" == "#"* ]] && continue
+		[[ -z "$level" || -z "$id" || -z "$size_kb" ]] && continue
+
+		# Strip 'L#' prefix from id and 'KB' suffix from size
+		id="${id#L#}"
+		size_kb="${size_kb%KB}"
+
+		# Validate numeric fields
+		[[ "$id" =~ ^[0-9]+$ ]] || continue
+		[[ "$size_kb" =~ ^[0-9]+$ ]] || continue
+		[[ "$ways" =~ ^[0-9]+$ ]] || continue
+		[[ "$way_size_kb" =~ ^[0-9]+$ ]] || continue
+
+		caches_json="$({
+			jq -c \
+				--arg level "$level" \
+				--arg id "$id" \
+				--arg size_kb "$size_kb" \
+				--arg ways "$ways" \
+				--arg way_size_kb "$way_size_kb" \
+				'. + [{level: $level, id: $id, size_kb: ($size_kb | tonumber), ways: ($ways | tonumber), way_size_kb: ($way_size_kb | tonumber)}]' <<<"$caches_json"
+		} )" || return 1
+	done < "$cache_tsv_file"
+
+	echo "$caches_json"
+}
 
 # Export a deterministic JSON artifact for agent startup.
 # This wrapper owns JSON generation; cpu-topology.sh remains TSV-focused.
@@ -40,12 +82,17 @@ export_cpu_topology_agent_json() {
 	local ts
 	ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 	local base_json='{}'
-	local existing_cores=''
+	local existing_cores='' existing_caches=''
+	
+	local caches_json
+	caches_json="$(_build_caches_json)" || return 1
+	
 	if [[ -s "$out_file" ]] && jq empty "$out_file" >/dev/null 2>&1; then
 		base_json="$(cat "$out_file")"
 		existing_cores="$(jq -c '.cores // []' <<<"$base_json")"
-		if [[ "$existing_cores" == "$cores_json" ]]; then
-			echo "[INFO] CPU topology cores unchanged; skipping artifact update: $out_file"
+		existing_caches="$(jq -c '.caches // []' <<<"$base_json")"
+		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" ]]; then
+			echo "[INFO] CPU topology cores and caches unchanged; skipping artifact update: $out_file"
 			return 0
 		fi
 	fi
@@ -53,7 +100,8 @@ export_cpu_topology_agent_json() {
 	jq \
 		--arg ts "$ts" \
 		--argjson cores "$cores_json" \
-		'.schemaVersion //= "v1" | .generatedAt = $ts | .cores = $cores' \
+		--argjson caches "$caches_json" \
+		'.schemaVersion //= "v1" | .generatedAt = $ts | .cores = $cores | .caches = $caches' \
 		<<<"$base_json" > "$out_file"
 }
 

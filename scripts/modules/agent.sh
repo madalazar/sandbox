@@ -162,7 +162,7 @@ start_device_agent_docker_service() {
     return 1
   fi
 
-  update_capabilities_cpu_from_host || return 1
+  update_capabilities_resources_from_host || return 1
   generate_cpu_topology_agent_artifact || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
@@ -267,7 +267,7 @@ build_start_device_agent_k3s_service() {
     set_capabilities_roles "Standalone Cluster"
     update_agent_sbi_url
 
-    update_capabilities_cpu_from_host || return 1
+    update_capabilities_resources_from_host || return 1
     generate_cpu_topology_agent_artifact || return 1
 
     echo "Copying configuration files..."
