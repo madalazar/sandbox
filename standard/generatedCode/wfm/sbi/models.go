@@ -13,6 +13,20 @@ const (
 	PayloadSignatureScopes = "PayloadSignature.Scopes"
 )
 
+// Defines values for CacheAllocation.
+const (
+	CacheAllocationExclusive CacheAllocation = "exclusive"
+	CacheAllocationShared    CacheAllocation = "shared"
+)
+
+// Defines values for CacheLevel.
+const (
+	L1d CacheLevel = "L1d"
+	L1i CacheLevel = "L1i"
+	L2  CacheLevel = "L2"
+	L3  CacheLevel = "L3"
+)
+
 // Defines values for ComponentStatusState.
 const (
 	ComponentStatusStateFailed     ComponentStatusState = "failed"
@@ -114,6 +128,24 @@ const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
 )
 
+// Cache Cache requirement or capability
+type Cache struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation CacheAllocation `json:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level CacheLevel `json:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size,omitempty"`
+}
+
+// CacheAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type CacheAllocation string
+
+// CacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type CacheLevel string
+
 // ComponentStatus defines model for ComponentStatus.
 type ComponentStatus struct {
 	Error *struct {
@@ -186,7 +218,9 @@ type DeviceCapabilitiesManifest struct {
 		Id          string `json:"id"`
 		ModelNumber string `json:"modelNumber"`
 		Resources   struct {
-			Cpu []struct {
+			// Cache Cache resources available on the device
+			Cache *[]Cache `json:"cache,omitempty"`
+			Cpu   []struct {
 				Architecture *DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture `json:"architecture,omitempty"`
 
 				// Class Core class (P-core, E-core, etc.)
@@ -294,7 +328,7 @@ type AppDeploymentProfile struct {
 	// Components Components of the deployment profile
 	Components []AppDeploymentProfile_Components_Item `json:"components"`
 
-	// RequiredResources Required resources for a deployment profile
+	// RequiredResources Required resources for a deployment profile or component
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 
 	// Type Type of deployment profile
@@ -353,6 +387,9 @@ type ComposeApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+
+	// RequiredResources Required resources for a deployment profile or component
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
 // Cpu CPU requirement for a workload or deployment profile
@@ -396,10 +433,16 @@ type HelmApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+
+	// RequiredResources Required resources for a deployment profile or component
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
-// RequiredResources Required resources for a deployment profile
+// RequiredResources Required resources for a deployment profile or component
 type RequiredResources struct {
+	// Cache Cache requirements for the deployment profile or component
+	Cache *[]Cache `json:"cache,omitempty"`
+
 	// Cpu CPU requirements for the deployment profile
 	Cpu *[]Cpu `json:"cpu,omitempty"`
 

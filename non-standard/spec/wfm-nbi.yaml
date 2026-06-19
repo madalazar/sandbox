@@ -772,6 +772,13 @@ components:
           required:
           - repository
           type: object
+        requiredResources:
+          # x-go-field-tags: 'json:"requiredResources" yaml:"requiredResources"'
+          x-oapi-codegen-extra-tags:
+            json: "requiredResources"
+            yaml: "requiredResources"
+          $ref: '#/components/schemas/RequiredResources'
+          description: Required resources for this component
       required:
       - name
       - properties
@@ -824,6 +831,13 @@ components:
           required:
           - packageLocation
           type: object
+        requiredResources:
+          # x-go-field-tags: 'json:"requiredResources" yaml:"requiredResources"'
+          x-oapi-codegen-extra-tags:
+            json: "requiredResources"
+            yaml: "requiredResources"
+          $ref: '#/components/schemas/RequiredResources'
+          description: Required resources for this component
       required:
       - name
       - properties
@@ -1055,7 +1069,53 @@ components:
             yaml: "storage"
           description: Required storage (e.g., "10Gi")
           type: string
+        cache:
+          # x-go-field-tags: 'json:"cache" yaml:"cache"'
+          x-oapi-codegen-extra-tags:
+            json: "cache"
+            yaml: "cache"
+          type: array
+          items:
+            $ref: '#/components/schemas/Cache'
+          description: Cache requirements
       type: object
+
+    Cache:
+      type: object
+      description: Cache requirement or capability
+      required: [level, allocation]
+      properties:
+        level:
+          # x-go-field-tags: 'json:"level" yaml:"level"'
+          x-oapi-codegen-extra-tags:
+            json: "level"
+            yaml: "level"
+          type: string
+          enum: [L3, L2, L1d, L1i]
+          description: >
+            Cache level.
+            L3 = Level 3 Cache, L2 = Level 2 Cache,
+            L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+        allocation:
+          # x-go-field-tags: 'json:"allocation" yaml:"allocation"'
+          x-oapi-codegen-extra-tags:
+            json: "allocation"
+            yaml: "allocation"
+          type: string
+          enum: [exclusive, shared]
+          description: >
+            Cache allocation type.
+            exclusive = dedicated cache partition (requires hardware CAT support),
+            shared = shared cache access.
+        size:
+          # x-go-field-tags: 'json:"size" yaml:"size"'
+          x-oapi-codegen-extra-tags:
+            json: "size"
+            yaml: "size"
+          type: string
+          description: >
+            Minimum required cache amount. Value is given in binary units
+            (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
 
     Cpu:
       type: object
@@ -1398,6 +1458,9 @@ components:
             wait:
               type: boolean
               description: Wait for the component to be ready
+        requiredResources:
+          $ref: '#/components/schemas/RequiredResources'
+          description: Required resources for this component
 
     ComposeDeploymentProfileComponent:
       type: object
@@ -1423,6 +1486,9 @@ components:
             wait:
               type: boolean
               description: Wait for the component to be ready
+        requiredResources:
+          $ref: '#/components/schemas/RequiredResources'
+          description: Required resources for this component
 
     DeploymentParameterTarget:
       type: object

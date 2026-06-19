@@ -41,6 +41,10 @@ install_tools() {
     log_info "Installing oapi-codegen..."
     # TODO: fix the codegen version
     go install github.com/deepmap/oapi-codegen/cmd/oapi-codegen@latest
+
+    # Add Go bin directory to PATH
+    export PATH="$(go env GOPATH)/bin:$PATH"
+    
     log_success "oapi-codegen installed"
 }
 
