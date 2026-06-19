@@ -333,6 +333,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		if err != nil {
 			return fmt.Errorf("invalid helm component: %v", err)
 		}
+		dm.log.Infow("view of the helm component", "helmComp", pretty.Sprint(helmComp))
 		dm.log.Infow(
 			"deploying app component",
 			"appId",
