@@ -99,6 +99,48 @@ func (e DeviceCapabilitiesManifestKind) Valid() bool {
 	}
 }
 
+// Defines values for DeviceCapabilitiesManifestPropertiesCacheAllocationTypes.
+const (
+	DeviceCapabilitiesManifestPropertiesCacheAllocationTypesExclusive DeviceCapabilitiesManifestPropertiesCacheAllocationTypes = "exclusive"
+	DeviceCapabilitiesManifestPropertiesCacheAllocationTypesShared    DeviceCapabilitiesManifestPropertiesCacheAllocationTypes = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCacheAllocationTypes enum.
+func (e DeviceCapabilitiesManifestPropertiesCacheAllocationTypes) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCacheAllocationTypesExclusive:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheAllocationTypesShared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCacheLevel.
+const (
+	DeviceCapabilitiesManifestPropertiesCacheLevelL1d DeviceCapabilitiesManifestPropertiesCacheLevel = "L1d"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL1i DeviceCapabilitiesManifestPropertiesCacheLevel = "L1i"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL2  DeviceCapabilitiesManifestPropertiesCacheLevel = "L2"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL3  DeviceCapabilitiesManifestPropertiesCacheLevel = "L3"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCacheLevel enum.
+func (e DeviceCapabilitiesManifestPropertiesCacheLevel) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL1d:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL1i:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL2:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceCapabilitiesManifestPropertiesCpusArchitecture.
 const (
 	Amd64 DeviceCapabilitiesManifestPropertiesCpusArchitecture = "amd64"
@@ -270,6 +312,48 @@ func (e AppDeploymentProfileType) Valid() bool {
 	}
 }
 
+// Defines values for CacheAllocation.
+const (
+	CacheAllocationExclusive CacheAllocation = "exclusive"
+	CacheAllocationShared    CacheAllocation = "shared"
+)
+
+// Valid indicates whether the value is a known member of the CacheAllocation enum.
+func (e CacheAllocation) Valid() bool {
+	switch e {
+	case CacheAllocationExclusive:
+		return true
+	case CacheAllocationShared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CacheLevel.
+const (
+	CacheLevelL1d CacheLevel = "L1d"
+	CacheLevelL1i CacheLevel = "L1i"
+	CacheLevelL2  CacheLevel = "L2"
+	CacheLevelL3  CacheLevel = "L3"
+)
+
+// Valid indicates whether the value is a known member of the CacheLevel enum.
+func (e CacheLevel) Valid() bool {
+	switch e {
+	case CacheLevelL1d:
+		return true
+	case CacheLevelL1i:
+		return true
+	case CacheLevelL2:
+		return true
+	case CacheLevelL3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CpuClass.
 const (
 	CpuClassEfficiency  CpuClass = "efficiency"
@@ -396,6 +480,17 @@ type DeviceCapabilitiesManifest struct {
 	ApiVersion string                         `json:"apiVersion"`
 	Kind       DeviceCapabilitiesManifestKind `json:"kind"`
 	Properties struct {
+		// Cache Cache resources available on the device
+		Cache *[]struct {
+			// AllocationTypes Cache allocation types supported by the device. exclusive = device supports dedicated cache partitioning, shared = device supports shared cache access.
+			AllocationTypes []DeviceCapabilitiesManifestPropertiesCacheAllocationTypes `json:"allocationTypes"`
+
+			// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+			Level DeviceCapabilitiesManifestPropertiesCacheLevel `json:"level"`
+
+			// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+			Size string `json:"size"`
+		} `json:"cache,omitempty"`
 		Cpus *[]struct {
 			Architecture *DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
 			Cores        float32                                               `json:"cores"`
@@ -433,6 +528,12 @@ type DeviceCapabilitiesManifest struct {
 
 // DeviceCapabilitiesManifestKind defines model for DeviceCapabilitiesManifest.Kind.
 type DeviceCapabilitiesManifestKind string
+
+// DeviceCapabilitiesManifestPropertiesCacheAllocationTypes defines model for DeviceCapabilitiesManifest.Properties.Cache.AllocationTypes.
+type DeviceCapabilitiesManifestPropertiesCacheAllocationTypes string
+
+// DeviceCapabilitiesManifestPropertiesCacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type DeviceCapabilitiesManifestPropertiesCacheLevel string
 
 // DeviceCapabilitiesManifestPropertiesCpusArchitecture defines model for DeviceCapabilitiesManifest.Properties.Cpus.Architecture.
 type DeviceCapabilitiesManifestPropertiesCpusArchitecture string
@@ -569,6 +670,24 @@ type AppParameterValue struct {
 	Value interface{} `json:"value"`
 }
 
+// Cache Cache requirement or capability
+type Cache struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation CacheAllocation `json:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level CacheLevel `json:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size,omitempty"`
+}
+
+// CacheAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type CacheAllocation string
+
+// CacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type CacheLevel string
+
 // ComposeApplicationDeploymentProfileComponent Compose Application Deployment Profile Component
 type ComposeApplicationDeploymentProfileComponent struct {
 	// Name Name of the component
@@ -637,8 +756,11 @@ type HelmApplicationDeploymentProfileComponent struct {
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
-// RequiredResources Required resources for a deployment profile
+// RequiredResources Required resources for a deployment profile or component
 type RequiredResources struct {
+	// Cache Cache resources available on the device
+	Cache *[]Cache `json:"cache,omitempty"`
+
 	// Cpu CPU requirements for the deployment profile
 	Cpu *[]Cpu `json:"cpu,omitempty"`
 
