@@ -31,8 +31,18 @@ FROM --platform=$BUILDPLATFORM docker:28.3.3-cli AS docker-source
 # Stage 3: Runtime
 FROM alpine:3.18
 
-# Install CA certificates and other essentials
-RUN apk add --no-cache ca-certificates tzdata
+ARG TARGETARCH
+
+# Install runtime tools required by deployment logic
+RUN apk add --no-cache ca-certificates tzdata yq curl \
+    && KUBECTL_VERSION="v1.31.0" \
+    && case "$TARGETARCH" in \
+        amd64) KUBECTL_ARCH="amd64" ;; \
+        arm64) KUBECTL_ARCH="arm64" ;; \
+        *) echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
+       esac \
+    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
 
 WORKDIR /
 

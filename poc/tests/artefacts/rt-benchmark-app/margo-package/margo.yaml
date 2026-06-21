@@ -33,6 +33,11 @@ deploymentProfiles:
           revision: 1.0.0
           wait: false
           timeout: 4h
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 9216Ki
 
       - name: cyclictest
         properties:
@@ -40,6 +45,11 @@ deploymentProfiles:
           revision: 0.1.0
           wait: false
           timeout: 4h
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 20540Ki
 
       - name: stressng
         properties:
@@ -47,6 +57,12 @@ deploymentProfiles:
           revision: 0.1.0
           wait: false
           timeout: 4h
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: shared
+              size: 5000Ki
+      
 
     requiredResources:
       cpu:

@@ -47,6 +47,28 @@ type ParsedBalloonPolicy struct {
 	Name         string
 	Namespace    string
 	BalloonTypes []ParsedBalloonType
+	RDT          ParsedRDTPolicy
+}
+
+type ParsedRDTPolicy struct {
+	Partitions map[string]struct{}
+	Classes    map[string]struct{}
+}
+
+func (p *ParsedBalloonPolicy) HasRDTPartition(name string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.RDT.Partitions[name]
+	return ok
+}
+
+func (p *ParsedBalloonPolicy) HasRDTClass(name string) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.RDT.Classes[name]
+	return ok
 }
 
 type balloonPolicyInformer struct {
@@ -167,6 +189,10 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*ParsedBalloonPolicy, 
 	out := &ParsedBalloonPolicy{
 		Name:      obj.GetName(),
 		Namespace: obj.GetNamespace(),
+		RDT: ParsedRDTPolicy{
+			Partitions: map[string]struct{}{},
+			Classes:    map[string]struct{}{},
+		},
 	}
 
 	if rawTypes, ok := cfg["balloonTypes"].([]interface{}); ok {
@@ -206,6 +232,28 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*ParsedBalloonPolicy, 
 
 			out.BalloonTypes = append(out.BalloonTypes, p)
 		}
+	}
+
+	control, _ := cfg["control"].(map[string]interface{})
+	rdt, _ := control["rdt"].(map[string]interface{})
+	partitions, _ := rdt["partitions"].(map[string]interface{})
+	for partitionName, partitionValue := range partitions {
+		out.RDT.Partitions[partitionName] = struct{}{}
+
+		partitionObj, ok := partitionValue.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		classes, _ := partitionObj["classes"].(map[string]interface{})
+		for className := range classes {
+			out.RDT.Classes[className] = struct{}{}
+		}
+	}
+
+	// Backward-compatible fallback for older layouts where classes were top-level under rdt.
+	legacyClasses, _ := rdt["classes"].(map[string]interface{})
+	for className := range legacyClasses {
+		out.RDT.Classes[className] = struct{}{}
 	}
 
 	return out, nil

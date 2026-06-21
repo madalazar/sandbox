@@ -13,6 +13,7 @@
 
 SCRIPT_DIR_NRI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR_NRI}/cpu-topology.sh"
+source "${SCRIPT_DIR_NRI}/cache-topology.sh"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,6 +57,149 @@ _nri_compact_cpuset() {
   echo "$out"
 }
 
+_nri_expand_range_count() {
+  local range_list="$1"
+  declare -A tmp=()
+  mark_cpu_set_from_range_list "$range_list" tmp
+  echo "${#tmp[@]}"
+}
+
+_nri_extract_available_cpus_from_policy() {
+  local policy_file="$1"
+  [[ -r "$policy_file" ]] || return 1
+
+  local cpu_line
+  cpu_line="$(awk '
+    /^[[:space:]]*availableResources:[[:space:]]*$/ {in_avail=1; next}
+    in_avail && /^[[:space:]]*reservedResources:[[:space:]]*$/ {in_avail=0}
+    in_avail && /^[[:space:]]*cpu:[[:space:]]*/ {
+      print
+      exit
+    }
+  ' "$policy_file" 2>/dev/null || true)"
+
+  [[ -n "$cpu_line" ]] || return 1
+
+  local value
+  value="$(sed -E 's/^[[:space:]]*cpu:[[:space:]]*"?cpuset:([^"[:space:]]+)"?.*$/\1/' <<< "$cpu_line")"
+  [[ -n "$value" && "$value" != "$cpu_line" ]] || return 1
+
+  echo "$value"
+}
+
+_nri_load_l3_membership_from_sysfs() {
+  declare -gA _NRI_L3_TOTAL_CPUS=() _NRI_L3_MEMBER=()
+  declare -A _nri_l3_shared_to_id=()
+  local _nri_next_l3_id=0
+
+  local cpu_path index_path
+  for cpu_path in /sys/devices/system/cpu/cpu[0-9]*; do
+    [[ -d "$cpu_path" ]] || continue
+    for index_path in "$cpu_path"/cache/index*; do
+      [[ -d "$index_path" ]] || continue
+
+      local level_num shared_list l3_id
+      level_num="$(cat "$index_path/level" 2>/dev/null || true)"
+      [[ "$level_num" == "3" ]] || continue
+
+      shared_list="$(tr -d '[:space:]' < "$index_path/shared_cpu_list" 2>/dev/null || true)"
+      [[ -n "$shared_list" ]] || continue
+
+      l3_id=""
+      if [[ -r "$index_path/id" ]]; then
+        l3_id="$(tr -d '[:space:]' < "$index_path/id" 2>/dev/null || true)"
+      fi
+      if [[ ! "$l3_id" =~ ^[0-9]+$ ]]; then
+        if [[ -n "${_nri_l3_shared_to_id[$shared_list]:-}" ]]; then
+          l3_id="${_nri_l3_shared_to_id[$shared_list]}"
+        else
+          l3_id="$_nri_next_l3_id"
+          _nri_l3_shared_to_id["$shared_list"]="$l3_id"
+          _nri_next_l3_id=$((_nri_next_l3_id + 1))
+        fi
+      fi
+
+      local member
+      declare -A local_set=()
+      mark_cpu_set_from_range_list "$shared_list" local_set
+      _NRI_L3_TOTAL_CPUS["$l3_id"]="${#local_set[@]}"
+
+      for member in "${!local_set[@]}"; do
+        _NRI_L3_MEMBER["${l3_id}|${member}"]=1
+      done
+    done
+  done
+
+  [[ ${#_NRI_L3_TOTAL_CPUS[@]} -gt 0 ]]
+}
+
+_nri_load_l3_ways_from_cache_file() {
+  local cache_file="$1"
+  declare -gA _NRI_L3_WAYS=()
+
+  [[ -r "$cache_file" ]] || return 1
+
+  local level cache_id allocation size ways way_size
+  while IFS=$'\t' read -r level cache_id allocation size ways way_size; do
+    [[ -n "$level" ]] || continue
+    [[ "$level" =~ ^# ]] && continue
+    [[ "$level" == "L3" ]] || continue
+    [[ "$cache_id" =~ ^L#([0-9]+)$ ]] || continue
+    local l3_id="${BASH_REMATCH[1]}"
+    [[ "$ways" =~ ^[0-9]+$ ]] || continue
+    (( ways > 0 )) || continue
+    _NRI_L3_WAYS["$l3_id"]="$ways"
+  done < "$cache_file"
+
+  [[ ${#_NRI_L3_WAYS[@]} -gt 0 ]]
+}
+
+_nri_range_to_bitmask() {
+  local start="$1"
+  local end="$2"
+
+  if (( start > end )); then
+    return 1
+  fi
+
+  local mask=0
+  local i
+  for (( i = start; i <= end; i++ )); do
+    mask=$(( mask | (1 << i) ))
+  done
+
+  printf '0x%x' "$mask"
+}
+
+_nri_format_way_range() {
+  local start="$1"
+  local end="$2"
+
+  _nri_range_to_bitmask "$start" "$end"
+}
+
+_nri_build_rdt_control_yaml() {
+  local available_range="$1"
+  local cache_file="$2"
+
+  # This function now generates a minimal RDT configuration with fullCache: null
+  # to override default chart values and allow dynamic partition creation.
+
+  local rdt_yaml=""
+  rdt_yaml+="  control:"$'\n'
+  rdt_yaml+="    rdt:"$'\n'
+  rdt_yaml+="      enable: true"$'\n'
+  rdt_yaml+="      usePodQoSAsDefaultClass: false"$'\n'
+  rdt_yaml+="      options:"$'\n'
+  rdt_yaml+="        l3:"$'\n'
+  rdt_yaml+="          optional: true"$'\n'
+  rdt_yaml+="      partitions:"$'\n'
+  rdt_yaml+="        fullCache: null"$'\n'
+
+  printf '%s' "$rdt_yaml"
+  return 0
+}
+
 
 # ---------------------------------------------------------------------------
 # generate_default_nri_policy
@@ -80,10 +224,23 @@ _nri_compact_cpuset() {
 #   cache_file:     topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
 # ---------------------------------------------------------------------------
 generate_default_nri_policy() {
+  # TODO: these cores should be all non-virtualized core. I think for 
+  # this host we have 0-60, 120-180 which are the physical cores and
+  # the other are the hyperthreading sylings
   local available_cpus_range="${1:-0-119}"
   local reserved_cpus_range="${2:-0,100,105}"
   local output_file="${3:-$HOME/sandbox/balloon-policy.yaml}"
   local cache_file="${4:-$CPU_TOPOLOGY_CACHE_FILE}"
+
+  # If available range is not explicitly provided and the policy file exists,
+  # reuse availableResources.cpu from that file.
+  if [[ -z "${1:-}" && -f "$output_file" ]]; then
+    local extracted_available=""
+    extracted_available="$(_nri_extract_available_cpus_from_policy "$output_file" || true)"
+    [[ -n "$extracted_available" ]] && available_cpus_range="$extracted_available"
+  fi
+
+  local cache_topology_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
 
   mkdir -p "$(dirname "$output_file")"
 
@@ -160,6 +317,12 @@ generate_default_nri_policy() {
   local available_cpuset="cpuset:${available_cpus_range}"
   local reserved_cpuset="cpuset:${reserved_cpus_range}"
 
+  # Build RDT control block only if cache topology data is available and usable.
+  local rdt_control_yaml=""
+  if [[ -s "$cache_topology_file" ]]; then
+    rdt_control_yaml="$(_nri_build_rdt_control_yaml "$available_cpus_range" "$cache_topology_file" 2>/dev/null || true)"
+  fi
+
   # Emit YAML
   {
     cat <<'HEADER'
@@ -211,6 +374,10 @@ PREAMBLE
     # Shared cores will use NRI's default balloon
 NO_BALLOONS
     fi
+
+    if [[ -n "$rdt_control_yaml" ]]; then
+      printf '%s\n' "$rdt_control_yaml"
+    fi
   } > "$output_file"
 
   local isolated_count="${#balloon_blocks[@]}"
@@ -219,6 +386,11 @@ NO_BALLOONS
   echo "[INFO] Reserved CPUs: ${reserved_cpuset}"
   echo "[INFO] Isolated balloons generated: ${isolated_count}"
   echo "[INFO] Shared cores will use NRI default balloon"
+  if [[ -n "$rdt_control_yaml" ]]; then
+    echo "[INFO] RDT control/partitions generated from cache topology: $cache_topology_file"
+  else
+    echo "[INFO] RDT control/partitions skipped (no usable cache topology at $cache_topology_file)"
+  fi
 }
 
 

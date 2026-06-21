@@ -424,6 +424,7 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 		return nil, fmt.Errorf("failed to parse deployment: %w", err)
 	}
 	ss.logDeploymentProfileCPURequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile.RequiredResources)
+	ss.logDeploymentComponentCacheRequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile.Components)
 
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
@@ -635,9 +636,87 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		}
 
 		ss.logDeploymentProfileCPURequirements(deploymentId, deployment.Spec.DeploymentProfile.RequiredResources)
+		ss.logDeploymentComponentCacheRequirements(deploymentId, deployment.Spec.DeploymentProfile.Components)
 
 		// Store deployment
 		ss.storeDeployment(deploymentId, deploymentRef, &deployment)
+	}
+}
+
+func (ss *StateSyncer) logDeploymentComponentCacheRequirements(
+	deploymentID string,
+	components []sbi.AppDeploymentProfile_Components_Item,
+) {
+	ss.log.Debugw("Entered logDeploymentComponentCacheRequirements",
+		"deploymentId", deploymentID,
+		"componentCount", len(components))
+
+	if len(components) == 0 {
+		ss.log.Debugw("No components found when logging component-level cache requirements",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	for componentIndex, component := range components {
+		if helmComp, err := component.AsHelmApplicationDeploymentProfileComponent(); err == nil {
+			ss.logComponentCacheRequirements(
+				deploymentID,
+				componentIndex,
+				helmComp.Name,
+				helmComp.RequiredResources,
+				"helm",
+			)
+			continue
+		}
+
+		if composeComp, err := component.AsComposeApplicationDeploymentProfileComponent(); err == nil {
+			ss.logComponentCacheRequirements(
+				deploymentID,
+				componentIndex,
+				composeComp.Name,
+				composeComp.RequiredResources,
+				"compose",
+			)
+			continue
+		}
+
+		ss.log.Warnw("Unable to decode deployment component while logging cache requirements",
+			"deploymentId", deploymentID,
+			"componentIndex", componentIndex)
+	}
+}
+
+func (ss *StateSyncer) logComponentCacheRequirements(
+	deploymentID string,
+	componentIndex int,
+	componentName string,
+	requiredResources *sbi.RequiredResources,
+	componentType string,
+) {
+	if requiredResources == nil || requiredResources.Cache == nil || len(*requiredResources.Cache) == 0 {
+		ss.log.Debugw("No component-level cache requirements found in typed deployment component",
+			"deploymentId", deploymentID,
+			"componentIndex", componentIndex,
+			"componentName", componentName,
+			"componentType", componentType)
+		return
+	}
+
+	for cacheIndex, cacheReq := range *requiredResources.Cache {
+		size := ""
+		if cacheReq.Size != nil {
+			size = *cacheReq.Size
+		}
+
+		ss.log.Infow("Parsed deployment component cache requirement from typed profile",
+			"deploymentId", deploymentID,
+			"componentIndex", componentIndex,
+			"componentType", componentType,
+			"componentName", componentName,
+			"cacheIndex", cacheIndex,
+			"level", cacheReq.Level,
+			"allocation", cacheReq.Allocation,
+			"size", size)
 	}
 }
 

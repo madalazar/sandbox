@@ -368,11 +368,28 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		podAnnotations, componentAssignments, hasNriAnnotations, err := dm.resolveComponentBalloonAnnotations(
+		podAnnotations, componentAssignments, hasCPUAnnotations, err := dm.resolveComponentBalloonAnnotations(
 			deploymentId, helmComp.Name, appDeployment.Spec.DeploymentProfile.RequiredResources, assignments)
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
+
+		dm.log.Infow("calling resolveComponentCacheAnnotations", "appId", deploymentId)
+		cacheAnnotations, hasCacheAnnotations, err := dm.resolveComponentCacheAnnotations(
+			ctx,
+			deploymentId,
+			helmComp.Name,
+			helmComp.RequiredResources,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to resolve cache annotations for component %s: %w", helmComp.Name, err)
+		}
+
+		dm.log.Infow("found the following cache annotations: ", "appId", deploymentId, "componentName", helmComp.Name, "cacheAnnotations", cacheAnnotations)
+		for key, value := range cacheAnnotations {
+			podAnnotations[key] = value
+		}
+		hasNriAnnotations := hasCPUAnnotations || hasCacheAnnotations
 
 		for requirementName, cpus := range componentAssignments {
 			copied := make([]int, len(cpus))
