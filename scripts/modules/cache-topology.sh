@@ -8,11 +8,25 @@
 #
 # Globals populated by read_cache_topology:
 #   _CACHE_TOPOLOGY_COUNTS[level|id|size_kb]=count
+#   _CACHE_TOPOLOGY_CORES[level|id|size_kb]=cores range list (e.g. 1-5,7-10)
 
 [[ -n "${_CACHE_TOPOLOGY_LOADED:-}" ]] && return 0
 export _CACHE_TOPOLOGY_LOADED=1
 
 CACHE_TOPOLOGY_CACHE_FILE="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
+CACHE_TOPOLOGY_DEBUG="${CACHE_TOPOLOGY_DEBUG:-0}"
+
+_cache_topology_debug_enabled() {
+  case "${CACHE_TOPOLOGY_DEBUG,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_cache_topology_debug() {
+  _cache_topology_debug_enabled || return 0
+  echo "[DEBUG][cache-topology] $*" >&2
+}
 
 # Return 0 if host looks Intel and advertises RDT-related CPU flags.
 is_intel_rdt_capable_host() {
@@ -74,7 +88,7 @@ print_intel_rdt_enable_instructions() {
 _cache_size_token_to_kb() {
   local raw="$1"
   local value unit
-  if [[ "$raw" =~ ^([0-9]+)([[:space:]]*)([KMG]i?B|B)$ ]]; then
+  if [[ "$raw" =~ ^([0-9]+)([[:space:]]*)([KMG]i?B|[KMG]B|[KMG]|B)$ ]]; then
     value="${BASH_REMATCH[1]}"
     unit="${BASH_REMATCH[3]}"
   else
@@ -83,9 +97,9 @@ _cache_size_token_to_kb() {
   fi
 
   case "$unit" in
-    KB|KiB) echo "$value" ;;
-    MB|MiB) echo "$(( value * 1024 ))" ;;
-    GB|GiB) echo "$(( value * 1024 * 1024 ))" ;;
+    K|KB|KiB) echo "$value" ;;
+    M|MB|MiB) echo "$(( value * 1024 ))" ;;
+    G|GB|GiB) echo "$(( value * 1024 * 1024 ))" ;;
     B)
       if (( value == 0 )); then echo "0"; else echo "$(( (value + 1023) / 1024 ))"; fi
       ;;
@@ -107,7 +121,8 @@ _collect_cache_instances_from_lstopo() {
       size_token="${BASH_REMATCH[2]}"
       size_kb="$(_cache_size_token_to_kb "$size_token")"
       if [[ "$size_kb" =~ ^[0-9]+$ ]] && (( size_kb > 0 )); then
-        echo -e "L3\t${cache_id}\t${size_kb}"
+        # lstopo text output does not reliably provide range-form core lists.
+        echo -e "L3\t${cache_id}\t${size_kb}\t"
         found=1
       fi
     fi
@@ -120,17 +135,19 @@ _collect_cache_instances_from_sysfs() {
   local cpu_path index_path
   declare -A seen=()
   local instance_index=0
+  local emitted=0
 
   for cpu_path in /sys/devices/system/cpu/cpu[0-9]*; do
     [[ -d "$cpu_path" ]] || continue
     for index_path in "$cpu_path"/cache/index*; do
       [[ -d "$index_path" ]] || continue
 
-      local level_num cache_type size_raw shared_list level_name size_kb uniq
+      local level_num cache_type size_raw shared_list level_name size_kb uniq cache_id_raw cache_id
       level_num="$(cat "$index_path/level" 2>/dev/null || true)"
       cache_type="$(cat "$index_path/type" 2>/dev/null || true)"
       size_raw="$(cat "$index_path/size" 2>/dev/null || true)"
       shared_list="$(tr -d '[:space:]' < "$index_path/shared_cpu_list" 2>/dev/null || true)"
+      cache_id_raw="$(cat "$index_path/id" 2>/dev/null || true)"
 
       case "$level_num:$cache_type" in
         3:*)          level_name="L3" ;;
@@ -141,36 +158,59 @@ _collect_cache_instances_from_sysfs() {
       [[ "$size_kb" =~ ^[0-9]+$ ]] || continue
       (( size_kb > 0 )) || continue
 
-      uniq="${level_name}|${size_kb}|${shared_list}"
+      if [[ "$cache_id_raw" =~ ^[0-9]+$ ]]; then
+        cache_id="L#${cache_id_raw}"
+      else
+        cache_id="L#${instance_index}"
+      fi
+
+      [[ -n "$shared_list" ]] || continue
+
+      uniq="${level_name}|${cache_id}|${size_kb}|${shared_list}"
       if [[ -z "${seen[$uniq]:-}" ]]; then
         seen["$uniq"]=1
-        echo -e "${level_name}\tL#${instance_index}\t${size_kb}"
+        echo -e "${level_name}\t${cache_id}\t${size_kb}\t${shared_list}"
+        _cache_topology_debug "sysfs discovered cache level=${level_name} id=${cache_id} size_kb=${size_kb} cores=${shared_list}"
+        emitted=$((emitted + 1))
         instance_index=$((instance_index + 1))
       fi
     done
   done
+
+  _cache_topology_debug "sysfs discovery emitted ${emitted} unique L3 cache entries"
 }
 
 # Populate _CACHE_TOPOLOGY_COUNTS with key level|size_kb and integer count.
 read_cache_topology() {
   declare -gA _CACHE_TOPOLOGY_COUNTS=()
+  declare -gA _CACHE_TOPOLOGY_CORES=()
 
   local raw_instances=""
-  if raw_instances="$(_collect_cache_instances_from_lstopo 2>/dev/null)"; then
-    :
+  # Prefer sysfs for core range mapping (shared_cpu_list already in range format).
+  if raw_instances="$(_collect_cache_instances_from_sysfs 2>/dev/null)"; then
+    _cache_topology_debug "using sysfs cache discovery"
   else
-    raw_instances="$(_collect_cache_instances_from_sysfs 2>/dev/null || true)"
+    _cache_topology_debug "sysfs cache discovery failed, falling back to lstopo"
+    raw_instances="$(_collect_cache_instances_from_lstopo 2>/dev/null || true)"
   fi
 
   [[ -n "$raw_instances" ]] || return 1
 
-  local level cache_id size_kb
-  while IFS=$'\t' read -r level cache_id size_kb; do
+  local raw_count=0
+  raw_count="$(printf '%s\n' "$raw_instances" | awk 'NF>0{count++} END{print count+0}')"
+  _cache_topology_debug "raw cache discovery produced ${raw_count} rows"
+
+  local level cache_id size_kb cores
+  while IFS=$'\t' read -r level cache_id size_kb cores; do
     [[ "$level" == "L3" ]] || continue
     [[ "$cache_id" =~ ^L#[0-9]+$ ]] || continue
     [[ "$size_kb" =~ ^[0-9]+$ ]] || continue
     local key="${level}|${cache_id}|${size_kb}"
     _CACHE_TOPOLOGY_COUNTS["$key"]=$(( ${_CACHE_TOPOLOGY_COUNTS["$key"]:-0} + 1 ))
+    if [[ -n "$cores" ]]; then
+      _CACHE_TOPOLOGY_CORES["$key"]="$cores"
+    fi
+    _cache_topology_debug "parsed cache key=${key} cores=${cores:-<empty>}"
   done <<< "$raw_instances"
 
   # Populate _CACHE_TOPOLOGY_WAYS if resctrl is available
@@ -271,6 +311,11 @@ build_cache_topology_cache() {
   local output_file="${1:-$CACHE_TOPOLOGY_CACHE_FILE}"
   mkdir -p "$(dirname "$output_file")"
 
+  _cache_topology_debug "writing cache topology to ${output_file}"
+  if [[ -e "$output_file" && ! -w "$output_file" ]]; then
+    _cache_topology_debug "output path exists but is not writable: ${output_file}"
+  fi
+
   local keys_sorted
   keys_sorted="$(printf '%s\n' "${!_CACHE_TOPOLOGY_COUNTS[@]}" | awk -F'|' '
     {
@@ -280,9 +325,9 @@ build_cache_topology_cache() {
     }
   ' | sort -t'|' -k1,1n -k3,3n -k4,4n)"
 
-  {
+  if ! {
     echo "# cache-topology cache — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ') by $(uname -n)"
-    printf '# %s\t%s\t%s\t%s\t%s\t%s\n' "level" "id" "allocation" "size" "ways" "way_size_kb"
+    printf '# %s\t%s\t%s\t%s\t%s\t%s\t%s\n' "level" "id" "allocation" "size" "ways" "way_size_kb" "cores"
 
     local line ord level cache_id size_kb count allocation modes i
     while IFS= read -r line; do
@@ -295,15 +340,23 @@ build_cache_topology_cache() {
 
       local ways="${_CACHE_TOPOLOGY_WAYS["$key"]:-0}"
       local way_size="${_CACHE_TOPOLOGY_WAY_SIZE["$key"]:-0}"
+      local cores="${_CACHE_TOPOLOGY_CORES["$key"]:-}"
 
       modes="$(get_cache_allocation_modes_for_level "$level")"
       for allocation in $modes; do
         for ((i = 0; i < count; i++)); do
-          printf '%s\t%s\t%s\t%sKB\t%s\t%s\n' "$level" "$cache_id" "$allocation" "$size_kb" "$ways" "$way_size"
+          printf '%s\t%s\t%s\t%sKB\t%s\t%s\t%s\n' "$level" "$cache_id" "$allocation" "$size_kb" "$ways" "$way_size" "$cores"
         done
       done
     done <<< "$keys_sorted"
-  } > "$output_file"
+  } > "$output_file"; then
+    echo "[ERROR] Failed to write cache topology cache: $output_file" >&2
+    return 1
+  fi
+
+  local written_lines=0
+  written_lines="$(wc -l < "$output_file" 2>/dev/null || echo 0)"
+  _cache_topology_debug "wrote ${written_lines} lines to ${output_file}"
 
   echo "[INFO] Cache topology cached: $output_file"
 }

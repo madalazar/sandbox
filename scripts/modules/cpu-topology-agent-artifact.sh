@@ -16,8 +16,8 @@ _build_caches_json() {
 		return 0
 	fi
 
-	local level id allocation size_kb ways way_size_kb
-	while IFS=$'\t' read -r level id allocation size_kb ways way_size_kb; do
+	local level id allocation size_kb ways way_size_kb cores
+	while IFS=$'\t' read -r level id allocation size_kb ways way_size_kb cores; do
 		# Skip comment lines and incomplete entries
 		[[ "$level" == "#"* ]] && continue
 		[[ -z "$level" || -z "$id" || -z "$size_kb" ]] && continue
@@ -39,7 +39,8 @@ _build_caches_json() {
 				--arg size_kb "$size_kb" \
 				--arg ways "$ways" \
 				--arg way_size_kb "$way_size_kb" \
-				'. + [{level: $level, id: $id, size_kb: ($size_kb | tonumber), ways: ($ways | tonumber), way_size_kb: ($way_size_kb | tonumber)}]' <<<"$caches_json"
+				--arg cores "$cores" \
+				'. + [{level: $level, id: $id, size_kb: ($size_kb | tonumber), ways: ($ways | tonumber), way_size_kb: ($way_size_kb | tonumber), cores: $cores}]' <<<"$caches_json"
 		} )" || return 1
 	done < "$cache_tsv_file"
 
@@ -108,12 +109,38 @@ export_cpu_topology_agent_json() {
 generate_cpu_topology_agent_artifact() {
 	local default_output_path="${HOME}/sandbox/poc/device/agent/config/cpu-topology-agent.json"
 	local output_path="${1:-$default_output_path}"
+	local cache_tsv_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
+	local generated_tmp_cache=""
 
 	echo "Generating CPU topology artifact for device agent..."
+	if [[ -e "$cache_tsv_file" && ! -w "$cache_tsv_file" ]]; then
+		generated_tmp_cache="$(mktemp "${TMPDIR:-/tmp}/cache-topology-XXXXXX.tsv")" || {
+			echo "❌ Failed to allocate writable cache topology file"
+			return 1
+		}
+		cache_tsv_file="$generated_tmp_cache"
+		echo "[WARN] Default cache topology file is not writable; using temporary file: $cache_tsv_file"
+	fi
+
+	CACHE_TOPOLOGY_CACHE_FILE="$cache_tsv_file"
+	if ! build_cache_topology_cache "$cache_tsv_file"; then
+		echo "❌ Failed to refresh cache topology cache: $cache_tsv_file"
+		if [[ -n "$generated_tmp_cache" ]]; then
+			rm -f "$generated_tmp_cache"
+		fi
+		return 1
+	fi
 	read_cpu_topology_cache
 	if ! export_cpu_topology_agent_json "$output_path"; then
 		echo "❌ Failed to generate CPU topology artifact: $output_path"
+		if [[ -n "$generated_tmp_cache" ]]; then
+			rm -f "$generated_tmp_cache"
+		fi
 		return 1
+	fi
+
+	if [[ -n "$generated_tmp_cache" ]]; then
+		rm -f "$generated_tmp_cache"
 	fi
 
 	echo "✅ CPU topology artifact generated: $output_path"

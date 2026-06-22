@@ -381,6 +381,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			deploymentId,
 			helmComp.Name,
 			helmComp.RequiredResources,
+			componentAssignments,
 			cacheAssignments,
 		)
 		if err != nil {

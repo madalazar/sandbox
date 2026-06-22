@@ -25,6 +25,7 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	deploymentID string,
 	componentName string,
 	requiredResources *sbi.RequiredResources,
+	componentCPUAssignments map[string][]int,
 	inFlightAssignments map[string][]database.CacheAssignment,
 ) (map[string]string, map[string][]database.CacheAssignment, bool, error) {
 	annotations := map[string]string{}
@@ -63,9 +64,18 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	}
 
 	allAllocations := dm.database.AllocatedCaches()
+	candidateCaches := dm.topologyLookup.L3Caches
+	assignedCPUs := uniqueAssignedCPUs(componentCPUAssignments)
+	if len(assignedCPUs) > 0 {
+		mappedCaches, mapErr := dm.filterL3CachesByAssignedCPUs(assignedCPUs)
+		if mapErr != nil {
+			return annotations, componentAssignments, false, fmt.Errorf("component %q could not map assigned CPUs to L3 cache IDs: %w", componentName, mapErr)
+		}
+		candidateCaches = mappedCaches
+	}
 
 	selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
-		dm.topologyLookup.L3Caches,
+		candidateCaches,
 		allAllocations,
 		inFlightAssignments,
 		deploymentID,
@@ -133,6 +143,7 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	annotations[rdtClassAnnotationKey] = className
 	dm.log.Infow("Resolved exclusive L3 cache to RDT class",
 		"componentName", componentName,
+		"assignedCPUs", assignedCPUs,
 		"className", className,
 		"cacheID", selectedCache.ID,
 		"requiredKi", requiredKi,
@@ -143,6 +154,66 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	)
 
 	return annotations, componentAssignments, true, nil
+}
+
+func uniqueAssignedCPUs(componentCPUAssignments map[string][]int) []int {
+	if len(componentCPUAssignments) == 0 {
+		return nil
+	}
+
+	seen := map[int]struct{}{}
+	out := make([]int, 0)
+	for _, cpuIndices := range componentCPUAssignments {
+		for _, cpuIdx := range cpuIndices {
+			if cpuIdx < 0 {
+				continue
+			}
+			if _, exists := seen[cpuIdx]; exists {
+				continue
+			}
+			seen[cpuIdx] = struct{}{}
+			out = append(out, cpuIdx)
+		}
+	}
+
+	sort.Ints(out)
+	return out
+}
+
+func (dm *DeploymentManager) filterL3CachesByAssignedCPUs(assignedCPUs []int) ([]device.TopologyCacheInfo, error) {
+	if len(assignedCPUs) == 0 {
+		return dm.topologyLookup.L3Caches, nil
+	}
+
+	assignedSet := map[int]struct{}{}
+	for _, cpuIdx := range assignedCPUs {
+		assignedSet[cpuIdx] = struct{}{}
+	}
+
+	candidates := make([]device.TopologyCacheInfo, 0)
+	for _, cache := range dm.topologyLookup.L3Caches {
+		cacheCores, err := device.ParseCPUCoreRangeList(cache.Cores)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cores range %q for cache ID %q: %w", cache.Cores, cache.ID, err)
+		}
+		if len(cacheCores) == 0 {
+			continue
+		}
+
+		for _, cacheCPU := range cacheCores {
+			if _, ok := assignedSet[cacheCPU]; !ok {
+				continue
+			}
+			candidates = append(candidates, cache)
+			break
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no L3 cache from topology matches assigned CPUs %v", assignedCPUs)
+	}
+
+	return candidates, nil
 }
 
 type wayInterval struct {

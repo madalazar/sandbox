@@ -28,7 +28,7 @@ type TopologyCacheInfo struct {
 	SizeKB    int64  `json:"size_kb"`
 	Ways      int64  `json:"ways"`
 	WaySizeKB int64  `json:"way_size_kb"`
-	Cores     []int  `json:"cores"`
+	Cores     string `json:"cores"`
 }
 
 type topologyArtifact struct {
@@ -117,6 +117,7 @@ func ReadCacheInfoFromAgentArtifact(path string) ([]TopologyCacheInfo, error) {
 	for _, cache := range artifact.Caches {
 		cache.Level = strings.TrimSpace(cache.Level)
 		cache.ID = strings.TrimSpace(cache.ID)
+		cache.Cores = strings.TrimSpace(cache.Cores)
 		if !strings.EqualFold(cache.Level, "L3") {
 			continue
 		}
@@ -151,4 +152,66 @@ func LoadCPUIndicesFromTopologyArtifact(path string) (TopologyLookup, error) {
 	lookup := CPUIndicesFromCoreInfo(cores)
 	lookup.L3Caches = caches
 	return lookup, nil
+}
+
+func ParseCPUCoreRangeList(raw string) ([]int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	seen := map[int]struct{}{}
+	out := make([]int, 0)
+
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" {
+			continue
+		}
+
+		if strings.Contains(token, "-") {
+			rangeParts := strings.Split(token, "-")
+			if len(rangeParts) != 2 {
+				return nil, fmt.Errorf("invalid CPU core range token %q", token)
+			}
+
+			start, err := strconv.Atoi(strings.TrimSpace(rangeParts[0]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid CPU core range start %q: %w", token, err)
+			}
+			end, err := strconv.Atoi(strings.TrimSpace(rangeParts[1]))
+			if err != nil {
+				return nil, fmt.Errorf("invalid CPU core range end %q: %w", token, err)
+			}
+			if start < 0 || end < 0 || start > end {
+				return nil, fmt.Errorf("invalid CPU core range %q", token)
+			}
+
+			for idx := start; idx <= end; idx++ {
+				if _, exists := seen[idx]; exists {
+					continue
+				}
+				seen[idx] = struct{}{}
+				out = append(out, idx)
+			}
+			continue
+		}
+
+		idx, err := strconv.Atoi(token)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CPU core token %q: %w", token, err)
+		}
+		if idx < 0 {
+			return nil, fmt.Errorf("invalid negative CPU core index %d", idx)
+		}
+		if _, exists := seen[idx]; exists {
+			continue
+		}
+		seen[idx] = struct{}{}
+		out = append(out, idx)
+	}
+
+	sort.Ints(out)
+	return out, nil
 }
