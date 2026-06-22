@@ -28,6 +28,7 @@ type TopologyCacheInfo struct {
 	SizeKB    int64  `json:"size_kb"`
 	Ways      int64  `json:"ways"`
 	WaySizeKB int64  `json:"way_size_kb"`
+	Cores     []int  `json:"cores"`
 }
 
 type topologyArtifact struct {

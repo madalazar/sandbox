@@ -8,10 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/device"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
@@ -22,16 +25,18 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	deploymentID string,
 	componentName string,
 	requiredResources *sbi.RequiredResources,
-) (map[string]string, bool, error) {
+	inFlightAssignments map[string][]database.CacheAssignment,
+) (map[string]string, map[string][]database.CacheAssignment, bool, error) {
 	annotations := map[string]string{}
+	componentAssignments := map[string][]database.CacheAssignment{}
 	if requiredResources == nil || requiredResources.Cache == nil || len(*requiredResources.Cache) == 0 {
-		return annotations, false, nil
+		return annotations, componentAssignments, false, nil
 	}
 
 	exclusiveReqs := make([]sbi.Cache, 0)
 	for _, cacheReq := range *requiredResources.Cache {
 		if cacheReq.Level != sbi.L3 {
-			return annotations, false, fmt.Errorf("component %q requests unsupported cache level %q (only L3 is supported)", componentName, cacheReq.Level)
+			return annotations, componentAssignments, false, fmt.Errorf("component %q requests unsupported cache level %q (only L3 is supported)", componentName, cacheReq.Level)
 		}
 
 		if cacheReq.Allocation == sbi.CacheAllocationExclusive {
@@ -41,49 +46,242 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 
 	if len(exclusiveReqs) == 0 {
 		dm.log.Infow("Component uses shared L3 cache only; skipping RDT class allocation", "componentName", componentName)
-		return annotations, false, nil
+		return annotations, componentAssignments, false, nil
 	}
 
 	if len(exclusiveReqs) > 1 {
-		return annotations, false, fmt.Errorf("component %q has %d exclusive cache requests; only one exclusive L3 request per component is supported", componentName, len(exclusiveReqs))
+		return annotations, componentAssignments, false, fmt.Errorf("component %q has %d exclusive cache requests; only one exclusive L3 request per component is supported", componentName, len(exclusiveReqs))
 	}
 
 	if len(dm.topologyLookup.L3Caches) == 0 {
-		return annotations, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
+		return annotations, componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
 	}
 
-	// TODO: pick the first cache you find for now
-	selectedCache := dm.topologyLookup.L3Caches[0]
 	requiredKi, err := parseBinarySizeKi(exclusiveReqs[0].Size)
 	if err != nil {
-		return annotations, false, fmt.Errorf("component %q has invalid cache size: %w", componentName, err)
+		return annotations, componentAssignments, false, fmt.Errorf("component %q has invalid cache size: %w", componentName, err)
 	}
 
-	neededWays := int64(math.Ceil(float64(requiredKi) / float64(selectedCache.WaySizeKB)))
-	if neededWays <= 0 {
-		return annotations, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
-	}
-	if neededWays > selectedCache.Ways {
-		return annotations, false, fmt.Errorf("component %q requests %d KiB cache requiring %d ways, but cache %s has only %d ways", componentName, requiredKi, neededWays, selectedCache.ID, selectedCache.Ways)
-	}
+	allAllocations := dm.database.AllocatedCaches()
 
-	wayMask, err := contiguousWayMaskHex(neededWays)
+	selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
+		dm.topologyLookup.L3Caches,
+		allAllocations,
+		inFlightAssignments,
+		deploymentID,
+		requiredKi,
+	)
 	if err != nil {
-		return annotations, false, err
+		return annotations, componentAssignments, false, fmt.Errorf("component %q cache allocation failed: %w", componentName, err)
+	}
+
+	if neededWays <= 0 {
+		return annotations, componentAssignments, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
+	}
+
+	wayMask, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
+	if err != nil {
+		return annotations, componentAssignments, false, err
+	}
+
+	partitionMasks, err := dm.buildPartitionMasksForAllCaches(
+		deploymentID,
+		selectedCache.ID,
+		wayMask,
+		inFlightAssignments,
+	)
+	if err != nil {
+		return annotations, componentAssignments, false, err
 	}
 
 	className := componentName + "_class"
-	if err := dm.updateBalloonPolicyRDTWithYQ(ctx, deploymentID, componentName, className, selectedCache.ID, wayMask); err != nil {
-		return annotations, false, err
+	if err := dm.updateBalloonPolicyRDTWithYQ(ctx, deploymentID, componentName, className, selectedCache.ID, partitionMasks); err != nil {
+		return annotations, componentAssignments, false, err
 	}
 	if err := dm.waitForRDTPolicyUpdate(ctx, componentName, className); err != nil {
-		return annotations, false, err
+		return annotations, componentAssignments, false, err
+	}
+
+	requirementName := componentName
+	componentAssignments[requirementName] = append(componentAssignments[requirementName], database.CacheAssignment{
+		ComponentName: componentName,
+		Level:         selectedCache.Level,
+		CacheID:       selectedCache.ID,
+		SizeKB:        requiredKi,
+		Mask:          wayMask,
+	})
+
+	for cacheID, mask := range partitionMasks {
+		if cacheID == selectedCache.ID {
+			continue
+		}
+
+		cacheInfo, ok := dm.findL3CacheByID(cacheID)
+		if !ok {
+			continue
+		}
+
+		componentAssignments[requirementName] = append(componentAssignments[requirementName], database.CacheAssignment{
+			ComponentName: componentName,
+			Level:         cacheInfo.Level,
+			CacheID:       cacheID,
+			SizeKB:        cacheInfo.WaySizeKB,
+			Mask:          mask,
+		})
 	}
 
 	annotations[rdtClassAnnotationKey] = className
-	dm.log.Infow("Resolved exclusive L3 cache to RDT class", "componentName", componentName, "className", className, "cacheID", selectedCache.ID, "requiredKi", requiredKi, "neededWays", neededWays, "wayMask", wayMask)
+	dm.log.Infow("Resolved exclusive L3 cache to RDT class",
+		"componentName", componentName,
+		"className", className,
+		"cacheID", selectedCache.ID,
+		"requiredKi", requiredKi,
+		"neededWays", neededWays,
+		"wayMask", wayMask,
+		"partitionMasks", partitionMasks,
+		"selectedInterval", fmt.Sprintf("%d-%d", selectedInterval.Start, selectedInterval.Start+selectedInterval.Length-1),
+	)
 
-	return annotations, true, nil
+	return annotations, componentAssignments, true, nil
+}
+
+type wayInterval struct {
+	Start  int64
+	Length int64
+}
+
+func pickSmallestFittingCacheInterval(
+	topologyCaches []device.TopologyCacheInfo,
+	persisted []database.OwnedCacheAssignment,
+	inFlight map[string][]database.CacheAssignment,
+	deploymentID string,
+	requiredKi int64,
+) (device.TopologyCacheInfo, wayInterval, int64, error) {
+	bestCache := device.TopologyCacheInfo{}
+	bestInterval := wayInterval{}
+	bestIntervalFound := false
+	bestLength := int64(math.MaxInt64)
+	bestCacheID := ""
+	bestNeededWays := int64(0)
+
+	for _, cache := range topologyCaches {
+		if cache.WaySizeKB <= 0 || cache.Ways <= 0 {
+			continue
+		}
+
+		neededWays := int64(math.Ceil(float64(requiredKi) / float64(cache.WaySizeKB)))
+		if neededWays <= 0 || neededWays > cache.Ways {
+			continue
+		}
+
+		used := make([]bool, int(cache.Ways))
+
+		for _, owned := range persisted {
+			if owned.Owner == deploymentID || strings.HasPrefix(owned.Owner, deploymentID+"/") {
+				continue
+			}
+			if !strings.EqualFold(owned.Assignment.Level, cache.Level) || strings.TrimSpace(owned.Assignment.CacheID) != strings.TrimSpace(cache.ID) {
+				continue
+			}
+
+			for _, way := range maskWays(owned.Assignment.Mask, cache.Ways) {
+				if way >= 0 && way < int64(len(used)) {
+					used[way] = true
+				}
+			}
+		}
+
+		for _, assignmentList := range inFlight {
+			for _, assignment := range assignmentList {
+				if !strings.EqualFold(assignment.Level, cache.Level) || strings.TrimSpace(assignment.CacheID) != strings.TrimSpace(cache.ID) {
+					continue
+				}
+				for _, way := range maskWays(assignment.Mask, cache.Ways) {
+					if way >= 0 && way < int64(len(used)) {
+						used[way] = true
+					}
+				}
+			}
+		}
+
+		intervals := freeWayIntervals(used)
+		for _, interval := range intervals {
+			if interval.Length < neededWays {
+				continue
+			}
+
+			if !bestIntervalFound || interval.Length < bestLength || (interval.Length == bestLength && cache.ID < bestCacheID) {
+				bestCache = cache
+				bestInterval = wayInterval{Start: interval.Start, Length: neededWays}
+				bestIntervalFound = true
+				bestLength = interval.Length
+				bestCacheID = cache.ID
+				bestNeededWays = neededWays
+			}
+		}
+	}
+
+	if !bestIntervalFound {
+		return device.TopologyCacheInfo{}, wayInterval{}, 0, fmt.Errorf("no contiguous L3 cache interval can fit %d KiB", requiredKi)
+	}
+
+	return bestCache, bestInterval, bestNeededWays, nil
+}
+
+func freeWayIntervals(used []bool) []wayInterval {
+	intervals := make([]wayInterval, 0)
+	start := -1
+
+	for i := 0; i < len(used); i++ {
+		if !used[i] {
+			if start == -1 {
+				start = i
+			}
+			continue
+		}
+
+		if start != -1 {
+			intervals = append(intervals, wayInterval{Start: int64(start), Length: int64(i - start)})
+			start = -1
+		}
+	}
+
+	if start != -1 {
+		intervals = append(intervals, wayInterval{Start: int64(start), Length: int64(len(used) - start)})
+	}
+
+	return intervals
+}
+
+func maskWays(mask string, maxWays int64) []int64 {
+	parsed := new(big.Int)
+	if _, ok := parsed.SetString(strings.TrimSpace(mask), 0); !ok {
+		return nil
+	}
+
+	ways := make([]int64, 0)
+	for bit := int64(0); bit < maxWays; bit++ {
+		if parsed.Bit(int(bit)) == 1 {
+			ways = append(ways, bit)
+		}
+	}
+
+	return ways
+}
+
+func wayMaskHexForInterval(start, length int64) (string, error) {
+	if start < 0 {
+		return "", fmt.Errorf("interval start must be >= 0")
+	}
+	if length <= 0 {
+		return "", fmt.Errorf("interval length must be > 0")
+	}
+
+	mask := new(big.Int).Lsh(big.NewInt(1), uint(length))
+	mask.Sub(mask, big.NewInt(1))
+	mask.Lsh(mask, uint(start))
+
+	return "0x" + strings.ToUpper(mask.Text(16)), nil
 }
 
 func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
@@ -91,8 +289,8 @@ func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
 	deploymentID string,
 	componentName string,
 	className string,
-	cacheID string,
-	wayMask string,
+	selectedCacheID string,
+	partitionMasks map[string]string,
 ) error {
 	if _, err := exec.LookPath("kubectl"); err != nil {
 		return fmt.Errorf("kubectl is required to update BalloonsPolicy: %w", err)
@@ -133,17 +331,68 @@ func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
 
 	compQ := strconv.Quote(componentName)
 	classQ := strconv.Quote(className)
-	cacheQ := strconv.Quote(cacheID)
-	maskQ := strconv.Quote(wayMask)
-	expr := fmt.Sprintf(
-		`.spec.control.rdt.partitions[%s].l3Allocation[%s].unified = %s | .spec.control.rdt.partitions[%s].classes[%s].l3Allocation[%s].unified = "100%%"`,
-		compQ,
-		cacheQ,
-		maskQ,
-		compQ,
-		classQ,
-		cacheQ,
+
+	cacheIDs := make([]string, 0, len(dm.topologyLookup.L3Caches)+1)
+	cacheIDSet := make(map[string]struct{}, len(dm.topologyLookup.L3Caches)+1)
+	for _, topoCache := range dm.topologyLookup.L3Caches {
+		id := strings.TrimSpace(topoCache.ID)
+		if id == "" {
+			continue
+		}
+		if _, seen := cacheIDSet[id]; seen {
+			continue
+		}
+		cacheIDSet[id] = struct{}{}
+		cacheIDs = append(cacheIDs, id)
+	}
+
+	selectedCacheID = strings.TrimSpace(selectedCacheID)
+	if selectedCacheID == "" {
+		return fmt.Errorf("selected cache ID is empty for component %q", componentName)
+	}
+	if _, seen := cacheIDSet[selectedCacheID]; !seen {
+		cacheIDs = append(cacheIDs, selectedCacheID)
+	}
+
+	for cacheID, mask := range partitionMasks {
+		id := strings.TrimSpace(cacheID)
+		if id == "" {
+			continue
+		}
+		if strings.TrimSpace(mask) == "" {
+			return fmt.Errorf("empty mask provided for cache ID %q", id)
+		}
+		if _, seen := cacheIDSet[id]; !seen {
+			cacheIDs = append(cacheIDs, id)
+			cacheIDSet[id] = struct{}{}
+		}
+	}
+	sort.Strings(cacheIDs)
+
+	exprParts := make([]string, 0, len(cacheIDs)+3)
+	exprParts = append(exprParts,
+		fmt.Sprintf(`.spec.control.rdt.partitions[%s].classes[%s].l3Allocation = {}`, compQ, classQ),
+		fmt.Sprintf(`.spec.control.rdt.partitions[%s].classes[%s].l3Allocation[%s].unified = "100%%"`, compQ, classQ, strconv.Quote(selectedCacheID)),
 	)
+
+	for _, currentCacheID := range cacheIDs {
+		partitionMask, ok := partitionMasks[currentCacheID]
+		if !ok {
+			return fmt.Errorf("missing partition mask for cache ID %q", currentCacheID)
+		}
+
+		cacheQ := strconv.Quote(currentCacheID)
+		exprParts = append(exprParts,
+			fmt.Sprintf(
+				`.spec.control.rdt.partitions[%s].l3Allocation[%s].unified = %s`,
+				compQ,
+				cacheQ,
+				strconv.Quote(partitionMask),
+			),
+		)
+	}
+
+	expr := strings.Join(exprParts, " | ")
 
 	if _, err := runCommand(ctx, "yq", "eval", "-i", expr, tmpPath); err != nil {
 		return fmt.Errorf("failed to update BalloonsPolicy with yq: %w", err)
@@ -177,6 +426,103 @@ func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
 	}
 
 	return nil
+}
+
+func (dm *DeploymentManager) buildPartitionMasksForAllCaches(
+	deploymentID string,
+	selectedCacheID string,
+	selectedMask string,
+	inFlightAssignments map[string][]database.CacheAssignment,
+) (map[string]string, error) {
+	persisted := dm.database.AllocatedCaches()
+	masks := make(map[string]string, len(dm.topologyLookup.L3Caches))
+
+	selectedCacheID = strings.TrimSpace(selectedCacheID)
+	if selectedCacheID == "" {
+		return nil, fmt.Errorf("selected cache ID cannot be empty")
+	}
+
+	masks[selectedCacheID] = strings.TrimSpace(selectedMask)
+
+	for _, cache := range dm.topologyLookup.L3Caches {
+		cacheID := strings.TrimSpace(cache.ID)
+		if cacheID == "" || cacheID == selectedCacheID {
+			continue
+		}
+		if cache.Ways <= 0 {
+			return nil, fmt.Errorf("L3 cache %q has invalid way count %d", cacheID, cache.Ways)
+		}
+
+		nextMask, err := nextAvailableSingleWayMask(cache, persisted, inFlightAssignments, deploymentID)
+		if err != nil {
+			return nil, err
+		}
+		masks[cacheID] = nextMask
+	}
+
+	return masks, nil
+}
+
+func nextAvailableSingleWayMask(
+	cache device.TopologyCacheInfo,
+	persisted []database.OwnedCacheAssignment,
+	inFlight map[string][]database.CacheAssignment,
+	deploymentID string,
+) (string, error) {
+	used := make([]bool, int(cache.Ways))
+
+	for _, owned := range persisted {
+		if owned.Owner == deploymentID || strings.HasPrefix(owned.Owner, deploymentID+"/") {
+			continue
+		}
+		if !strings.EqualFold(owned.Assignment.Level, cache.Level) || strings.TrimSpace(owned.Assignment.CacheID) != strings.TrimSpace(cache.ID) {
+			continue
+		}
+
+		for _, way := range maskWays(owned.Assignment.Mask, cache.Ways) {
+			if way >= 0 && way < int64(len(used)) {
+				used[way] = true
+			}
+		}
+	}
+
+	for _, assignmentList := range inFlight {
+		for _, assignment := range assignmentList {
+			if !strings.EqualFold(assignment.Level, cache.Level) || strings.TrimSpace(assignment.CacheID) != strings.TrimSpace(cache.ID) {
+				continue
+			}
+			for _, way := range maskWays(assignment.Mask, cache.Ways) {
+				if way >= 0 && way < int64(len(used)) {
+					used[way] = true
+				}
+			}
+		}
+	}
+
+	for bit := int64(0); bit < cache.Ways; bit++ {
+		if used[bit] {
+			continue
+		}
+
+		mask, err := wayMaskHexForInterval(bit, 1)
+		if err != nil {
+			return "", err
+		}
+		return mask, nil
+	}
+
+	return "", fmt.Errorf("no free single-way L3 mask available for cache ID %q", strings.TrimSpace(cache.ID))
+}
+
+func (dm *DeploymentManager) findL3CacheByID(cacheID string) (device.TopologyCacheInfo, bool) {
+	target := strings.TrimSpace(cacheID)
+	for _, cache := range dm.topologyLookup.L3Caches {
+		if strings.TrimSpace(cache.ID) == target {
+			return cache, true
+		}
+	}
+
+	return device.TopologyCacheInfo{}, false
 }
 
 func (dm *DeploymentManager) waitForRDTPolicyUpdate(ctx context.Context, componentName, className string) error {
@@ -242,16 +588,6 @@ func parseBinarySizeKi(raw *string) (int64, error) {
 	}
 
 	return 0, fmt.Errorf("unsupported size unit in %q (expected Ki, Mi, or Gi)", *raw)
-}
-
-func contiguousWayMaskHex(ways int64) (string, error) {
-	if ways <= 0 {
-		return "", fmt.Errorf("ways must be > 0")
-	}
-
-	mask := new(big.Int).Lsh(big.NewInt(1), uint(ways))
-	mask.Sub(mask, big.NewInt(1))
-	return "0x" + strings.ToUpper(mask.Text(16)), nil
 }
 
 func runCommand(ctx context.Context, command string, args ...string) ([]byte, error) {

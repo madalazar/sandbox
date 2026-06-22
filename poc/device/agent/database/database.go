@@ -35,9 +35,24 @@ type DeploymentRecord struct {
 	CurrentState        *AppDeploymentState
 	ComponentViseStatus map[string]sbi.ComponentStatus
 	CpuAssignments      map[string][]int // requirement.Name -> CPU indices
-	Phase               string           // "deploying", "running", "failed", "removing", "removed"
+	CacheAssignments    map[string][]CacheAssignment
+	Phase               string // "deploying", "running", "failed", "removing", "removed"
 	Message             string
 	LastUpdated         time.Time
+}
+
+type CacheAssignment struct {
+	ComponentName string `json:"componentName"`
+	Level         string `json:"level"`
+	CacheID       string `json:"cacheId"`
+	SizeKB        int64  `json:"sizeKb"`
+	Mask          string `json:"mask"`
+}
+
+type OwnedCacheAssignment struct {
+	Owner           string
+	RequirementName string
+	Assignment      CacheAssignment
 }
 
 type DeploymentBundleRecord struct {
@@ -50,12 +65,13 @@ type DeploymentBundleRecord struct {
 type DeploymentRecordChangeType string
 
 const (
-	DeploymentChangeTypeRecordAdded           DeploymentRecordChangeType = "RECORD-ADDED"
-	DeploymentChangeTypeRecordDeleted         DeploymentRecordChangeType = "RECORD-DELETED"
-	DeploymentChangeTypeComponentPhaseChanged DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
-	DeploymentChangeTypeDesiredStateAdded     DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
-	DeploymentChangeTypeCurrentStateAdded     DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
-	DeploymentChangeTypeCpuAssignmentsChanged DeploymentRecordChangeType = "CPU-ASSIGNMENTS-CHANGED"
+	DeploymentChangeTypeRecordAdded             DeploymentRecordChangeType = "RECORD-ADDED"
+	DeploymentChangeTypeRecordDeleted           DeploymentRecordChangeType = "RECORD-DELETED"
+	DeploymentChangeTypeComponentPhaseChanged   DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
+	DeploymentChangeTypeDesiredStateAdded       DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
+	DeploymentChangeTypeCurrentStateAdded       DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
+	DeploymentChangeTypeCpuAssignmentsChanged   DeploymentRecordChangeType = "CPU-ASSIGNMENTS-CHANGED"
+	DeploymentChangeTypeCacheAssignmentsChanged DeploymentRecordChangeType = "CACHE-ASSIGNMENTS-CHANGED"
 )
 
 type DeviceSettingsRecord struct {
@@ -91,6 +107,9 @@ type DatabaseIfc interface {
 	SetCpuAssignments(deploymentId string, assignments map[string][]int) error
 	ClearCpuAssignments(deploymentId string) error
 	AllocatedCpus() map[int]string
+	SetCacheAssignments(deploymentId string, assignments map[string][]CacheAssignment) error
+	ClearCacheAssignments(deploymentId string) error
+	AllocatedCaches() []OwnedCacheAssignment
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -268,10 +287,18 @@ func (db *Database) load() {
 		DeviceSettings *DeviceSettingsRecord        `json:"deviceSettings"`
 	}{}
 	if err := json.Unmarshal(data, &dump); err != nil {
-		return
+		dump, err = loadLegacyDatabaseDump(data)
+		if err != nil {
+			return
+		}
 	}
 	if dump.Deployments == nil {
 		dump.Deployments = make(map[string]*DeploymentRecord)
+	}
+	for _, record := range dump.Deployments {
+		if record.CacheAssignments == nil {
+			record.CacheAssignments = make(map[string][]CacheAssignment)
+		}
 	}
 	db.deployments = dump.Deployments
 
@@ -279,6 +306,77 @@ func (db *Database) load() {
 		dump.DeviceSettings = &DeviceSettingsRecord{}
 	}
 	db.deviceSettings = dump.DeviceSettings
+}
+
+func loadLegacyDatabaseDump(data []byte) (struct {
+	Deployments    map[string]*DeploymentRecord `json:"deployments"`
+	DeviceSettings *DeviceSettingsRecord        `json:"deviceSettings"`
+}, error) {
+	type legacyDeploymentRecord struct {
+		AppID               string                         `json:"appID"`
+		DeploymentID        string                         `json:"deploymentID"`
+		Digest              string                         `json:"digest"`
+		Path                string                         `json:"path"`
+		URL                 string                         `json:"url"`
+		DesiredState        *AppDeploymentState            `json:"desiredState"`
+		CurrentState        *AppDeploymentState            `json:"currentState"`
+		ComponentViseStatus map[string]sbi.ComponentStatus `json:"componentViseStatus"`
+		CpuAssignments      map[string][]int               `json:"cpuAssignments"`
+		CacheAssignments    map[string]CacheAssignment     `json:"cacheAssignments"`
+		Phase               string                         `json:"phase"`
+		Message             string                         `json:"message"`
+		LastUpdated         time.Time                      `json:"lastUpdated"`
+	}
+
+	legacyDump := struct {
+		Deployments    map[string]*legacyDeploymentRecord `json:"deployments"`
+		DeviceSettings *DeviceSettingsRecord              `json:"deviceSettings"`
+	}{}
+
+	if err := json.Unmarshal(data, &legacyDump); err != nil {
+		return struct {
+			Deployments    map[string]*DeploymentRecord `json:"deployments"`
+			DeviceSettings *DeviceSettingsRecord        `json:"deviceSettings"`
+		}{}, err
+	}
+
+	converted := struct {
+		Deployments    map[string]*DeploymentRecord `json:"deployments"`
+		DeviceSettings *DeviceSettingsRecord        `json:"deviceSettings"`
+	}{
+		Deployments:    make(map[string]*DeploymentRecord),
+		DeviceSettings: legacyDump.DeviceSettings,
+	}
+
+	for deploymentID, legacyRecord := range legacyDump.Deployments {
+		if legacyRecord == nil {
+			continue
+		}
+
+		newRecord := &DeploymentRecord{
+			AppID:               legacyRecord.AppID,
+			DeploymentID:        legacyRecord.DeploymentID,
+			Digest:              legacyRecord.Digest,
+			Path:                legacyRecord.Path,
+			URL:                 legacyRecord.URL,
+			DesiredState:        legacyRecord.DesiredState,
+			CurrentState:        legacyRecord.CurrentState,
+			ComponentViseStatus: legacyRecord.ComponentViseStatus,
+			CpuAssignments:      legacyRecord.CpuAssignments,
+			CacheAssignments:    make(map[string][]CacheAssignment),
+			Phase:               legacyRecord.Phase,
+			Message:             legacyRecord.Message,
+			LastUpdated:         legacyRecord.LastUpdated,
+		}
+
+		for requirementName, assignment := range legacyRecord.CacheAssignments {
+			newRecord.CacheAssignments[requirementName] = []CacheAssignment{assignment}
+		}
+
+		converted.Deployments[deploymentID] = newRecord
+	}
+
+	return converted, nil
 }
 
 func (db *Database) Subscribe(
@@ -318,6 +416,7 @@ func (db *Database) SetDesiredState(deploymentId string, state AppDeploymentStat
 			DeploymentID:        deploymentId,
 			ComponentViseStatus: make(map[string]sbi.ComponentStatus),
 			CpuAssignments:      make(map[string][]int),
+			CacheAssignments:    make(map[string][]CacheAssignment),
 			Phase:               "pending",
 			LastUpdated:         time.Now(),
 		}
@@ -427,6 +526,33 @@ func (db *Database) SetCpuAssignments(deploymentId string, assignments map[strin
 	return nil
 }
 
+func (db *Database) SetCacheAssignments(deploymentId string, assignments map[string][]CacheAssignment) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	if record.CacheAssignments == nil {
+		record.CacheAssignments = make(map[string][]CacheAssignment)
+	}
+
+	next := make(map[string][]CacheAssignment, len(assignments))
+	for requirement, assignmentList := range assignments {
+		copied := make([]CacheAssignment, len(assignmentList))
+		copy(copied, assignmentList)
+		next[requirement] = copied
+	}
+	record.CacheAssignments = next
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, DeploymentChangeTypeCacheAssignmentsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
 func (db *Database) ClearCpuAssignments(deploymentId string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -439,6 +565,23 @@ func (db *Database) ClearCpuAssignments(deploymentId string) error {
 	record.CpuAssignments = make(map[string][]int)
 	record.LastUpdated = time.Now()
 	db.notify(deploymentId, record, DeploymentChangeTypeCpuAssignmentsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
+func (db *Database) ClearCacheAssignments(deploymentId string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	record.CacheAssignments = make(map[string][]CacheAssignment)
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, DeploymentChangeTypeCacheAssignmentsChanged)
 	db.TriggerDataPersist()
 
 	return nil
@@ -458,6 +601,31 @@ func (db *Database) AllocatedCpus() map[int]string {
 
 			for _, cpuIndex := range cpuIndices {
 				allocated[cpuIndex] = owner
+			}
+		}
+	}
+
+	return allocated
+}
+
+func (db *Database) AllocatedCaches() []OwnedCacheAssignment {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	allocated := make([]OwnedCacheAssignment, 0)
+	for deploymentID, deployment := range db.deployments {
+		for requirement, assignmentList := range deployment.CacheAssignments {
+			owner := deploymentID
+			if strings.TrimSpace(requirement) != "" {
+				owner = fmt.Sprintf("%s/%s", deploymentID, requirement)
+			}
+
+			for _, assignment := range assignmentList {
+				allocated = append(allocated, OwnedCacheAssignment{
+					Owner:           owner,
+					RequirementName: requirement,
+					Assignment:      assignment,
+				})
 			}
 		}
 	}

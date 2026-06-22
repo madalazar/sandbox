@@ -336,6 +336,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	appDeployment sbi.AppDeploymentManifest,
 ) error {
 	assignments := map[string][]int{}
+	cacheAssignments := map[string][]database.CacheAssignment{}
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
@@ -375,11 +376,12 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		dm.log.Infow("calling resolveComponentCacheAnnotations", "appId", deploymentId)
-		cacheAnnotations, hasCacheAnnotations, err := dm.resolveComponentCacheAnnotations(
+		cacheAnnotations, componentCacheAssignments, hasCacheAnnotations, err := dm.resolveComponentCacheAnnotations(
 			ctx,
 			deploymentId,
 			helmComp.Name,
 			helmComp.RequiredResources,
+			cacheAssignments,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to resolve cache annotations for component %s: %w", helmComp.Name, err)
@@ -395,6 +397,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			copied := make([]int, len(cpus))
 			copy(copied, cpus)
 			assignments[requirementName] = copied
+		}
+
+		for requirementName, componentAssignmentList := range componentCacheAssignments {
+			cacheAssignments[requirementName] = append(cacheAssignments[requirementName], componentAssignmentList...)
 		}
 
 		if hasNriAnnotations {
@@ -486,6 +492,9 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 	if err := dm.database.SetCpuAssignments(deploymentId, assignments); err != nil {
 		return fmt.Errorf("failed to persist cpu assignments for helm deployment: %w", err)
+	}
+	if err := dm.database.SetCacheAssignments(deploymentId, cacheAssignments); err != nil {
+		return fmt.Errorf("failed to persist cache assignments for helm deployment: %w", err)
 	}
 
 	return nil
@@ -673,6 +682,11 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
 		}
 
+		// TODO: hear we also need to update the balloon policy to delete the clos (class + partition)
+		if err := dm.database.ClearCacheAssignments(deploymentId); err != nil {
+			dm.log.Warnw("Failed to clear cache assignments during removal", "deploymentId", deploymentId, "err", err)
+		}
+
 		// Update desired state to REMOVED before deleting
 		if record.DesiredState != nil {
 			componentNames := dm.extractComponentNames(record.DesiredState.AppDeploymentManifest)
@@ -783,6 +797,10 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 	} else {
 		if err := dm.database.ClearCpuAssignments(deploymentId); err != nil {
 			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
+		}
+		// TODO: check if we need to remove the clos partition + class here as well
+		if err := dm.database.ClearCacheAssignments(deploymentId); err != nil {
+			dm.log.Warnw("Failed to clear cache assignments during removal", "deploymentId", deploymentId, "err", err)
 		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
