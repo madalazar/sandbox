@@ -1,0 +1,137 @@
+apiVersion: margo.org/v1-alpha1
+kind: ApplicationDescription
+metadata:
+  id: rt-benchmark-iecache-suite
+  name: RT Benchmark Invalid Exclusive Cache Suite
+  description: >
+    Real-time benchmarking suite crafted so the exclusive L3 cache requested by
+    Caterpillar and cyclictest exceeds the machine's total available L3 cache.
+  version: 1.0.0
+  catalog:
+    application:
+      tagline: RT benchmarking suite with intentionally oversized exclusive cache requests
+      descriptionFile: ./resources/description.md
+      releaseNotes: ./resources/release-notes.md
+      licenseFile: ./resources/license.txt
+      tags: ["benchmark", "real-time", "cache", "exclusive-cache", "negative-test"]
+    organization:
+      - name: Industrial Edge Controls
+
+deploymentProfiles:
+  - type: helm.v3
+    id: rt-benchmark-iecache
+    description: >
+      Deploys Caterpillar and cyclictest with exclusive L3 cache requests that
+      sum to 240500KB, exceeding this machine's 230400KB total L3 capacity.
+    components:
+      - name: caterpillar
+        properties:
+          repository: oci://harbor.machine:8443/library/caterpillar-benchmark
+          revision: 1.0.0
+          wait: false
+          timeout: 4h
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 120000KB
+
+      - name: cyclictest
+        properties:
+          repository: oci://harbor.machine:8443/library/cyclictest
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 120500KB
+
+      - name: stressng
+        properties:
+          repository: oci://harbor.machine:8443/library/stressng
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+    requiredResources:
+      cpu:
+        - name: caterpillar
+          cores: 1
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        - name: cyclictest
+          cores: 1
+          class: performance
+          type: isolated
+          architectures:
+            - amd64
+            - x86_64
+        - name: stressng
+          cores: 1
+          class: performance
+          type: shared
+          architectures:
+            - amd64
+            - x86_64
+      memory: 1024Mi
+      storage: 2Gi
+
+parameters:
+  caterpillarImageRepository:
+    value: harbor.machine:8443/library/caterpillar
+    targets:
+      - pointer: image.repository
+        components: ["caterpillar"]
+
+  caterpillarImageTag:
+    value: latest
+    targets:
+      - pointer: image.tag
+        components: ["caterpillar"]
+
+  cyclictestImageRepository:
+    value: harbor.machine:8443/library/cyclictest
+    targets:
+      - pointer: image.repository
+        components: ["cyclictest"]
+
+  cyclictestImageTag:
+    value: latest
+    targets:
+      - pointer: image.tag
+        components: ["cyclictest"]
+
+configuration:
+  sections:
+    - name: Benchmark Images
+      settings:
+        - parameter: caterpillarImageRepository
+          name: Caterpillar Image Repository
+          description: OCI registry path for the Caterpillar container image
+          schema: requiredText
+
+        - parameter: caterpillarImageTag
+          name: Caterpillar Image Tag
+          description: Caterpillar image tag / version
+          schema: requiredText
+
+        - parameter: cyclictestImageRepository
+          name: cyclictest Image Repository
+          description: OCI registry path for the cyclictest container image
+          schema: requiredText
+
+        - parameter: cyclictestImageTag
+          name: cyclictest Image Tag
+          description: cyclictest image tag / version
+          schema: requiredText
+
+  schema:
+    - name: requiredText
+      dataType: string
+      allowEmpty: false
+      maxLength: 256
