@@ -13,6 +13,7 @@ GHCR_ORG="margo"
 workload_Fleet_Management_Client_IMAGE="margo.org/workload-fleet-management-client"
 workload_Fleet_Management_Client_IMAGE_TAG="latest"
 workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_IMAGE_REF:-${workload_Fleet_Management_Client_IMAGE}:${workload_Fleet_Management_Client_IMAGE_TAG}}"
+PQoS_HELPER_IMAGE_NAME="pqos-helper:local"
 
 # ----------------------------
 # Configuration Functions
@@ -106,6 +107,23 @@ build_device_agent_docker() {
   echo "✅ Image ready locally: ${workload_Fleet_Management_Client_IMAGE_REF}"
 }
 
+build_pqos_helper_image() {
+  local dockerfile_path="$HOME/sandbox/docker-compose/pqos-helper.Dockerfile"
+
+  if [[ ! -f "$dockerfile_path" ]]; then
+    echo "❌ PQoS helper Dockerfile not found at $dockerfile_path"
+    return 1
+  fi
+
+  echo "🔧 Building local PQoS helper image: ${PQoS_HELPER_IMAGE_NAME}"
+  if docker build -t "${PQoS_HELPER_IMAGE_NAME}" -f "$dockerfile_path" "$HOME/sandbox/docker-compose"; then
+    echo "✅ PQoS helper image ready: ${PQoS_HELPER_IMAGE_NAME}"
+  else
+    echo "❌ Failed to build PQoS helper image: ${PQoS_HELPER_IMAGE_NAME}"
+    return 1
+  fi
+}
+
 # ----------------------------
 # Docker Service Functions
 # ----------------------------
@@ -169,12 +187,15 @@ start_device_agent_docker_service() {
   cp ../poc/device/agent/config/cpu-topology-agent.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
 
+  build_pqos_helper_image || return 1
+
   mkdir -p data
   enable_docker_runtime
 
   # Export the image reference for docker-compose
   export workload_Fleet_Management_Client_IMAGE_REF="${workload_Fleet_Management_Client_IMAGE_REF}"
   echo "Using image: ${workload_Fleet_Management_Client_IMAGE_REF}"
+  echo "Using PQoS helper image: ${PQoS_HELPER_IMAGE_NAME}"
 
 
   docker compose up -d

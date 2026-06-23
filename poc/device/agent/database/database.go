@@ -47,6 +47,7 @@ type CacheAssignment struct {
 	CacheID       string `json:"cacheId"`
 	SizeKB        int64  `json:"sizeKb"`
 	Mask          string `json:"mask"`
+	ClassID       int    `json:"classId,omitempty"`
 }
 
 type OwnedCacheAssignment struct {

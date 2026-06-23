@@ -507,6 +507,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	appDeployment sbi.AppDeploymentManifest,
 ) error {
 	composeAssignments := map[string][]int{}
+	composeCacheAssignments := map[string][]database.CacheAssignment{}
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
@@ -553,9 +554,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
 		dm.log.Debugw("isolated cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 
+		componentCPUAssignments := map[string][]int{}
+		var assignments []CpuAssignment
+
 		if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
 			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
-			assignments, err := dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
+			assignments, err = dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
 				appDeployment.Spec.DeploymentProfile.RequiredResources, composeAssignments)
 
 			dm.log.Debugw("assignments for current component", "assignments", assignments)
@@ -565,44 +569,70 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 
 			if len(assignments) > 0 {
-				pinnedFile, err := os.CreateTemp(
-					"",
-					fmt.Sprintf(
-						"compose-pinned-%s-%s-*.yaml",
-						sanitizeFileToken(composeComp.Name),
-						sanitizeFileToken(deploymentId),
-					),
-				)
-				if err != nil {
-					return fmt.Errorf("failed to create temporary pinned compose file for component %s: %w", composeComp.Name, err)
-				}
-				pinnedPath := filepath.Clean(pinnedFile.Name())
-				if closeErr := pinnedFile.Close(); closeErr != nil {
-					return fmt.Errorf("failed to close temporary pinned compose file for component %s: %w", composeComp.Name, closeErr)
-				}
-				defer func(path string) {
-					if removeErr := os.Remove(path); removeErr != nil {
-						dm.log.Warnw("Failed to remove temporary pinned compose file", "path", path, "err", removeErr)
-					}
-				}(pinnedPath)
-				if err := rewriteComposeFile(composeFilename, pinnedPath, assignments); err != nil {
-					return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
-				}
-
-				for requirement, cpus := range toAssignmentMap(assignments) {
-					copied := make([]int, len(cpus))
-					copy(copied, cpus)
-					composeAssignments[requirement] = copied
-				}
-
-				// Persist before compose up/update so failed deploy attempts remain deterministic.
-				dm.log.Debugw("persist before update")
-				if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
-					return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
-				}
-
-				composeFilename = pinnedPath
+				componentCPUAssignments = toAssignmentMap(assignments)
 			}
+		}
+
+		componentCacheAssignments, hasCacheAssignments, err := dm.resolveComposeComponentCacheAssignments(
+			deploymentId,
+			composeComp.Name,
+			composeComp.RequiredResources,
+			componentCPUAssignments,
+			composeCacheAssignments,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to resolve cache assignments for compose component %s: %w", composeComp.Name, err)
+		}
+
+		if hasCacheAssignments {
+			for requirementName, assignmentList := range componentCacheAssignments {
+				composeCacheAssignments[requirementName] = append(composeCacheAssignments[requirementName], assignmentList...)
+			}
+
+			// Persist class IDs as soon as they are reserved so retries stay deterministic.
+			if err := dm.database.SetCacheAssignments(deploymentId, composeCacheAssignments); err != nil {
+				return fmt.Errorf("failed to persist cache assignments for compose deployment: %w", err)
+			}
+		}
+
+		if len(assignments) > 0 {
+			pinnedFile, err := os.CreateTemp(
+				"",
+				fmt.Sprintf(
+					"compose-pinned-%s-%s-*.yaml",
+					sanitizeFileToken(composeComp.Name),
+					sanitizeFileToken(deploymentId),
+				),
+			)
+			if err != nil {
+				return fmt.Errorf("failed to create temporary pinned compose file for component %s: %w", composeComp.Name, err)
+			}
+			pinnedPath := filepath.Clean(pinnedFile.Name())
+			if closeErr := pinnedFile.Close(); closeErr != nil {
+				return fmt.Errorf("failed to close temporary pinned compose file for component %s: %w", composeComp.Name, closeErr)
+			}
+			defer func(path string) {
+				if removeErr := os.Remove(path); removeErr != nil {
+					dm.log.Warnw("Failed to remove temporary pinned compose file", "path", path, "err", removeErr)
+				}
+			}(pinnedPath)
+			if err := rewriteComposeFile(composeFilename, pinnedPath, assignments); err != nil {
+				return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
+			}
+
+			for requirement, cpus := range componentCPUAssignments {
+				copied := make([]int, len(cpus))
+				copy(copied, cpus)
+				composeAssignments[requirement] = copied
+			}
+
+			// Persist before compose up/update so failed deploy attempts remain deterministic.
+			dm.log.Debugw("persist before update")
+			if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
+				return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
+			}
+
+			composeFilename = pinnedPath
 		}
 
 		// Convert parameters to environment variables
@@ -652,6 +682,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			"projectName",
 			projectName,
 		)
+
+		if hasCacheAssignments {
+			if err := dm.applyComposeComponentPQoS(ctx, composeComp.Name, composeCacheAssignments[composeComp.Name], componentCPUAssignments); err != nil {
+				return fmt.Errorf("failed to apply compose pqos assignment for component %s: %w", composeComp.Name, err)
+			}
+		}
 	}
 
 	if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
@@ -659,6 +695,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
 			return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
 		}
+	}
+
+	if err := dm.database.SetCacheAssignments(deploymentId, composeCacheAssignments); err != nil {
+		return fmt.Errorf("failed to persist cache assignments for compose deployment: %w", err)
 	}
 
 	dm.log.Infow("composed finished")

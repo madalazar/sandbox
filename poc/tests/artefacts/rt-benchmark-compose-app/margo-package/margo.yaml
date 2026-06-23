@@ -25,13 +25,27 @@ deploymentProfiles:
       - name: cyclictest
         properties:
           packageLocation: /rt-benchmark-compose-app/cyclictest/docker-compose.yaml
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 9216Ki
       - name: stress
         properties:
           packageLocation: /rt-benchmark-compose-app/stress/docker-compose.yaml
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: shared
+              size: 5000Ki
       - name: caterpillar
         properties:
           packageLocation: /rt-benchmark-compose-app/caterpillar/docker-compose.yaml
-
+        requiredResources:
+          cache:
+            - level: L3
+              allocation: exclusive
+              size: 20540Ki
     requiredResources:
       cpu:
         - name: cyclictest
