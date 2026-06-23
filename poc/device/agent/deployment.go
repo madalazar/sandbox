@@ -826,6 +826,13 @@ func (dm *DeploymentManager) removeHelm(
 		return nil
 	}
 
+	cacheAssignmentsByComponent := map[string][]database.CacheAssignment{}
+	if record, err := dm.database.GetDeployment(deploymentId); err != nil {
+		dm.log.Warnw("Failed to load deployment record for cache assignment cleanup", "deploymentId", deploymentId, "error", err)
+	} else if record != nil && record.CacheAssignments != nil {
+		cacheAssignmentsByComponent = record.CacheAssignments
+	}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -849,6 +856,8 @@ func (dm *DeploymentManager) removeHelm(
 			dm.log.Infow("Helm release removed successfully",
 				"releaseName", releaseName,
 				"componentName", helmComp.Name)
+
+			dm.cleanupHelmComponentRDTOnRemoval(ctx, deploymentId, helmComp.Name, cacheAssignmentsByComponent)
 		}
 	}
 
@@ -921,6 +930,29 @@ func (dm *DeploymentManager) extractComponentNames(
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func hasCacheAssignmentForComponent(
+	assignments map[string][]database.CacheAssignment,
+	componentName string,
+) bool {
+	if len(assignments) == 0 || strings.TrimSpace(componentName) == "" {
+		return false
+	}
+
+	if direct, ok := assignments[componentName]; ok && len(direct) > 0 {
+		return true
+	}
+
+	for _, assignmentList := range assignments {
+		for _, assignment := range assignmentList {
+			if strings.TrimSpace(assignment.ComponentName) == componentName {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func sanitizeFileToken(value string) string {

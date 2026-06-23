@@ -156,6 +156,41 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 	return annotations, componentAssignments, true, nil
 }
 
+func (dm *DeploymentManager) cleanupHelmComponentRDTOnRemoval(
+	ctx context.Context,
+	deploymentID string,
+	componentName string,
+	cacheAssignmentsByComponent map[string][]database.CacheAssignment,
+) {
+	if !hasCacheAssignmentForComponent(cacheAssignmentsByComponent, componentName) {
+		return
+	}
+
+	className := componentName + "_class"
+	if err := dm.removeBalloonPolicyRDTWithYQ(ctx, deploymentID, componentName, className); err != nil {
+		dm.log.Warnw("Failed to remove component partition from BalloonsPolicy",
+			"deploymentId", deploymentID,
+			"componentName", componentName,
+			"className", className,
+			"error", err)
+		return
+	}
+
+	if err := dm.waitForRDTPolicyRemoval(ctx, componentName, className); err != nil {
+		dm.log.Warnw("BalloonsPolicy cache did not confirm partition/class removal",
+			"deploymentId", deploymentID,
+			"componentName", componentName,
+			"className", className,
+			"error", err)
+		return
+	}
+
+	dm.log.Infow("Removed RDT partition/class for Helm component",
+		"deploymentId", deploymentID,
+		"componentName", componentName,
+		"className", className)
+}
+
 func uniqueAssignedCPUs(componentCPUAssignments map[string][]int) []int {
 	if len(componentCPUAssignments) == 0 {
 		return nil
@@ -481,6 +516,102 @@ func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
 	}
 
 	patchPayload := fmt.Sprintf(`{"spec":{"control":{"rdt":{"partitions":%s}}}}`, patchValue)
+	dm.log.Debugw("Patching BalloonsPolicy RDT payload",
+		"operation", "update",
+		"deploymentId", deploymentID,
+		"componentName", componentName,
+		"className", className,
+		"namespace", policy.Namespace,
+		"policyName", policy.Name,
+		"patchPayload", patchPayload,
+	)
+	if _, err := runCommand(
+		ctx,
+		"kubectl",
+		"-n",
+		policy.Namespace,
+		"patch",
+		"balloonspolicies",
+		policy.Name,
+		"--type=merge",
+		"--patch",
+		patchPayload,
+	); err != nil {
+		return fmt.Errorf("failed to patch updated BalloonsPolicy: %w", err)
+	}
+
+	return nil
+}
+
+func (dm *DeploymentManager) removeBalloonPolicyRDTWithYQ(
+	ctx context.Context,
+	deploymentID string,
+	componentName string,
+	className string,
+) error {
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return fmt.Errorf("kubectl is required to update BalloonsPolicy: %w", err)
+	}
+	if _, err := exec.LookPath("yq"); err != nil {
+		return fmt.Errorf("yq is required to update BalloonsPolicy: %w", err)
+	}
+	if dm.policyReader == nil {
+		return fmt.Errorf("cannot remove RDT policy for component %q: policy reader not configured", componentName)
+	}
+
+	policy := dm.policyReader.Parsed()
+	if policy == nil {
+		return fmt.Errorf("cannot remove RDT policy for component %q: no BalloonsPolicy snapshot available", componentName)
+	}
+
+	tmp, err := os.CreateTemp("", fmt.Sprintf("balloon-policy-%s-%s-*.yaml", sanitizeFileToken(componentName), sanitizeFileToken(deploymentID)))
+	if err != nil {
+		return fmt.Errorf("failed to create temporary policy file: %w", err)
+	}
+	tmpPath := filepath.Clean(tmp.Name())
+	if closeErr := tmp.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close temporary policy file: %w", closeErr)
+	}
+	defer func() {
+		if removeErr := os.Remove(tmpPath); removeErr != nil {
+			dm.log.Warnw("Failed to remove temporary policy file", "path", tmpPath, "err", removeErr)
+		}
+	}()
+
+	content, err := runCommand(ctx, "kubectl", "-n", policy.Namespace, "get", "balloonspolicies", policy.Name, "-o", "yaml")
+	if err != nil {
+		return fmt.Errorf("failed to read BalloonsPolicy %s/%s: %w", policy.Namespace, policy.Name, err)
+	}
+	if writeErr := os.WriteFile(tmpPath, content, 0o600); writeErr != nil {
+		return fmt.Errorf("failed to persist temporary policy yaml: %w", writeErr)
+	}
+
+	compQ := strconv.Quote(componentName)
+	classQ := strconv.Quote(className)
+	expr := strings.Join([]string{
+		fmt.Sprintf(`del(.spec.control.rdt.partitions[%s])`, compQ),
+		fmt.Sprintf(`del(.spec.control.rdt.classes[%s])`, classQ),
+	}, " | ")
+
+	if _, err := runCommand(ctx, "yq", "eval", "-i", expr, tmpPath); err != nil {
+		return fmt.Errorf("failed to remove component partition from BalloonsPolicy with yq: %w", err)
+	}
+
+	// JSON merge patch preserves omitted map keys, so we must set deleted keys to null explicitly.
+	patchPayload := fmt.Sprintf(
+		`{"spec":{"control":{"rdt":{"partitions":{%q:null},"classes":{%q:null}}}}}`,
+		componentName,
+		className,
+	)
+	dm.log.Debugw("Patching BalloonsPolicy RDT payload",
+		"operation", "remove",
+		"deploymentId", deploymentID,
+		"componentName", componentName,
+		"className", className,
+		"namespace", policy.Namespace,
+		"policyName", policy.Name,
+		"patchPayload", patchPayload,
+	)
 	if _, err := runCommand(
 		ctx,
 		"kubectl",
@@ -597,14 +728,47 @@ func (dm *DeploymentManager) findL3CacheByID(cacheID string) (device.TopologyCac
 }
 
 func (dm *DeploymentManager) waitForRDTPolicyUpdate(ctx context.Context, componentName, className string) error {
+	return dm.waitForRDTPolicyCondition(
+		ctx,
+		componentName,
+		className,
+		"update",
+		func(policy *ParsedBalloonPolicy) bool {
+			return policy != nil && policy.HasRDTPartition(componentName) && policy.HasRDTClass(className)
+		},
+		"balloon policy cache did not reflect RDT updates for component %q and class %q",
+	)
+}
+
+func (dm *DeploymentManager) waitForRDTPolicyRemoval(ctx context.Context, componentName, className string) error {
+	return dm.waitForRDTPolicyCondition(
+		ctx,
+		componentName,
+		className,
+		"removal",
+		func(policy *ParsedBalloonPolicy) bool {
+			return policy != nil && !policy.HasRDTPartition(componentName) && !policy.HasRDTClass(className)
+		},
+		"balloon policy cache did not reflect RDT removals for component %q and class %q",
+	)
+}
+
+func (dm *DeploymentManager) waitForRDTPolicyCondition(
+	ctx context.Context,
+	componentName string,
+	className string,
+	action string,
+	condition func(policy *ParsedBalloonPolicy) bool,
+	failureFormat string,
+) error {
 	if dm.policyReader == nil {
-		return fmt.Errorf("cannot verify RDT policy update: policy reader not configured")
+		return fmt.Errorf("cannot verify RDT policy %s: policy reader not configured", action)
 	}
 
 	delays := []time.Duration{200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond}
 	for idx, delay := range delays {
 		policy := dm.policyReader.Parsed()
-		if policy != nil && policy.HasRDTPartition(componentName) && policy.HasRDTClass(className) {
+		if condition(policy) {
 			return nil
 		}
 
@@ -619,7 +783,7 @@ func (dm *DeploymentManager) waitForRDTPolicyUpdate(ctx context.Context, compone
 		}
 	}
 
-	return fmt.Errorf("balloon policy cache did not reflect RDT updates for component %q and class %q", componentName, className)
+	return fmt.Errorf(failureFormat, componentName, className)
 }
 
 func parseBinarySizeKi(raw *string) (int64, error) {
