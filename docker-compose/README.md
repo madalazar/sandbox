@@ -42,6 +42,7 @@ docker compose down
 
 # Notes:
 - The Workload Fleet Management Client runs with Docker socket access to manage Docker runtimes
+- The device-agent service runs privileged with host PID/network namespaces so compose cache (PQoS/RDT) operations can run directly from the main container
 - Configuration files are mounted from the local `config/` directory
 - Data persistence is handled through the `data/` directory mount
 - The container will restart automatically unless stopped manually

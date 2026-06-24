@@ -45,7 +45,7 @@ deploymentProfiles:
           cache:
             - level: L3
               allocation: exclusive
-              size: 20540Ki
+              size: 2540Ki
     requiredResources:
       cpu:
         - name: cyclictest

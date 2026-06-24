@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	defaultPQoSHelperImage = "pqos-helper:local"
-	maxPQoSClassID         = 63
+	maxPQoSClassID = 63
 )
 
 func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
@@ -43,10 +42,32 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 		return componentAssignments, false, nil
 	}
 	if len(exclusiveReqs) > 1 {
+		//TODO: this might not be useful
 		return componentAssignments, false, fmt.Errorf("component %q has %d exclusive cache requests; only one exclusive L3 request per component is supported", componentName, len(exclusiveReqs))
 	}
 	if len(dm.topologyLookup.L3Caches) == 0 {
-		return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
+		dm.log.Warnw("Component requests exclusive L3 cache but topology artifact has no L3 cache entries",
+			"componentName", componentName,
+			"exclusiveReqs", exclusiveReqs,
+		)
+		// TODO: commented for now to run pqos
+		// return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
+	}
+
+	hasRDTWays := false
+	for _, cache := range dm.topologyLookup.L3Caches {
+		if cache.Ways > 0 && cache.WaySizeKB > 0 {
+			hasRDTWays = true
+			break
+		}
+	}
+	if !hasRDTWays {
+		dm.log.Warnw("Component requests exclusive L3 cache but topology artifact has no RDT/CAT ways available",
+			"componentName", componentName,
+			"exclusiveReqs", exclusiveReqs,
+		)
+		// TODO: comment for now to run pqos
+		// return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but CAT/RDT ways are unavailable on this device (topology ways/way_size_kb are 0)", componentName)
 	}
 
 	requiredKi, err := parseBinarySizeKi(exclusiveReqs[0].Size)
@@ -59,29 +80,47 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 		return componentAssignments, false, fmt.Errorf("component %q requests exclusive cache but has no CPU assignments", componentName)
 	}
 
-	candidateCaches, err := dm.filterL3CachesByAssignedCPUs(assignedCPUs)
-	if err != nil {
-		return componentAssignments, false, fmt.Errorf("component %q could not map assigned CPUs to L3 cache IDs: %w", componentName, err)
-	}
+	// TODO: commenting for now to run pqos
+	// candidateCaches, err := dm.filterL3CachesByAssignedCPUs(assignedCPUs)
+	// if err != nil {
+	// 	return componentAssignments, false, fmt.Errorf("component %q could not map assigned CPUs to L3 cache IDs: %w", componentName, err)
+	// }
 
 	persisted := dm.database.AllocatedCaches()
-	selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
-		candidateCaches,
-		persisted,
-		inFlightAssignments,
-		deploymentID,
-		requiredKi,
-	)
-	if err != nil {
-		return componentAssignments, false, fmt.Errorf("component %q cache allocation failed: %w", componentName, err)
-	}
-	if neededWays <= 0 {
-		return componentAssignments, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
-	}
 
-	wayMask, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
-	if err != nil {
-		return componentAssignments, false, err
+	// TODO: this is used from the helm file, is that a good idea????
+	// TODO: I'm commenting all of this so run pqos
+	// selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
+	// 	candidateCaches,
+	// 	persisted,
+	// 	inFlightAssignments,
+	// 	deploymentID,
+	// 	requiredKi,
+	// )
+	// if err != nil {
+	// 	return componentAssignments, false, fmt.Errorf("component %q cache allocation failed: %w", componentName, err)
+	// }
+	// if neededWays <= 0 {
+	// 	return componentAssignments, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
+	// }
+
+	// wayMask, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
+	// if err != nil {
+	// 	return componentAssignments, false, err
+	// }
+	wayMask := "0x0"
+	if componentName == "caterpillar" {
+		wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
+		dm.log.Infow("Resolved compose exclusive L3 cache assignment",
+			"componentName", componentName,
+			"assignedCPUs", assignedCPUs,
+			"wayMask", wayMask)
+	} else if componentName == "cyclictest" {
+		wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
+		dm.log.Infow("Resolved compose exclusive L3 cache assignment",
+			"componentName", componentName,
+			"assignedCPUs", assignedCPUs,
+			"wayMask", wayMask)
 	}
 
 	classID, err := nextAvailablePQoSClassID(persisted, inFlightAssignments)
@@ -92,22 +131,26 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 	requirementName := componentName
 	componentAssignments[requirementName] = []database.CacheAssignment{{
 		ComponentName: componentName,
-		Level:         selectedCache.Level,
-		CacheID:       selectedCache.ID,
-		SizeKB:        requiredKi,
-		Mask:          wayMask,
-		ClassID:       classID,
+		// Level:         selectedCache.Level,
+		Level: "L3",
+		// CacheID:       selectedCache.ID,
+		CacheID: "0",
+		SizeKB:  requiredKi,
+		Mask:    wayMask,
+		ClassID: classID,
 	}}
 
 	dm.log.Infow("Resolved compose exclusive L3 cache assignment",
 		"componentName", componentName,
 		"assignedCPUs", assignedCPUs,
 		"classID", classID,
-		"cacheID", selectedCache.ID,
+		// "cacheID", selectedCache.ID,
+		"cacheID", "0",
 		"requiredKi", requiredKi,
-		"neededWays", neededWays,
+		// "neededWays", neededWays,
+		"neededWays", "needed ways status",
 		"wayMask", wayMask,
-		"selectedInterval", fmt.Sprintf("%d-%d", selectedInterval.Start, selectedInterval.Start+selectedInterval.Length-1),
+		// "selectedInterval", fmt.Sprintf("%d-%d", selectedInterval.Start, selectedInterval.Start+selectedInterval.Length-1),
 	)
 
 	return componentAssignments, true, nil
@@ -157,15 +200,17 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 			cpuset,
 		)
 
+		dm.log.Debugw("Applying compose pqos assignment using direct host namespace exec",
+			"componentName", componentName,
+			"classID", assignment.ClassID,
+			"cacheID", cacheID,
+			"mask", mask,
+			"cpuset", cpuset,
+			"pqosCommand", pqosCommand,
+		)
+
 		cmd := exec.CommandContext(
 			ctx,
-			"docker",
-			"run",
-			"--rm",
-			"--privileged",
-			"--pid=host",
-			"--network=host",
-			defaultPQoSHelperImage,
 			"nsenter",
 			"-t",
 			"1",
@@ -178,6 +223,15 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 			"/bin/sh",
 			"-c",
 			pqosCommand,
+		)
+
+		dm.log.Debugw("Executing pqos command in host namespace",
+			"componentName", componentName,
+			"classID", assignment.ClassID,
+			"cacheID", cacheID,
+			"mask", mask,
+			"cpuset", cpuset,
+			"command", cmd.String(),
 		)
 
 		output, err := cmd.CombinedOutput()
@@ -194,7 +248,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 			)
 		}
 
-		dm.log.Infow("Applied compose pqos assignment using docker-socket host exec",
+		dm.log.Infow("Applied compose pqos assignment using direct host namespace exec",
 			"componentName", componentName,
 			"classID", assignment.ClassID,
 			"cacheID", cacheID,

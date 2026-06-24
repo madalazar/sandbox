@@ -58,6 +58,17 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 		return annotations, componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
 	}
 
+	hasRDTWays := false
+	for _, cache := range dm.topologyLookup.L3Caches {
+		if cache.Ways > 0 && cache.WaySizeKB > 0 {
+			hasRDTWays = true
+			break
+		}
+	}
+	if !hasRDTWays {
+		return annotations, componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but CAT/RDT ways are unavailable on this device (topology ways/way_size_kb are 0)", componentName)
+	}
+
 	requiredKi, err := parseBinarySizeKi(exclusiveReqs[0].Size)
 	if err != nil {
 		return annotations, componentAssignments, false, fmt.Errorf("component %q has invalid cache size: %w", componentName, err)
@@ -256,6 +267,7 @@ type wayInterval struct {
 	Length int64
 }
 
+// TODO: this seems to be used by both compose and helm, so maybe move to a shared file????
 func pickSmallestFittingCacheInterval(
 	topologyCaches []device.TopologyCacheInfo,
 	persisted []database.OwnedCacheAssignment,
