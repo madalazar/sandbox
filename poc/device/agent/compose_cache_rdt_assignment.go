@@ -51,7 +51,7 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 			"exclusiveReqs", exclusiveReqs,
 		)
 		// TODO: commented for now to run pqos
-		// return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
+		return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but topology artifact has no L3 cache entries", componentName)
 	}
 
 	hasRDTWays := false
@@ -67,7 +67,7 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 			"exclusiveReqs", exclusiveReqs,
 		)
 		// TODO: comment for now to run pqos
-		// return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but CAT/RDT ways are unavailable on this device (topology ways/way_size_kb are 0)", componentName)
+		return componentAssignments, false, fmt.Errorf("component %q requests exclusive L3 cache but CAT/RDT ways are unavailable on this device (topology ways/way_size_kb are 0)", componentName)
 	}
 
 	requiredKi, err := parseBinarySizeKi(exclusiveReqs[0].Size)
@@ -81,47 +81,49 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 	}
 
 	// TODO: commenting for now to run pqos
-	// candidateCaches, err := dm.filterL3CachesByAssignedCPUs(assignedCPUs)
-	// if err != nil {
-	// 	return componentAssignments, false, fmt.Errorf("component %q could not map assigned CPUs to L3 cache IDs: %w", componentName, err)
-	// }
+	candidateCaches, err := dm.filterL3CachesByAssignedCPUs(assignedCPUs)
+	if err != nil {
+		return componentAssignments, false, fmt.Errorf("component %q could not map assigned CPUs to L3 cache IDs: %w", componentName, err)
+	}
 
 	persisted := dm.database.AllocatedCaches()
 
 	// TODO: this is used from the helm file, is that a good idea????
 	// TODO: I'm commenting all of this so run pqos
-	// selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
-	// 	candidateCaches,
-	// 	persisted,
-	// 	inFlightAssignments,
-	// 	deploymentID,
-	// 	requiredKi,
-	// )
-	// if err != nil {
-	// 	return componentAssignments, false, fmt.Errorf("component %q cache allocation failed: %w", componentName, err)
-	// }
-	// if neededWays <= 0 {
-	// 	return componentAssignments, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
-	// }
-
-	// wayMask, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
-	// if err != nil {
-	// 	return componentAssignments, false, err
-	// }
-	wayMask := "0x0"
-	if componentName == "caterpillar" {
-		wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
-		dm.log.Infow("Resolved compose exclusive L3 cache assignment",
-			"componentName", componentName,
-			"assignedCPUs", assignedCPUs,
-			"wayMask", wayMask)
-	} else if componentName == "cyclictest" {
-		wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
-		dm.log.Infow("Resolved compose exclusive L3 cache assignment",
-			"componentName", componentName,
-			"assignedCPUs", assignedCPUs,
-			"wayMask", wayMask)
+	selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
+		candidateCaches,
+		persisted,
+		inFlightAssignments,
+		deploymentID,
+		requiredKi,
+	)
+	if err != nil {
+		return componentAssignments, false, fmt.Errorf("component %q cache allocation failed: %w", componentName, err)
 	}
+	if neededWays <= 0 {
+		return componentAssignments, false, fmt.Errorf("component %q computed invalid way count %d", componentName, neededWays)
+	}
+
+	wayMask, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
+	if err != nil {
+		return componentAssignments, false, err
+	}
+
+	//TODO: comment to runpqos with hardcoded options
+	// wayMask := "0x0"
+	// if componentName == "caterpillar" {
+	// 	wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
+	// 	dm.log.Infow("Resolved compose exclusive L3 cache assignment",
+	// 		"componentName", componentName,
+	// 		"assignedCPUs", assignedCPUs,
+	// 		"wayMask", wayMask)
+	// } else if componentName == "cyclictest" {
+	// 	wayMask = "0x00f" // TODO: hardcoded for now, but we should compute this from the selected interval
+	// 	dm.log.Infow("Resolved compose exclusive L3 cache assignment",
+	// 		"componentName", componentName,
+	// 		"assignedCPUs", assignedCPUs,
+	// 		"wayMask", wayMask)
+	// }
 
 	classID, err := nextAvailablePQoSClassID(persisted, inFlightAssignments)
 	if err != nil {
@@ -131,10 +133,10 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 	requirementName := componentName
 	componentAssignments[requirementName] = []database.CacheAssignment{{
 		ComponentName: componentName,
-		// Level:         selectedCache.Level,
-		Level: "L3",
-		// CacheID:       selectedCache.ID,
-		CacheID: "0",
+		Level:         selectedCache.Level,
+		// Level: "L3",
+		CacheID: selectedCache.ID,
+		// CacheID: "0",
 		SizeKB:  requiredKi,
 		Mask:    wayMask,
 		ClassID: classID,
@@ -144,13 +146,13 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 		"componentName", componentName,
 		"assignedCPUs", assignedCPUs,
 		"classID", classID,
-		// "cacheID", selectedCache.ID,
-		"cacheID", "0",
+		"cacheID", selectedCache.ID,
+		// "cacheID", "0",
 		"requiredKi", requiredKi,
-		// "neededWays", neededWays,
-		"neededWays", "needed ways status",
+		"neededWays", neededWays,
+		// "neededWays", "needed ways status",
 		"wayMask", wayMask,
-		// "selectedInterval", fmt.Sprintf("%d-%d", selectedInterval.Start, selectedInterval.Start+selectedInterval.Length-1),
+		"selectedInterval", fmt.Sprintf("%d-%d", selectedInterval.Start, selectedInterval.Start+selectedInterval.Length-1),
 	)
 
 	return componentAssignments, true, nil
@@ -192,7 +194,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		}
 
 		pqosCommand := fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true; pqos -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
+			"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
 			cacheID,
 			cosID,
 			mask,

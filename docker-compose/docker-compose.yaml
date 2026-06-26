@@ -19,6 +19,7 @@ services:
       # - /root/.kube/config:/root/.kube/config:ro # to manage kubernetes runtimes
       - /var/run/docker.sock:/var/run/docker.sock # to manage docker runtimes
       - /home/robot/rt-benchmark-compose-app:/rt-benchmark-compose-app:ro
+      - /home/labrat/rt-benchmark-compose-app:/rt-benchmark-compose-app:ro
       - ./config/config.yaml:/config/config.yaml
       - ./config/capabilities.json:/config/capabilities.json
       - ./config/cpu-topology-agent.json:/config/cpu-topology-agent.json
