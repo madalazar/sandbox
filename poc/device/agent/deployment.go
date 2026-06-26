@@ -723,7 +723,6 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
 		}
 
-		// TODO: hear we also need to update the balloon policy to delete the clos (class + partition)
 		if err := dm.database.ClearCacheAssignments(deploymentId); err != nil {
 			dm.log.Warnw("Failed to clear cache assignments during removal", "deploymentId", deploymentId, "err", err)
 		}
@@ -866,6 +865,7 @@ func (dm *DeploymentManager) removeHelm(
 		return nil
 	}
 
+	// TODO: refactor this as we should exit here
 	cacheAssignmentsByComponent := map[string][]database.CacheAssignment{}
 	if record, err := dm.database.GetDeployment(deploymentId); err != nil {
 		dm.log.Warnw("Failed to load deployment record for cache assignment cleanup", "deploymentId", deploymentId, "error", err)
@@ -919,6 +919,11 @@ func (dm *DeploymentManager) removeCompose(
 		return nil
 	}
 
+	record, err := dm.database.GetDeployment(deploymentId)
+	if err != nil {
+		return fmt.Errorf("failed to load deployment record for compose cache reset cleanup: %w", err)
+	}
+
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
@@ -946,6 +951,13 @@ func (dm *DeploymentManager) removeCompose(
 			dm.log.Infow("Docker Compose project removed successfully",
 				"projectName", projectName,
 				"componentName", composeComp.Name)
+
+			if err := dm.resetComposeComponentPQoSMask(ctx, composeComp.Name, record.CacheAssignments); err != nil {
+				dm.log.Warnw("Failed to reset compose pqos mask during removal",
+					"deploymentId", deploymentId,
+					"componentName", composeComp.Name,
+					"error", err)
+			}
 		}
 	}
 

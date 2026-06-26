@@ -262,6 +262,186 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 	return nil
 }
 
+func (dm *DeploymentManager) resetComposeComponentPQoSMask(
+	ctx context.Context,
+	componentName string,
+	cacheAssignmentsByComponent map[string][]database.CacheAssignment,
+) error {
+	if cacheAssignmentsByComponent == nil {
+		return nil
+	}
+
+	cacheAssignments := make([]database.CacheAssignment, 0)
+	trimmedComponentName := strings.TrimSpace(componentName)
+	if trimmedComponentName == "" {
+		return nil
+	}
+
+	if direct, ok := cacheAssignmentsByComponent[trimmedComponentName]; ok && len(direct) > 0 {
+		cacheAssignments = append(cacheAssignments, direct...)
+	} else {
+		for _, assignmentList := range cacheAssignmentsByComponent {
+			for _, assignment := range assignmentList {
+				if strings.TrimSpace(assignment.ComponentName) == trimmedComponentName {
+					cacheAssignments = append(cacheAssignments, assignment)
+				}
+			}
+		}
+	}
+
+	if len(cacheAssignments) == 0 {
+		return nil
+	}
+
+	processed := map[string]struct{}{}
+	classCPUSetCache := map[int]string{}
+	for _, assignment := range cacheAssignments {
+		if assignment.ClassID <= 0 {
+			dm.log.Warnw("Skipping compose pqos reset due to invalid class ID",
+				"componentName", componentName,
+				"classID", assignment.ClassID,
+				"cacheID", assignment.CacheID)
+			continue
+		}
+
+		cacheID := strings.TrimSpace(assignment.CacheID)
+		if cacheID == "" {
+			dm.log.Warnw("Skipping compose pqos reset due to empty cache ID",
+				"componentName", componentName,
+				"classID", assignment.ClassID)
+			continue
+		}
+
+		cacheInfo, ok := dm.findL3CacheByID(cacheID)
+		if !ok {
+			return fmt.Errorf("component %q cache ID %q not found in topology for pqos reset", componentName, cacheID)
+		}
+		if cacheInfo.Ways <= 0 {
+			return fmt.Errorf("component %q cache ID %q has invalid ways=%d for pqos reset", componentName, cacheID, cacheInfo.Ways)
+		}
+
+		// reset to use all ways for this cache ID
+		resetMask, err := wayMaskHexForInterval(0, cacheInfo.Ways)
+		if err != nil {
+			return fmt.Errorf("component %q failed to compute full-way mask for cache ID %q: %w", componentName, cacheID, err)
+		}
+
+		key := fmt.Sprintf("%s/%d", cacheID, assignment.ClassID)
+		if _, exists := processed[key]; exists {
+			continue
+		}
+		processed[key] = struct{}{}
+
+		cosID := strconv.Itoa(assignment.ClassID)
+		classCPUSet, cached := classCPUSetCache[assignment.ClassID]
+		if !cached {
+			resolvedCPUSet, resolveErr := dm.readResctrlClassCPUSet(ctx, assignment.ClassID)
+			if resolveErr != nil {
+				return fmt.Errorf("component %q failed to resolve resctrl cpuset for classId=%d: %w", componentName, assignment.ClassID, resolveErr)
+			}
+			classCPUSet = strings.TrimSpace(resolvedCPUSet)
+			classCPUSetCache[assignment.ClassID] = classCPUSet
+		}
+
+		pqosCommand := ""
+		if classCPUSet != "" {
+			pqosCommand = fmt.Sprintf(
+				"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s' -a 'core:0=%s'",
+				cacheID,
+				cosID,
+				resetMask,
+				classCPUSet,
+			)
+		} else {
+			pqosCommand = fmt.Sprintf(
+				"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s'",
+				cacheID,
+				cosID,
+				resetMask,
+			)
+		}
+
+		dm.log.Debugw("Resetting compose pqos class mask to full cache-way mask",
+			"componentName", componentName,
+			"classID", assignment.ClassID,
+			"cacheID", cacheID,
+			"resetMask", resetMask,
+			"classCPUSet", classCPUSet,
+			"pqosCommand", pqosCommand,
+		)
+
+		cmd := exec.CommandContext(
+			ctx,
+			"nsenter",
+			"-t",
+			"1",
+			"-m",
+			"-u",
+			"-i",
+			"-n",
+			"-p",
+			"--",
+			"/bin/sh",
+			"-c",
+			pqosCommand,
+		)
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf(
+				"failed to reset pqos class mask/core association for component %q (classId=%d cacheID=%s mask=%s cpuset=%s): %w: %s",
+				componentName,
+				assignment.ClassID,
+				cacheID,
+				resetMask,
+				classCPUSet,
+				err,
+				strings.TrimSpace(string(output)),
+			)
+		}
+
+		dm.log.Infow("Reset compose pqos class mask",
+			"componentName", componentName,
+			"classID", assignment.ClassID,
+			"cacheID", cacheID,
+			"mask", resetMask,
+			"cpusetMovedToCos0", classCPUSet,
+		)
+	}
+
+	return nil
+}
+
+func (dm *DeploymentManager) readResctrlClassCPUSet(ctx context.Context, classID int) (string, error) {
+	if classID <= 0 {
+		return "", fmt.Errorf("invalid class ID %d", classID)
+	}
+
+	resctrlPath := fmt.Sprintf("/sys/fs/resctrl/COS%d/cpus_list", classID)
+	cmd := exec.CommandContext(
+		ctx,
+		"nsenter",
+		"-t",
+		"1",
+		"-m",
+		"-u",
+		"-i",
+		"-n",
+		"-p",
+		"--",
+		"/bin/sh",
+		"-c",
+		fmt.Sprintf("cat %s 2>/dev/null || true", resctrlPath),
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w: %s", resctrlPath, err, strings.TrimSpace(string(output)))
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func nextAvailablePQoSClassID(
 	persisted []database.OwnedCacheAssignment,
 	inFlight map[string][]database.CacheAssignment,
