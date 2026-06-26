@@ -28,29 +28,13 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
 # FROM docker:28.3.3-cli AS docker-source
 FROM --platform=$BUILDPLATFORM docker:28.3.3-cli AS docker-source
 
-# Stage 3: Build pqos for Alpine runtime
-FROM --platform=$BUILDPLATFORM alpine:3.18 AS pqos-builder
-
-ARG INTEL_CMT_CAT_REF=v4.4.1
-
-RUN apk add --no-cache git build-base cmake linux-headers
-
-WORKDIR /src/intel-cmt-cat
-RUN git clone --depth 1 --branch ${INTEL_CMT_CAT_REF} https://github.com/intel/intel-cmt-cat.git . \
-    && make -C lib -j"$(nproc)" \
-    && make -C pqos -j"$(nproc)" \
-    && install -D pqos/pqos /out/usr/local/bin/pqos \
-    && install -D lib/libpqos.so /out/usr/local/lib/libpqos.so \
-    && install -D lib/libpqos.so.4 /out/usr/local/lib/libpqos.so.4 \
-    && install -D lib/libpqos.so.4.4.1 /out/usr/local/lib/libpqos.so.4.4.1
-
 # Stage 3: Runtime
 FROM alpine:3.18
 
 ARG TARGETARCH
 
 # Install runtime tools required by deployment logic.
-# util-linux + kmod are needed for nsenter/modprobe, pqos is copied from pqos-builder.
+# util-linux + kmod are needed for nsenter/modprobe.
 RUN apk add --no-cache ca-certificates tzdata yq curl util-linux kmod \
     && KUBECTL_VERSION="v1.31.0" \
     && case "$TARGETARCH" in \
@@ -65,10 +49,6 @@ WORKDIR /
 
 COPY --from=builder /app/device-agent .
 COPY --from=builder /app/poc/device/agent/config ./config
-COPY --from=pqos-builder /out/usr/local/bin/pqos /usr/local/bin/pqos
-COPY --from=pqos-builder /out/usr/local/lib/libpqos.so /usr/local/lib/libpqos.so
-COPY --from=pqos-builder /out/usr/local/lib/libpqos.so.4 /usr/local/lib/libpqos.so.4
-COPY --from=pqos-builder /out/usr/local/lib/libpqos.so.4.4.1 /usr/local/lib/libpqos.so.4.4.1
 # this will remove the dependency from docker image 
 COPY --from=docker-source /usr/local/bin/docker /usr/bin/docker
 
