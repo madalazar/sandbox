@@ -34,13 +34,13 @@ func (dm *DeploymentManager) resolveComponentCacheAnnotations(
 		return annotations, componentAssignments, false, nil
 	}
 
-	exclusiveReqs := make([]sbi.Cache, 0)
+	exclusiveReqs := make([]sbi.CacheRequirement, 0)
 	for _, cacheReq := range *requiredResources.Cache {
-		if cacheReq.Level != sbi.L3 {
+		if cacheReq.Level != sbi.CacheRequirementLevelL3 {
 			return annotations, componentAssignments, false, fmt.Errorf("component %q requests unsupported cache level %q (only L3 is supported)", componentName, cacheReq.Level)
 		}
 
-		if cacheReq.Allocation == sbi.CacheAllocationExclusive {
+		if cacheReq.Allocation == sbi.CacheRequirementAllocationExclusive {
 			exclusiveReqs = append(exclusiveReqs, cacheReq)
 		}
 	}

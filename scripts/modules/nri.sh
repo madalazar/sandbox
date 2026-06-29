@@ -139,8 +139,8 @@ _nri_load_l3_ways_from_cache_file() {
 
   [[ -r "$cache_file" ]] || return 1
 
-  local level cache_id allocation size ways way_size
-  while IFS=$'\t' read -r level cache_id allocation size ways way_size; do
+  local level cache_id allocation_types size ways way_size
+  while IFS=$'\t' read -r level cache_id allocation_types size ways way_size; do
     [[ -n "$level" ]] || continue
     [[ "$level" =~ ^# ]] && continue
     [[ "$level" == "L3" ]] || continue

@@ -16,8 +16,8 @@ _build_caches_json() {
 		return 0
 	fi
 
-	local level id allocation size_kb ways way_size_kb cores
-	while IFS=$'\t' read -r level id allocation size_kb ways way_size_kb cores; do
+	local level id allocation_types size_kb ways way_size_kb cores
+	while IFS=$'\t' read -r level id allocation_types size_kb ways way_size_kb cores; do
 		# Skip comment lines and incomplete entries
 		[[ "$level" == "#"* ]] && continue
 		[[ -z "$level" || -z "$id" || -z "$size_kb" ]] && continue

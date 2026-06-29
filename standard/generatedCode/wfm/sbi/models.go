@@ -13,18 +13,32 @@ const (
 	PayloadSignatureScopes = "PayloadSignature.Scopes"
 )
 
-// Defines values for CacheAllocation.
+// Defines values for CacheCapabilityAllocationTypes.
 const (
-	CacheAllocationExclusive CacheAllocation = "exclusive"
-	CacheAllocationShared    CacheAllocation = "shared"
+	CacheCapabilityAllocationTypesExclusive CacheCapabilityAllocationTypes = "exclusive"
+	CacheCapabilityAllocationTypesShared    CacheCapabilityAllocationTypes = "shared"
 )
 
-// Defines values for CacheLevel.
+// Defines values for CacheCapabilityLevel.
 const (
-	L1d CacheLevel = "L1d"
-	L1i CacheLevel = "L1i"
-	L2  CacheLevel = "L2"
-	L3  CacheLevel = "L3"
+	CacheCapabilityLevelL1d CacheCapabilityLevel = "L1d"
+	CacheCapabilityLevelL1i CacheCapabilityLevel = "L1i"
+	CacheCapabilityLevelL2  CacheCapabilityLevel = "L2"
+	CacheCapabilityLevelL3  CacheCapabilityLevel = "L3"
+)
+
+// Defines values for CacheRequirementAllocation.
+const (
+	CacheRequirementAllocationExclusive CacheRequirementAllocation = "exclusive"
+	CacheRequirementAllocationShared    CacheRequirementAllocation = "shared"
+)
+
+// Defines values for CacheRequirementLevel.
+const (
+	CacheRequirementLevelL1d CacheRequirementLevel = "L1d"
+	CacheRequirementLevelL1i CacheRequirementLevel = "L1i"
+	CacheRequirementLevelL2  CacheRequirementLevel = "L2"
+	CacheRequirementLevelL3  CacheRequirementLevel = "L3"
 )
 
 // Defines values for ComponentStatusState.
@@ -128,23 +142,41 @@ const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
 )
 
-// Cache Cache requirement or capability
-type Cache struct {
-	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
-	Allocation CacheAllocation `json:"allocation"`
+// CacheCapability Cache capability reported by the device
+type CacheCapability struct {
+	// AllocationTypes Supported cache allocation types. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	AllocationTypes []CacheCapabilityAllocationTypes `json:"allocationTypes"`
 
 	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
-	Level CacheLevel `json:"level"`
+	Level CacheCapabilityLevel `json:"level"`
 
 	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
 	Size *string `json:"size,omitempty"`
 }
 
-// CacheAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
-type CacheAllocation string
+// CacheCapabilityAllocationTypes defines model for CacheCapability.AllocationTypes.
+type CacheCapabilityAllocationTypes string
 
-// CacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
-type CacheLevel string
+// CacheCapabilityLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type CacheCapabilityLevel string
+
+// CacheRequirement Cache requirement requested by an application profile/component
+type CacheRequirement struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation CacheRequirementAllocation `json:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level CacheRequirementLevel `json:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size,omitempty"`
+}
+
+// CacheRequirementAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type CacheRequirementAllocation string
+
+// CacheRequirementLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type CacheRequirementLevel string
 
 // ComponentStatus defines model for ComponentStatus.
 type ComponentStatus struct {
@@ -219,7 +251,7 @@ type DeviceCapabilitiesManifest struct {
 		ModelNumber string `json:"modelNumber"`
 		Resources   struct {
 			// Cache Cache resources available on the device
-			Cache *[]Cache `json:"cache,omitempty"`
+			Cache *[]CacheCapability `json:"cache,omitempty"`
 			Cpu   []struct {
 				Architecture *DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture `json:"architecture,omitempty"`
 
@@ -441,7 +473,7 @@ type HelmApplicationDeploymentProfileComponent struct {
 // RequiredResources Required resources for a deployment profile or component
 type RequiredResources struct {
 	// Cache Cache requirements for the deployment profile or component
-	Cache *[]Cache `json:"cache,omitempty"`
+	Cache *[]CacheRequirement `json:"cache,omitempty"`
 
 	// Cpu CPU requirements for the deployment profile
 	Cpu *[]Cpu `json:"cpu,omitempty"`

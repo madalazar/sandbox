@@ -167,23 +167,60 @@ update_capabilities_cache_from_host() {
   fi
 
   local cache_array_json='[]'
-  local level cache_id allocation size ways way_size_kb
-  while IFS=$'\t' read -r level cache_id allocation size ways way_size_kb; do
+  local level cache_id cache_id_num allocation_types size ways way_size_kb
+  while IFS=$'\t' read -r level cache_id allocation_types size ways way_size_kb; do
     [[ "$level" == "L3" ]] || continue
     [[ "$cache_id" =~ ^L#[0-9]+$ ]] || continue
-    [[ "$allocation" =~ ^(exclusive|shared)$ ]] || continue
+    cache_id_num="${cache_id#L#}"
+    [[ "$cache_id_num" =~ ^[0-9]+$ ]] || continue
+    [[ -n "$allocation_types" ]] || continue
     [[ "$size" =~ ^[0-9]+KB$ ]] || continue
     if ! cache_array_json="$({
       jq -c \
         --arg level "$level" \
-        --arg allocation "$allocation" \
+        --arg cache_id "$cache_id_num" \
+        --arg allocation_types "$allocation_types" \
         --arg size "$size" \
-        '. + [{level: $level, allocation: $allocation, size: $size}]' <<< "$cache_array_json"
+        '
+          ($allocation_types
+            | split(",")
+            | map(gsub("^ +| +$"; "") | ascii_downcase)
+            | map(select(. == "exclusive" or . == "shared"))
+            | unique
+          ) as $types
+          |
+          if ($types | length) == 0 then
+            .
+          elif any(.[]; .cacheId == $cache_id and .level == $level and .size == $size) then
+            map(
+              if .cacheId == $cache_id and .level == $level and .size == $size then
+                .allocationTypes = ((.allocationTypes + $types) | unique)
+              else
+                .
+              end
+            )
+          else
+            . + [{level: $level, cacheId: $cache_id, allocationTypes: $types, size: $size}]
+          end
+        ' <<< "$cache_array_json"
     })"; then
       echo "ERROR: Failed to construct cache capabilities JSON"
       return 1
     fi
   done < <(grep -v '^#' "$cache_file")
+
+  if ! cache_array_json="$(jq -c '
+    map({
+      level: .level,
+      cacheId: (.cacheId | tostring | gsub("^L#"; "")),
+      size: .size,
+      allocationTypes: ((.allocationTypes | unique | sort))
+    })
+    | sort_by(.level, (.cacheId | tonumber), .size)
+  ' <<< "$cache_array_json")"; then
+    echo "ERROR: Failed to finalize cache capabilities JSON"
+    return 1
+  fi
 
   if [[ "$cache_array_json" == "[]" ]]; then
     echo "ERROR: Failed to construct cache capabilities JSON"
@@ -199,16 +236,54 @@ update_capabilities_cache_from_host() {
   tmp_file="$(mktemp)"
 
   if ! jq --argjson cache "$cache_array_json" '
-    def cache_item_ok:
+    def legacy_cache_item_ok:
       (type == "object")
       and (.level | type == "string")
       and (.allocation | type == "string")
       and (.size | type == "string");
 
+    def cache_item_ok:
+      (type == "object")
+      and (.level | type == "string")
+      and (
+        (has("cacheId") | not)
+        or
+        (
+          ((.cacheId | type) == "string" or (.cacheId | type) == "number")
+          and ((.cacheId | tostring | gsub("^L#"; "") | test("^[0-9]+$")))
+        )
+      )
+      and (.allocationTypes | type == "array")
+      and (.allocationTypes | length > 0)
+      and (.allocationTypes | all(.[]; (type == "string") and (. == "exclusive" or . == "shared")))
+      and (.size | type == "string");
+
+    def normalize_cache_shape:
+      if (type == "array") and (all(.[]; legacy_cache_item_ok)) then
+        map({
+          level: .level,
+          cacheId: "0",
+          allocationTypes: [.allocation],
+          size: .size
+        })
+      elif (type == "array") and (all(.[]; cache_item_ok)) then
+        to_entries
+        | map({
+            level: .value.level,
+            cacheId: ((.value.cacheId // (.key | tostring)) | tostring | gsub("^L#"; "")),
+            allocationTypes: ((.value.allocationTypes | unique | sort)),
+            size: .value.size
+          })
+      else
+        .
+      end;
+
     def cache_shape_similar_at($path):
       (getpath($path) | type) == "object"
       and (
-        ((getpath($path + ["cache"]) | type) == "array" and (getpath($path + ["cache"]) | all(.[]; cache_item_ok)))
+        ((getpath($path + ["cache"]) | type) == "array"
+         and ((getpath($path + ["cache"]) | all(.[]; cache_item_ok))
+              or (getpath($path + ["cache"]) | all(.[]; legacy_cache_item_ok))))
         or
         ((getpath($path + ["cache"]) | type) == "null")
       );
@@ -218,7 +293,7 @@ update_capabilities_cache_from_host() {
     elif cache_shape_similar_at(["resources"]) then
       setpath(["resources", "cache"]; $cache)
     else
-      error("Refusing cache update: existing properties.resources.cache/resources.cache schema is not similar to expected cache capability entries")
+      error("Refusing cache update: existing properties.resources.cache/resources.cache schema is not similar to expected cache capability entries (level, allocationTypes[], size)")
     end
   ' "$capabilities_file" > "$tmp_file"; then
     rm -f "$tmp_file"

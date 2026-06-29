@@ -277,13 +277,9 @@ get_cache_allocation_modes_for_level() {
     L3)
       local info_dir="/sys/fs/resctrl/info/${level}"
       if [[ -d "$info_dir" ]]; then
-        local has_cbm=0 closids=0
+        local has_cbm=0
         [[ -s "$info_dir/cbm_mask" ]] && has_cbm=1
-        if [[ -r "$info_dir/num_closids" ]]; then
-          closids="$(tr -d '[:space:]' < "$info_dir/num_closids" 2>/dev/null || echo 0)"
-          [[ "$closids" =~ ^[0-9]+$ ]] || closids=0
-        fi
-        if (( has_cbm == 1 && closids > 1 )); then
+        if (( has_cbm == 1 )); then
           echo "shared exclusive"
           return 0
         fi
@@ -299,7 +295,8 @@ get_cache_allocation_modes_for_level() {
 # Build cache topology TSV cache file.
 # Cache file format (tab-separated, one cache instance per line):
 #   # comments / header lines starting with #
-#   <level>  <id>  <allocation>  <size>
+#   <level>  <id>  <allocationTypes>  <size>  <ways>  <way_size_kb>  <cores>
+# allocationTypes is a comma-separated list (for example: "shared" or "shared,exclusive").
 #
 # Usage: build_cache_topology_cache [output_file]
 build_cache_topology_cache() {
@@ -327,9 +324,9 @@ build_cache_topology_cache() {
 
   if ! {
     echo "# cache-topology cache — generated $(date -u '+%Y-%m-%dT%H:%M:%SZ') by $(uname -n)"
-    printf '# %s\t%s\t%s\t%s\t%s\t%s\t%s\n' "level" "id" "allocation" "size" "ways" "way_size_kb" "cores"
+    printf '# %s\t%s\t%s\t%s\t%s\t%s\t%s\n' "level" "id" "allocationTypes" "size" "ways" "way_size_kb" "cores"
 
-    local line ord level cache_id size_kb count allocation modes i
+    local line ord level cache_id size_kb count allocation_types modes i
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
       IFS='|' read -r ord level cache_id size_kb <<< "$line"
@@ -343,10 +340,9 @@ build_cache_topology_cache() {
       local cores="${_CACHE_TOPOLOGY_CORES["$key"]:-}"
 
       modes="$(get_cache_allocation_modes_for_level "$level")"
-      for allocation in $modes; do
-        for ((i = 0; i < count; i++)); do
-          printf '%s\t%s\t%s\t%sKB\t%s\t%s\t%s\n' "$level" "$cache_id" "$allocation" "$size_kb" "$ways" "$way_size" "$cores"
-        done
+      allocation_types="${modes// /,}"
+      for ((i = 0; i < count; i++)); do
+        printf '%s\t%s\t%s\t%sKB\t%s\t%s\t%s\n' "$level" "$cache_id" "$allocation_types" "$size_kb" "$ways" "$way_size" "$cores"
       done
     done <<< "$keys_sorted"
   } > "$output_file"; then
