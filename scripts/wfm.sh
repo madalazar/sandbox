@@ -39,7 +39,7 @@ GHCR_REGISTRY="ghcr.io"
 GHCR_ORG="margo"
 SYMPHONY_IMAGE="margo-symphony-api"
 SYMPHONY_TAG="latest"
-SYMPHONY_IMAGE_REF="${GHCR_REGISTRY}/${GHCR_ORG}/${SYMPHONY_IMAGE}:${SYMPHONY_TAG}"
+SYMPHONY_IMAGE_REF="${SYMPHONY_IMAGE}:${SYMPHONY_TAG}"
 SYMPHONY_IMAGE_REF="${SYMPHONY_IMAGE_REF:-${GHCR_REGISTRY}/${GHCR_ORG}/${SYMPHONY_IMAGE}:${SYMPHONY_TAG}}"
 
 # Load shared library
@@ -69,8 +69,8 @@ install_prerequisites() {
   setup_k3s
   install_redis
   install_oras
-  clone_symphony_repo
-  clone_dev_repo
+  # clone_symphony_repo
+  # clone_dev_repo
 
   setup_harbor
   trust_harbor_certificate
@@ -166,7 +166,7 @@ uninstall_prerequisites() {
   cleanup_symphony_builds
 
   # Step 2: Remove cloned repositories
-  remove_cloned_repositories
+  # remove_cloned_repositories
 
   # Step 3: Uninstall Rust
   uninstall_rust
@@ -214,10 +214,10 @@ remove_cloned_repositories() {
   echo "2. Removing cloned repositories..."
 
   # Remove sandbox
-  [ -d "$HOME/sandbox" ] && sudo rm -rf "$HOME/sandbox" && echo "✅ Removed sandbox repository"
+  #[ -d "$HOME/sandbox" ] && sudo rm -rf "$HOME/sandbox" && echo "✅ Removed sandbox repository"
 
   # Remove symphony repo
-  [ -d "$HOME/symphony" ] && sudo rm -rf "$HOME/symphony" && echo "✅ Removed symphony repository"
+  #[ -d "$HOME/symphony" ] && sudo rm -rf "$HOME/symphony" && echo "✅ Removed symphony repository"
 }
 
 uninstall_rust() {
@@ -355,6 +355,24 @@ stop_symphony() {
   fi
 }
 
+push_app_package_to_registry_menu() {
+  echo "📦 Push App Package to Registry"
+  echo "==============================="
+  echo "Provide the package source directory that contains margo-package/"
+  echo "Example: $HOME/sandbox/poc/tests/artefacts/nextcloud-compose"
+  echo ""
+
+  read -p "Enter package source directory: " package_source_dir
+  read -p "Enter package repository name (without org): " package_repo_name
+  read -p "Enter tag [latest]: " package_tag
+
+  if [ -z "$package_tag" ]; then
+    package_tag="latest"
+  fi
+
+  push_app_package_to_registry "$package_source_dir" "$package_repo_name" "$package_tag"
+}
+
 
 # Update the show_menu function to include uninstall option
 show_menu() {
@@ -367,8 +385,9 @@ show_menu() {
   echo "4) Symphony: Stop"
   echo "5) ObservabilityStack: Start"
   echo "6) ObservabilityStack: Stop"
-  echo "7) Exit"
-  read -p "Enter choice [1-7]: " choice
+  echo "7) App Package: Push to Harbor"
+  echo "8) Exit"
+  read -p "Enter choice [1-8]: " choice
   case $choice in
     1) install_prerequisites ;;
     2) uninstall_prerequisites ;;
@@ -376,7 +395,8 @@ show_menu() {
     4) stop_symphony ;;
     5) observability_stack_install ;;
     6) observability_stack_uninstall ;;
-    7) echo "👋 Goodbye!"; exit 0 ;;
+    7) push_app_package_to_registry_menu ;;
+    8) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "⚠️ Invalid choice"; sleep 2 ;;
   esac
 
@@ -403,8 +423,9 @@ else
     stop) stop_symphony ;;
     obs-install) observability_stack_install ;;
     obs-uninstall) observability_stack_uninstall ;;
+    push-app) push_app_package_to_registry "$2" "$3" "$4" ;;
     *)
-      echo "Usage: $0 {install|uninstall|start|stop|obs-install|obs-uninstall}"
+      echo "Usage: $0 {install|uninstall|start|stop|obs-install|obs-uninstall|push-app <package_source_dir> <package_repo_name> [tag]}"
       exit 1
       ;;
   esac
