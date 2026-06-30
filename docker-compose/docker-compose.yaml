@@ -8,6 +8,14 @@ services:
     privileged: true
     pid: "host"
     network_mode: "host"
+    environment:
+      HTTP_PROXY: &proxy_url ${HTTP_PROXY:-http://proxy-dmz.intel.com:912}
+      HTTPS_PROXY: *proxy_url
+      http_proxy: *proxy_url
+      https_proxy: *proxy_url
+      NO_PROXY: &no_proxy_list ${NO_PROXY:-localhost,127.0.0.1,si-docker.ir.intel.com,intel.com,.intel.com,.svc,.local,.internal,127.0.0.0/8,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,10.123.232.165,10.123.232.166,harbor.machine}
+      no_proxy: *no_proxy_list
+      SSL_CERT_FILE: /config/harbor.crt
     # Add log rotation configuration
     logging:
       driver: "json-file"
@@ -28,6 +36,7 @@ services:
       - ./config/device-ecdsa.key:/config/device-ecdsa.key
       - ./config/device-ecdsa.crt:/config/device-ecdsa.crt
       - ./config/ca-cert.pem:/config/ca-cert.pem
+      - ./config/harbor.crt:/config/harbor.crt
       - ./data:/data
     restart: unless-stopped
     entrypoint: ["./device-agent"]

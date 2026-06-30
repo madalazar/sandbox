@@ -156,6 +156,7 @@ start_device_agent_docker_service() {
     cp "$HOME/certs/device-ecdsa.key"    ./config
     cp "$HOME/certs/device-ecdsa.crt"    ./config
     cp "$HOME/certs/ca-cert.pem"         ./config
+    cp "$HOME/certs/harbor.crt"         ./config
     echo "Copied certs from \$HOME/certs to ./config"
   else
     echo "❌ device-start-failed: Required certificates missing in $HOME/certs (ca-cert.pem)"

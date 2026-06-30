@@ -24,7 +24,7 @@ deploymentProfiles:
     components:
       - name: cyclictest
         properties:
-          packageLocation: /rt-benchmark-compose-app/cyclictest/docker-compose.yaml
+          packageLocation: oci://harbor.machine:8443/library/cyclictest-compose-package:latest
         requiredResources:
           cache:
             - level: L3
@@ -74,7 +74,7 @@ deploymentProfiles:
 
 parameters:
   cyclictestImage:
-    value: harbor.machine:8443/library/cyclictest:latest
+    value: harbor.machine:8443/library/cyclictest
     targets:
       - pointer: CYCLICTEST_IMAGE
         components: ["cyclictest"]

@@ -13,8 +13,15 @@ import (
 	"strings"
 	"time"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/margo/sandbox/shared-lib/file"
 	"go.uber.org/multierr"
+	"oras.land/oras-go/v2"
+	"oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/content/memory"
+	"oras.land/oras-go/v2/registry"
+	"oras.land/oras-go/v2/registry/remote"
+	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
 type DockerComposeCliClient struct {
@@ -579,6 +586,13 @@ func (c *DockerComposeCliClient) DownloadCompose(
 	keyLocation *string,
 	projectName string,
 ) (string, error) {
+	if strings.TrimSpace(packageLocation) == "" {
+		return "", fmt.Errorf("compose package location cannot be empty")
+	}
+
+	if strings.HasPrefix(packageLocation, "oci://") {
+		return c.downloadAndExtractComposeFromOCI(ctx, packageLocation, projectName)
+	}
 
 	isHTTP := strings.HasPrefix(packageLocation, "http://") ||
 		strings.HasPrefix(packageLocation, "https://")
@@ -600,6 +614,153 @@ func (c *DockerComposeCliClient) DownloadCompose(
 
 	// Assume it's inline YAML content or local path
 	return packageLocation, nil
+}
+
+func (c *DockerComposeCliClient) downloadAndExtractComposeFromOCI(
+	ctx context.Context,
+	ociReference string,
+	projectName string,
+) (string, error) {
+	parsedRef, err := parseOCIComposeReference(ociReference)
+	if err != nil {
+		return "", err
+	}
+
+	repo, err := remote.NewRepository(fmt.Sprintf("%s/%s", parsedRef.Registry, parsedRef.Repository))
+	if err != nil {
+		return "", fmt.Errorf("failed to create OCI repository client: %w", err)
+	}
+	repo.Client = auth.DefaultClient
+
+	projectDir := filepath.Join(c.workingDir, projectName)
+	archivePath := filepath.Join(projectDir, ".archive.tar.gz")
+	extractDir := filepath.Join(projectDir, ".extracted")
+
+	defer func() {
+		_ = multierr.Combine(
+			ignoreNotExist(os.Remove(archivePath)),
+			os.RemoveAll(extractDir),
+		)
+	}()
+
+	if err := os.MkdirAll(projectDir, 0750); err != nil {
+		return "", fmt.Errorf("failed to create project directory: %w", err)
+	}
+
+	artifactStore := memory.New()
+	rootDesc, err := oras.Copy(ctx, repo, parsedRef.Reference, artifactStore, "", oras.DefaultCopyOptions)
+	if err != nil {
+		return "", fmt.Errorf("failed to pull OCI compose artifact %s: %w", ociReference, err)
+	}
+
+	composeLayer, err := findComposeLayer(ctx, artifactStore, rootDesc)
+	if err != nil {
+		return "", err
+	}
+
+	title := strings.ToLower(strings.TrimSpace(composeLayer.Annotations[ocispec.AnnotationTitle]))
+	composePayload, err := content.FetchAll(ctx, artifactStore, composeLayer)
+	if err != nil {
+		return "", fmt.Errorf("failed to read OCI compose layer %s: %w", composeLayer.Digest, err)
+	}
+
+	if strings.HasSuffix(title, ".yaml") || strings.HasSuffix(title, ".yml") {
+		composePath := filepath.Join(projectDir, filepath.Base(composeLayer.Annotations[ocispec.AnnotationTitle]))
+		if err := os.WriteFile(composePath, composePayload, 0600); err != nil {
+			return "", fmt.Errorf("failed to write OCI compose file: %w", err)
+		}
+		return composePath, nil
+	}
+
+	if err := os.WriteFile(archivePath, composePayload, 0600); err != nil {
+		return "", fmt.Errorf("failed to write OCI compose payload: %w", err)
+	}
+
+	composeFile, err := c.extractAndFindCompose(archivePath, extractDir)
+	if err != nil {
+		return "", err
+	}
+
+	finalComposePath := filepath.Join(projectDir, filepath.Base(composeFile))
+	if err := os.Rename(composeFile, finalComposePath); err != nil {
+		if copyErr := c.copyFile(composeFile, finalComposePath); copyErr != nil {
+			return "", fmt.Errorf(
+				"failed to move compose file: %w",
+				multierr.Combine(err, copyErr),
+			)
+		}
+	}
+
+	return finalComposePath, nil
+}
+
+type ociComposeReference struct {
+	Registry   string
+	Repository string
+	Reference  string
+}
+
+func parseOCIComposeReference(ref string) (ociComposeReference, error) {
+	ref = strings.TrimSpace(ref)
+	ref = strings.TrimPrefix(ref, "oci://")
+
+	parsed, err := registry.ParseReference(ref)
+	if err != nil {
+		return ociComposeReference{}, fmt.Errorf("invalid OCI compose reference %q: %w", ref, err)
+	}
+	if parsed.Reference == "" {
+		return ociComposeReference{}, fmt.Errorf(
+			"OCI compose reference must include a tag or digest: %s/%s",
+			parsed.Registry,
+			parsed.Repository,
+		)
+	}
+
+	return ociComposeReference{
+		Registry:   parsed.Registry,
+		Repository: parsed.Repository,
+		Reference:  parsed.Reference,
+	}, nil
+}
+
+func findComposeLayer(ctx context.Context, store content.ReadOnlyStorage, root ocispec.Descriptor) (ocispec.Descriptor, error) {
+	stack := []ocispec.Descriptor{root}
+	seen := map[string]struct{}{}
+
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		if _, ok := seen[current.Digest.String()]; ok {
+			continue
+		}
+		seen[current.Digest.String()] = struct{}{}
+
+		successors, err := content.Successors(ctx, store, current)
+		if err != nil {
+			return ocispec.Descriptor{}, fmt.Errorf("failed to inspect OCI compose artifact %s: %w", current.Digest, err)
+		}
+		for _, successor := range successors {
+			if isComposePayloadDescriptor(successor) {
+				return successor, nil
+			}
+			stack = append(stack, successor)
+		}
+	}
+
+	return ocispec.Descriptor{}, fmt.Errorf("failed to locate compose payload in OCI artifact %s", root.Digest)
+}
+
+func isComposePayloadDescriptor(desc ocispec.Descriptor) bool {
+	title := strings.ToLower(strings.TrimSpace(desc.Annotations[ocispec.AnnotationTitle]))
+	if title == "" {
+		return false
+	}
+
+	return strings.HasSuffix(title, ".tar.gz") ||
+		strings.HasSuffix(title, ".tgz") ||
+		strings.HasSuffix(title, ".yaml") ||
+		strings.HasSuffix(title, ".yml")
 }
 
 func (c *DockerComposeCliClient) downloadAndExtractTarGz(

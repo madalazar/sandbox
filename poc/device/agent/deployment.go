@@ -637,6 +637,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
+		dm.log.Debugw("converted parameters to env vars", "envVars", envVars, "componentName", composeComp.Name)
 
 		// Check if project already exists
 		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
