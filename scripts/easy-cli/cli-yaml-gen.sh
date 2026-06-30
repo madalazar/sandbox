@@ -6,6 +6,7 @@ generate_instance_yaml_from_oci() {
   local package_id="$2"
   local device_id="$3"
   local output_file="$4"
+  local supported_deployments_raw="$5"
 
   local harbor_url="${EXPOSED_HARBOR_HOST}:${EXPOSED_HARBOR_PORT}"
   local temp_dir=$(mktemp -d)
@@ -28,6 +29,10 @@ generate_instance_yaml_from_oci() {
     return 1
   fi
 
+
+  echo "print extracted margo.yaml for debugging:"
+  cat margo.yaml
+
   # Extract metadata
   local app_id=$(grep -E "^\s*id:" margo.yaml | head -1 | sed 's/.*id:\s*//' | tr -d '"' | tr -d "'" | xargs)
   local app_name=$(grep -E "^\s*name:" margo.yaml | head -1 | sed 's/.*name:\s*//' | tr -d '"' | tr -d "'" | xargs)
@@ -35,12 +40,52 @@ generate_instance_yaml_from_oci() {
   local app_identifier="${app_id:-$(echo "${app_name}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -d '_.,' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')}"
   app_identifier=$(echo "$app_identifier" | cut -c1-40)
 
-  # Determine deployment type
-  local deployment_type=$(awk '/deploymentProfile:/,/^[^ ]/ {if (/^\s+type:/) print}' margo.yaml | sed 's/.*type:\s*//' | tr -d '"' | tr -d "'" | xargs | head -1)
+  # Determine deployment type(s)
+  local deployment_types=()
+  mapfile -t deployment_types < <(awk '/^deploymentProfiles:/{in_profiles=1;next} in_profiles&&/^[^[:space:]]/{in_profiles=0} in_profiles&&/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/{sub(/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/,""); print}' margo.yaml | tr -d '"' | tr -d "'" | xargs -n1)
+  local deployment_type=""
+  local supported_deployments=()
+
+  if [ -n "$supported_deployments_raw" ]; then
+    local normalized_supported
+    normalized_supported=$(echo "$supported_deployments_raw" | tr -d '"' | tr -d "'" | tr ',' '\n' | xargs -n1)
+    if [ -n "$normalized_supported" ]; then
+      mapfile -t supported_deployments <<< "$normalized_supported"
+    fi
+  fi
+
+  if [ ${#supported_deployments[@]} -gt 0 ] && [ ${#deployment_types[@]} -gt 0 ]; then
+    for supported_type in "${supported_deployments[@]}"; do
+      case "${supported_type,,}" in
+        helm|kubernetes|k8s)
+          supported_type="helm.v3"
+          ;;
+        docker-compose)
+          supported_type="compose"
+          ;;
+      esac
+
+      for available_type in "${deployment_types[@]}"; do
+        if [ "$available_type" = "$supported_type" ]; then
+          deployment_type="$available_type"
+          break 2
+        fi
+      done
+    done
+  fi
+
+  if [ -z "$deployment_type" ]; then
+    echo "No compatible deployment type match found from supported_deployments; continuing with fallback selection logic"
+  fi
+
+  echo "print supported deployment types for device: ${supported_deployments[*]}"
+  echo "print extracted deployment types for debugging: ${deployment_types[*]}"
+  echo "print extracted deployment type for debugging: $deployment_type"
 
   if [ -z "$deployment_type" ]; then
     deployment_type=$(awk '/^spec:/,/^[^ ]/ {if (/^\s+type:/) print}' margo.yaml | sed 's/.*type:\s*//' | tr -d '"' | tr -d "'" | xargs | head -1)
   fi
+  echo "print extracted deployment type for debugging: $deployment_type"
 
   if [ -z "$deployment_type" ]; then
     if [[ "$package_name" =~ compose ]]; then
@@ -66,15 +111,18 @@ generate_instance_yaml_from_oci() {
   local repository=$(get_oci_repository_path "$package_name" "$temp_dir/margo.yaml")
 
   if [ "$profile_type" = "helm.v3" ]; then
-    generate_helm_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml"
+    generate_helm_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml" "$profile_type"
   elif [ "$profile_type" = "compose" ]; then
-    generate_compose_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml"
+    generate_compose_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml" "$profile_type"
   else
     echo "❌ Unsupported deployment type: $profile_type" >&2
     cd - >/dev/null
     rm -rf "$temp_dir"
     return 1
   fi
+
+  echo "Generated instance.yaml for package '$package_name' at: $output_file"
+  cat "$output_file"  # Print the generated instance.yaml for debugging
 
   cd - >/dev/null
   rm -rf "$temp_dir"
@@ -88,6 +136,7 @@ generate_helm_instance() {
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
+  local target_profile_type="${7:-helm.v3}"
 
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
 
@@ -110,22 +159,36 @@ spec:
 EOF
 
   if grep -q "components:" "$margo_file"; then
-    awk '/components:/,/^[^ ]/ {
-      if (/- name:/) {
+    awk -v wanted="$target_profile_type" '
+      /^deploymentProfiles:/ { in_profiles=1; next }
+      in_profiles && /^[^[:space:]]/ { in_profiles=0 }
+      in_profiles && /^[[:space:]]*-[[:space:]]*type:[[:space:]]*/ {
+        typeLine=$0
+        sub(/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/, "", typeLine)
+        gsub(/["'"'"']/, "", typeLine)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", typeLine)
+        in_target=(typeLine==wanted)
+        in_components=0
+        next
+      }
+      in_target && /^    components:[[:space:]]*$/ { in_components=1; next }
+      in_target && in_components && /^    [A-Za-z][A-Za-z0-9_-]*:[[:space:]]*$/ { in_components=0 }
+      in_target && in_components {
+      if (/^[[:space:]]*-[[:space:]]*name:/) {
         name = $0
         sub(/.*name:/, "", name)
         gsub(/^[ \t]+|[ \t]+$/, "", name)
         gsub(/"/, "", name)
         print "COMPONENT_NAME:" name
       }
-      if (/repository:/ && !/registryUrl/) {
+      if (/^[[:space:]]*repository:/ && !/registryUrl/) {
         repo = $0
         sub(/.*repository:/, "", repo)
         gsub(/^[ \t]+|[ \t]+$/, "", repo)
         gsub(/"/, "", repo)
         print "REPOSITORY:" repo
       }
-      if (/revision:/) {
+      if (/^[[:space:]]*revision:/) {
         rev = $0
         sub(/.*revision:/, "", rev)
         gsub(/^[ \t]+|[ \t]+$/, "", rev)
@@ -179,6 +242,7 @@ COMPONENT
 COMPONENT
   fi
 
+  # TODO: this is where we need to copy the parameters from app package to app deployment
   if grep -q "parameters:" "$margo_file"; then
     echo "  parameters:" >> "$output_file"
 
@@ -201,6 +265,7 @@ generate_compose_instance() {
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
+  local target_profile_type="${7:-compose}"
 
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
   local stack_name=$(echo "${app_identifier}-stack" | cut -c1-40)
@@ -223,15 +288,29 @@ spec:
 EOF
 
   if grep -q "components:" "$margo_file"; then
-    awk '/components:/,/^[^ ]/ {
-      if (/- name:/) {
+    awk -v wanted="$target_profile_type" '
+      /^deploymentProfiles:/ { in_profiles=1; next }
+      in_profiles && /^[^[:space:]]/ { in_profiles=0 }
+      in_profiles && /^[[:space:]]*-[[:space:]]*type:[[:space:]]*/ {
+        typeLine=$0
+        sub(/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/, "", typeLine)
+        gsub(/["'"'"']/, "", typeLine)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", typeLine)
+        in_target=(typeLine==wanted)
+        in_components=0
+        next
+      }
+      in_target && /^    components:[[:space:]]*$/ { in_components=1; next }
+      in_target && in_components && /^    [A-Za-z][A-Za-z0-9_-]*:[[:space:]]*$/ { in_components=0 }
+      in_target && in_components {
+      if (/^[[:space:]]*-[[:space:]]*name:/) {
         name = $0
         sub(/.*name:/, "", name)
         gsub(/^[ \t]+|[ \t]+$/, "", name)
         gsub(/"/, "", name)
         print "COMPONENT_NAME:" name
       }
-      if (/packageLocation:/) {
+      if (/^[[:space:]]*packageLocation:/) {
         location = $0
         sub(/.*packageLocation:/, "", location)
         gsub(/^[ \t]+|[ \t]+$/, "", location)

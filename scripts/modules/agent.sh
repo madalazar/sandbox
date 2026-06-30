@@ -27,8 +27,22 @@ set_capabilities_roles() {
   local file="$HOME/sandbox/poc/device/agent/config/capabilities.json"
 
   if [[ -f "$file" ]]; then
-    sed -i -E "s|\"roles\"[[:space:]]*:[[:space:]]*\[[^]]*\]|\"roles\": [\"$role\"]|g" "$file"
-    echo "capabilities.json roles set to [$role]"
+    if command -v jq >/dev/null 2>&1; then
+      local tmp_file
+      tmp_file="$(mktemp)"
+
+      if jq --arg role "$role" '.properties.roles = [$role]' "$file" > "$tmp_file"; then
+        mv "$tmp_file" "$file"
+        echo "capabilities.json roles set to [$role]"
+      else
+        rm -f "$tmp_file"
+        echo "Failed to update roles in capabilities.json"
+        return 1
+      fi
+    else
+      echo "jq is not installed; cannot safely update JSON roles in $file"
+      return 1
+    fi
   else
     echo "capabilities.json not found at $file, skipping role update"
   fi

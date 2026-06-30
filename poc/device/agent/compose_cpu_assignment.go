@@ -53,6 +53,9 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		return nil, fmt.Errorf("read compose services for component %q: %w", componentName, err)
 	}
 
+	//TODO: I don't think we need to filter the reqs here by service name
+	// we know which component we're in, we've already filtering reqRes by component name
+	// here's we're jsut filtering for sbi.CpuTypeIsolated
 	reqs := make([]sbi.Cpu, 0, len(componentCpuReqs))
 	for _, req := range componentCpuReqs {
 		if req.Type == nil || *req.Type != sbi.CpuTypeIsolated {
@@ -67,7 +70,8 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 			return nil, fmt.Errorf("isolated CPU requirement has empty name")
 		}
 		if _, exists := serviceNames[requirementName]; !exists {
-			return nil, fmt.Errorf("isolated CPU requirement %q does not match a compose service in component %q", requirementName, componentName)
+			dm.log.Debugw("Warning: isolated CPU requirement %q does not match a compose service in component %q", requirementName, componentName)
+			// return nil, fmt.Errorf("isolated CPU requirement %q does not match a compose service in component %q", requirementName, componentName)
 		}
 
 		reqs = append(reqs, req)
@@ -211,6 +215,8 @@ func RewriteComposeYAML(in io.Reader, out io.Writer, assignments []CpuAssignment
 		return err
 	}
 
+	// TODO: this should be renamed as assignmentsByRequirementName
+	// the name is currently misleading
 	assignmentByService := toAssignmentMap(assignments)
 	for serviceName, cpus := range assignmentByService {
 		serviceNode, exists := serviceMap[serviceName]
@@ -258,7 +264,12 @@ func composeServicesNode(root *yamlv3.Node) (map[string]*yamlv3.Node, error) {
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		nameNode := services.Content[i]
 		valueNode := services.Content[i+1]
-		result[nameNode.Value] = valueNode
+		// TODO: hardcoding the "_compose" suffix here
+		// to deal with multiple services inside the docker-compose.yaml
+		// file for the same component. Once we decide there
+		// will be only one component per compose file, we can remove this suffix.
+		// or we add another field to map component to service name
+		result[nameNode.Value+"_compose"] = valueNode
 	}
 	return result, nil
 }

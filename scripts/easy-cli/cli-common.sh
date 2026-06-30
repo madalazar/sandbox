@@ -152,3 +152,82 @@ get_device_id_by_role() {
     return 1
   fi
 }
+
+# Resolve supported deployment profile types for a device using roles only.
+# Returns a comma-separated list such as: compose,helm.v3
+# Fails if roles are missing or roles do not map to known deployment profile types.
+get_device_supported_deployments() {
+  local device_id="$1"
+
+  if [ -z "$device_id" ]; then
+    echo "❌ Error: Device ID is required"
+    return 1
+  fi
+
+  if ! check_maestro_cli; then
+    echo "❌ Maestro CLI not available"
+    return 1
+  fi
+
+  local devices=$(${MAESTRO_CLI_PATH}/maestro wfm --host "$EXPOSED_SYMPHONY_HOST" --port "$EXPOSED_SYMPHONY_PORT" list devices -o json 2>/dev/null)
+  if [ $? -ne 0 ] || [ -z "$devices" ]; then
+    echo "❌ Failed to get device list"
+    return 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "❌ jq is required but not installed"
+    return 1
+  fi
+
+  local roles
+  roles=$(echo "$devices" | jq -r --arg id "$device_id" '
+    .Data[] | .items[] |
+    select(.metadata.id == $id) |
+    (.spec.capabilities.properties.roles[]?)
+  ')
+
+  if [ -z "$roles" ]; then
+    echo "❌ Device '$device_id' has no roles in capabilities; cannot determine deployment support"
+    return 1
+  fi
+
+  local normalized=()
+  while IFS= read -r value; do
+    [ -z "$value" ] && continue
+    case "${value,,}" in
+      *standalone\ device*)
+        normalized+=("compose")
+        ;;
+      *standalone\ cluster*)
+        normalized+=("helm.v3")
+        ;;
+      *compose*|*docker-compose*)
+        normalized+=("compose")
+        ;;
+      *helm*|*kubernetes*|*k8s*)
+        normalized+=("helm.v3")
+        ;;
+    esac
+  done <<< "$roles"
+
+  if [ ${#normalized[@]} -eq 0 ]; then
+    echo "❌ Device '$device_id' roles do not map to supported deployment types"
+    return 1
+  fi
+
+  local out=""
+  for type in "${normalized[@]}"; do
+    if [[ ",$out," != *",$type,"* ]]; then
+      if [ -z "$out" ]; then
+        out="$type"
+      else
+        out="$out,$type"
+      fi
+    fi
+  done
+
+  [ -n "$out" ] || return 1
+  echo "$out"
+  return 0
+}

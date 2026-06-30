@@ -119,6 +119,16 @@ deploy_instance() {
     echo "❌ Device ID is required. Will let symphony pick an appropriate device..."
     # return 1
   fi
+
+  local device_supported_deployments=""
+  if [ -n "$device_id" ]; then
+    device_supported_deployments=$(get_device_supported_deployments "$device_id")
+  fi
+  if [ -z "$device_supported_deployments" ]; then
+    echo "❌ Unable to determine device supported deployment types for device '$device_id'"
+    echo "   Deployment aborted. Ensure device capabilities.roles are set (Standalone Device or Standalone Cluster)."
+    return 1
+  fi
   
   # Get app package details and extract metadata.name
   app_packages=$(${MAESTRO_CLI_PATH}/maestro wfm --host "$EXPOSED_SYMPHONY_HOST" --port "$EXPOSED_SYMPHONY_PORT" list app-pkg -o json 2>/dev/null)
@@ -150,7 +160,7 @@ deploy_instance() {
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
   
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" 2>/dev/null; then
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
     
@@ -210,6 +220,7 @@ deploy_instance() {
 deploy_instance_non_interactive() {
   local package_id="$1"
   local device_id="$2"
+  local device_supported_deployments=""
   
   echo "🚀 Deploy Instance (Non-Interactive)"
   echo "===================================="
@@ -223,6 +234,16 @@ deploy_instance_non_interactive() {
   if [ -z "$device_id" ]; then
     echo "❌ Error: Device ID is required"
     echo "Usage: deploy_instance_non_interactive <package_id> <device_id>"
+    return 1
+  fi
+
+  if [ -n "$device_id" ]; then
+    device_supported_deployments=$(get_device_supported_deployments "$device_id")
+  fi
+
+  if [ -z "$device_supported_deployments" ]; then
+    echo "❌ Unable to determine device supported deployment types for device '$device_id'"
+    echo "   Deployment aborted. Ensure device capabilities.roles are set (Standalone Device or Standalone Cluster)."
     return 1
   fi
   
@@ -259,7 +280,7 @@ deploy_instance_non_interactive() {
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
   
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" 2>/dev/null; then
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
     
