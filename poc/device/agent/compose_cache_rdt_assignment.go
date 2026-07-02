@@ -194,7 +194,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		}
 
 		pqosCommand := fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
+			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
 			cacheID,
 			cosID,
 			mask,
@@ -346,7 +346,7 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 		pqosCommand := ""
 		if classCPUSet != "" {
 			pqosCommand = fmt.Sprintf(
-				"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s' -a 'core:0=%s'",
+				"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s' -a 'core:0=%s'",
 				cacheID,
 				cosID,
 				resetMask,
@@ -354,7 +354,7 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 			)
 		} else {
 			pqosCommand = fmt.Sprintf(
-				"modprobe msr >/dev/null 2>&1 || true;  sudo /usr/local/bin/pqos -I -e 'llc@%s:%s=%s'",
+				"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s'",
 				cacheID,
 				cosID,
 				resetMask,
