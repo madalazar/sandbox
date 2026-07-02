@@ -100,18 +100,28 @@ update_capabilities_cpu_from_host() {
 
   if ! jq --argjson cpu "$cpu_array_json" '
     def cpu_item_ok:
+      # New schema: architecture + cores + class + type
       (type == "object")
       and (.architecture | type == "string")
       and (.cores | type == "number")
       and (.class | type == "string")
       and (.type | type == "string");
 
+    def cpu_item_legacy_ok:
+      # Legacy schema: architecture + cores only
+      (type == "object")
+      and (.architecture | type == "string")
+      and (.cores | type == "number");
+
+    def cpu_item_compatible_ok:
+      cpu_item_ok or cpu_item_legacy_ok;
+
     def cpu_shape_similar_at($path):
       (getpath($path) | type) == "object"
       and (
-        ((getpath($path + ["cpu"]) | type) == "array" and (getpath($path + ["cpu"]) | all(.[]; cpu_item_ok)))
+        ((getpath($path + ["cpu"]) | type) == "array" and (getpath($path + ["cpu"]) | all(.[]; cpu_item_compatible_ok)))
         or
-        ((getpath($path + ["cpu"]) | type) == "object" and (getpath($path + ["cpu"]) | cpu_item_ok))
+        ((getpath($path + ["cpu"]) | type) == "object" and (getpath($path + ["cpu"]) | cpu_item_compatible_ok))
       );
 
     if cpu_shape_similar_at(["properties", "resources"]) then
