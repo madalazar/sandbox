@@ -211,6 +211,8 @@ deploy_instance() {
   fi
   
   # Cleanup temporary file
+  echo "will print deploy file for confirmation: "
+  cat "$deploy_file"  # Display the contents of the deployment file for user confirmation
   rm -f "$temp_instance_file"
   
   echo ""
@@ -340,6 +342,9 @@ deploy_instance_non_interactive() {
     rm -f "$temp_instance_file"
     return 1
   fi
+
+   echo "will print deploy file for confirmation (non-interactive): "
+  cat "$deploy_file"  # Display the contents of the deployment file for user confirmation
 }
 
 

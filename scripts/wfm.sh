@@ -64,6 +64,7 @@ source "${SCRIPT_DIR}/modules/packages.sh"
 install_prerequisites() {
   echo "Running all pre-req setup tasks..."
   install_basic_utilities
+  install_yq
   install_go
   install_docker_and_compose
   setup_k3s
@@ -105,6 +106,41 @@ install_basic_utilities() {
   fi
 
   install_helm
+}
+
+install_yq() {
+  echo "🔄 Installing yq..."
+
+  if command -v yq >/dev/null 2>&1; then
+    local yq_version
+    yq_version=$(yq --version 2>/dev/null || true)
+    if echo "$yq_version" | grep -qi "version v4"; then
+      echo "⚡️ yq v4 already installed"
+      return 0
+    fi
+    echo "ℹ️ Found non-v4 yq installation, replacing with yq v4"
+  fi
+
+  local arch
+  arch=$(uname -m)
+  local yq_arch=""
+  case "$arch" in
+    x86_64|amd64) yq_arch="amd64" ;;
+    aarch64|arm64) yq_arch="arm64" ;;
+    *)
+      echo "❌ Unsupported architecture for yq install: $arch" >&2
+      return 1
+      ;;
+  esac
+
+  local yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}"
+  if ! sudo curl -fsSL "$yq_url" -o /usr/local/bin/yq; then
+    echo "❌ Failed to download yq from: $yq_url" >&2
+    return 1
+  fi
+
+  sudo chmod +x /usr/local/bin/yq
+  echo "✅ yq installed: $(yq --version 2>/dev/null || echo 'version check failed')"
 }
 
 enable_tls_in_symphony_api() {

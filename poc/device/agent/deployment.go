@@ -4,10 +4,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1042,9 +1044,9 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 
 	// Convert component-specific parameters
 	if componentParams, exists := params[componentName]; exists {
-		if paramMap, ok := componentParams.(map[string]interface{}); ok {
+		if paramMap, ok := componentParams.(map[string]any); ok {
 			for key, value := range paramMap {
-				envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+				envVars[strings.ToUpper(key)] = formatEnvValue(value)
 			}
 		}
 	}
@@ -1052,9 +1054,33 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	// Convert global parameters
 	for key, value := range params {
 		if key != componentName { // Skip component-specific params already processed
-			envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+			envVars[strings.ToUpper(key)] = formatEnvValue(value)
 		}
 	}
 
 	return envVars
+}
+
+func formatEnvValue(value any) string {
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if v == math.Trunc(v) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if f == math.Trunc(f) {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 32)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
