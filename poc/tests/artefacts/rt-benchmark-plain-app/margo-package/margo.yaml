@@ -1,0 +1,174 @@
+apiVersion: margo.org/v1-alpha1
+kind: ApplicationDescription
+metadata:
+  id: rt-benchmark-plain-app
+  name: RT Benchmark Plain App
+  description: >
+    Baseline benchmarking experiment suite combining Helm and Docker Compose
+    deployment profiles for the Caterpillar, cyclictest, and stress workloads.
+  version: 1.0.0
+  catalog:
+    application:
+      tagline: Baseline benchmarking via Helm and Docker Compose workloads
+      descriptionFile: ./resources/description.md
+      releaseNotes: ./resources/release-notes.md
+      licenseFile: ./resources/license.txt
+      tags: ["benchmark", "stress-testing", "performance", "caterpillar", "cyclictest", "docker-compose", "helm"]
+    organization:
+      - name: Industrial Edge Controls
+
+deploymentProfiles:
+  - type: helm.v3
+    id: rt-benchmark-helm
+    description: >
+      Deploys Caterpillar and cyclictest latency benchmarks plus stress-ng as
+      independent Helm releases on the same edge device.
+    components:
+      - name: caterpillar_helm
+        properties:
+          repository: oci://harbor.machine:8443/library/caterpillar
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+      - name: cyclictest_helm
+        properties:
+          repository: oci://harbor.machine:8443/library/cyclictest
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+      - name: stressng_helm
+        properties:
+          repository: oci://harbor.machine:8443/library/stressng
+          revision: 0.1.0
+          wait: false
+          timeout: 4h
+
+    requiredResources:
+      memory: 1024Mi
+      storage: 2Gi
+
+  - type: compose
+    id: rt-benchmark-compose
+    description: Deploy cyclictest and stress as separate Docker Compose components
+    components:
+      - name: cyclictest_compose
+        properties:
+          packageLocation: oci://harbor.machine:8443/library/cyclictest-compose-package:latest
+      - name: stressng_compose
+        properties:
+          packageLocation: oci://harbor.machine:8443/library/stressng-compose-package:latest
+      - name: caterpillar_compose
+        properties:
+          packageLocation: oci://harbor.machine:8443/library/caterpillar-compose-package:latest
+    requiredResources:
+      memory: 1024Mi
+      storage: 1Gi
+
+parameters:
+  cyclictestThreads:
+    value: 1
+    targets:
+      - pointer: CYCLICTEST_THREADS
+        components: ["cyclictest_compose"]
+  cyclictestPriority:
+    value: 99
+    targets:
+      - pointer: CYCLICTEST_PRIORITY
+        components: ["cyclictest_compose"]
+  cyclictestInterval:
+    value: 9000
+    targets:
+      - pointer: CYCLICTEST_INTERVAL
+        components: ["cyclictest_compose"]
+  cyclictestLoops:
+    value: 1000000
+    targets:
+      - pointer: CYCLICTEST_LOOPS
+        components: ["cyclictest_compose"]
+  cyclictestHistogram:
+    value: 600
+    targets:
+      - pointer: CYCLICTEST_HISTOGRAM
+        components: ["cyclictest_compose"]
+  cyclictestCustom:
+    value: -m
+    targets:
+      - pointer: CYCLICTEST_CUSTOM
+        components: ["cyclictest_compose"]
+
+  stressngMemcpy:
+    value: 8
+    targets:
+      - pointer: STRESS_MEMCPY_WORKERS
+        components: ["stressng_compose"]
+      - pointer: stressng.memcpy
+        components: ["stressng_helm"]
+  stressDuration:
+    value: 1899
+    targets:
+      - pointer: STRESS_DURATION
+        components: ["stressng_compose"]
+      - pointer: stressng.duration
+        components: ["stressng_helm"]
+
+configuration:
+  sections:
+    - name: Cyclictest Configuration
+      settings:
+        - parameter: cyclictestThreads
+          name: Cyclictest Threads
+          description: Number of cyclictest worker threads
+          schema: positiveInteger
+        - parameter: cyclictestPriority
+          name: Cyclictest Priority
+          description: Real-time priority used by cyclictest
+          schema: positiveInteger
+        - parameter: cyclictestInterval
+          name: Cyclictest Interval (us)
+          description: Sampling interval in microseconds
+          schema: positiveInteger
+        - parameter: cyclictestLoops
+          name: Cyclictest Loops
+          description: Number of benchmark loops
+          schema: positiveInteger
+        - parameter: cyclictestHistogram
+          name: Cyclictest Histogram
+          description: Histogram bucket count
+          schema: positiveInteger
+        - parameter: cyclictestCustom
+          name: Cyclictest Extra Flags
+          description: Additional flags passed through --custom
+          schema: optionalText
+
+    - name: Stress Configuration
+      settings:
+        - parameter: stressngMemcpy
+          name: Memcpy Stressor Workers
+          description: Number of --memcpy stressor worker threads
+          schema: positiveInteger
+        - parameter: stressDuration
+          name: Stress Duration
+          description: Duration for stress run (for example 300s)
+          schema: requiredText
+
+  schema:
+    - name: requiredText
+      dataType: string
+      allowEmpty: false
+      maxLength: 256
+
+    - name: optionalText
+      dataType: string
+      allowEmpty: true
+      maxLength: 256
+
+    - name: positiveInteger
+      dataType: integer
+      allowEmpty: false
+      minValue: 1
+
+    - name: booleanValue
+      dataType: boolean
+      allowEmpty: false
