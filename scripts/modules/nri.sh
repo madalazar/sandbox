@@ -218,27 +218,16 @@ _nri_build_rdt_control_yaml() {
 #   Examples: ipc0, ipc1, ipe5, ilc2
 #
 # Usage: generate_default_nri_policy [available_cpus [reserved_cpus [output_file [cache_file]]]]
-#   available_cpus: cpuset range string (default: 0-119)
-#   reserved_cpus:  cpuset range string (default: 0,100,105)
+#   available_cpus: optional cpuset range override (default: all discovered physical cores)
+#   reserved_cpus:  optional cpuset range override (default: core 0 + last 2 non-isolated physical cores)
 #   output_file:    destination for YAML (default: $HOME/sandbox/balloon-policy.yaml)
 #   cache_file:     topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
 # ---------------------------------------------------------------------------
 generate_default_nri_policy() {
-  # TODO: these cores should be all non-virtualized core. I think for 
-  # this host we have 0-60, 120-180 which are the physical cores and
-  # the other are the hyperthreading sylings
-  local available_cpus_range="${1:-0-119}"
-  local reserved_cpus_range="${2:-0,100,105}"
+  local available_cpus_range="${1:-}"
+  local reserved_cpus_range="${2:-}"
   local output_file="${3:-$HOME/sandbox/balloon-policy.yaml}"
   local cache_file="${4:-$CPU_TOPOLOGY_CACHE_FILE}"
-
-  # If available range is not explicitly provided and the policy file exists,
-  # reuse availableResources.cpu from that file.
-  if [[ -z "${1:-}" && -f "$output_file" ]]; then
-    local extracted_available=""
-    extracted_available="$(_nri_extract_available_cpus_from_policy "$output_file" || true)"
-    [[ -n "$extracted_available" ]] && available_cpus_range="$extracted_available"
-  fi
 
   local cache_topology_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
 
@@ -253,9 +242,24 @@ generate_default_nri_policy() {
     return 1
   fi
 
-  # Mark reserved CPUs
-  declare -A reserved_map=()
-  mark_cpu_set_from_range_list "$reserved_cpus_range" reserved_map
+  # Default availableResources to all discovered physical cores.
+  if [[ -z "$available_cpus_range" ]]; then
+    available_cpus_range="$(_nri_compact_cpuset "${sorted_ids[@]}")"
+  fi
+
+  # Mark CPUs included in availableResources.
+  declare -A available_map=()
+  mark_cpu_set_from_range_list "$available_cpus_range" available_map
+
+  # Build a deterministic, sorted list of available physical cores.
+  local -a available_ids=()
+  for cpu_id in "${sorted_ids[@]}"; do
+    [[ -n "${available_map[$cpu_id]:-}" ]] && available_ids+=("$cpu_id")
+  done
+  if [[ "${#available_ids[@]}" -eq 0 ]]; then
+    echo "[ERROR] availableResources resolves to no physical cores: '$available_cpus_range'" >&2
+    return 1
+  fi
 
   # Collect isolated CPUs from topology
   declare -A isolated_by_class=()  # [class] -> array of CPU IDs
@@ -278,6 +282,68 @@ generate_default_nri_policy() {
       isolated_by_class["$cpu_id"]="$class"
     fi
   done
+
+  # Default reservedResources to:
+  #   - core 0 (if it is part of availableResources)
+  #   - plus the highest two non-isolated cores in availableResources (excluding core 0)
+  if [[ -z "$reserved_cpus_range" ]]; then
+    declare -A reserved_selected=()
+
+    if [[ -n "${available_map[0]:-}" ]]; then
+      reserved_selected[0]=1
+    fi
+
+    local -a non_isolated_candidates=()
+    for cpu_id in "${available_ids[@]}"; do
+      meta="${_TOPO_CORE_META[$cpu_id]:-}"
+      [[ -z "$meta" ]] && continue
+      arch="${meta%%|*}"
+      rest="${meta#*|}"
+      class="${rest%%|*}"
+      type="${rest##*|}"
+
+      if [[ "$type" != "isolated" && "$cpu_id" != "0" ]]; then
+        non_isolated_candidates+=("$cpu_id")
+      fi
+    done
+
+    local candidate_count="${#non_isolated_candidates[@]}"
+    local take_start=0
+    if (( candidate_count > 2 )); then
+      take_start=$((candidate_count - 2))
+    fi
+
+    local i
+    for (( i = take_start; i < candidate_count; i++ )); do
+      reserved_selected["${non_isolated_candidates[$i]}"]=1
+    done
+
+    local -a reserved_ids=()
+    for cpu_id in "${available_ids[@]}"; do
+      [[ -n "${reserved_selected[$cpu_id]:-}" ]] && reserved_ids+=("$cpu_id")
+    done
+
+    if [[ "${#reserved_ids[@]}" -gt 0 ]]; then
+      reserved_cpus_range="$(_nri_compact_cpuset "${reserved_ids[@]}")"
+    fi
+  fi
+
+  # Keep reservedResources constrained to availableResources.
+  if [[ -n "$reserved_cpus_range" ]]; then
+    declare -A requested_reserved_map=()
+    mark_cpu_set_from_range_list "$reserved_cpus_range" requested_reserved_map
+
+    local -a constrained_reserved_ids=()
+    for cpu_id in "${available_ids[@]}"; do
+      [[ -n "${requested_reserved_map[$cpu_id]:-}" ]] && constrained_reserved_ids+=("$cpu_id")
+    done
+
+    if [[ "${#constrained_reserved_ids[@]}" -gt 0 ]]; then
+      reserved_cpus_range="$(_nri_compact_cpuset "${constrained_reserved_ids[@]}")"
+    else
+      reserved_cpus_range=""
+    fi
+  fi
 
   if [[ "${#isolated_by_class[@]}" -eq 0 ]]; then
     echo "[WARN] No isolated CPUs found in topology. Generating policy with only shared cores." >&2
