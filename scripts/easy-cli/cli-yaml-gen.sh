@@ -149,6 +149,12 @@ generate_helm_instance() {
   local target_profile_type="${7:-helm.v3}"
 
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
+  local -a selected_profile_components=()
+  local yq_available=false
+
+  if command -v yq >/dev/null 2>&1 && yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+    yq_available=true
+  fi
 
   cat > "$output_file" <<EOF
 # This is an input template allowing the WFM user to modify deployment instance specific parameters(currently read-only).
@@ -169,7 +175,50 @@ spec:
 EOF
 
   if grep -q "components:" "$margo_file"; then
-    awk -v wanted="$target_profile_type" '
+    local current_name=""
+    local current_repo=""
+    local current_rev="0.1.0"
+
+    while IFS=: read -r key value; do
+      case "$key" in
+        COMPONENT_NAME)
+          current_name="$value"
+          ;;
+        REPOSITORY)
+          current_repo="$value"
+          ;;
+        REVISION)
+          current_rev="$value"
+          if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
+            cat >> "$output_file" <<COMPONENT
+      - name: ${current_name}
+        properties:
+          repository: ${current_repo}
+          revision: ${current_rev}
+          wait: true
+          timeout: 5m
+COMPONENT
+            if [ "$yq_available" = true ]; then
+              local component_required_resources
+              if component_required_resources=$(PROFILE_TYPE="$target_profile_type" COMPONENT_NAME="$current_name" yq eval -o=yaml '.deploymentProfiles[]
+                | select(.type == env(PROFILE_TYPE))
+                | .components[]
+                | select(.name == env(COMPONENT_NAME))
+                | .requiredResources // ""' "$margo_file") && [ -n "$component_required_resources" ] && [ "$component_required_resources" != "null" ] && [ "$component_required_resources" != '""' ]; then
+                {
+                  echo "        requiredResources:"
+                  echo "$component_required_resources" | sed 's/^/          /'
+                } >> "$output_file"
+              fi
+            fi
+            selected_profile_components+=("$current_name")
+            current_name=""
+            current_repo=""
+            current_rev="0.1.0"
+          fi
+          ;;
+      esac
+    done < <(awk -v wanted="$target_profile_type" '
       /^deploymentProfiles:/ { in_profiles=1; next }
       in_profiles && /^[^[:space:]]/ { in_profiles=0 }
       in_profiles && /^[[:space:]]*-[[:space:]]*type:[[:space:]]*/ {
@@ -205,38 +254,7 @@ EOF
         gsub(/"/, "", rev)
         print "REVISION:" rev
       }
-    }' "$margo_file" | {
-      local current_name=""
-      local current_repo=""
-      local current_rev="0.1.0"
-
-      while IFS=: read -r key value; do
-        case "$key" in
-          COMPONENT_NAME)
-            current_name="$value"
-            ;;
-          REPOSITORY)
-            current_repo="$value"
-            ;;
-          REVISION)
-            current_rev="$value"
-            if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
-              cat >> "$output_file" <<COMPONENT
-      - name: ${current_name}
-        properties:
-          repository: ${current_repo}
-          revision: ${current_rev}
-          wait: true
-          timeout: 5m
-COMPONENT
-              current_name=""
-              current_repo=""
-              current_rev="0.1.0"
-            fi
-            ;;
-        esac
-      done
-    }
+    }' "$margo_file")
   else
     local component_name=$(echo "$app_identifier" | cut -c1-40)
     local chart_version=$(grep -E "^\s*version:" "$margo_file" | head -1 | sed 's/.*version:\s*//' | tr -d '"' | tr -d "'" | xargs)
@@ -250,21 +268,81 @@ COMPONENT
           wait: true
           timeout: 5m
 COMPONENT
+    selected_profile_components+=("$component_name")
   fi
 
-  # TODO: this is where we need to copy the parameters from app package to app deployment
-  if grep -q "parameters:" "$margo_file"; then
-    echo "  parameters:" >> "$output_file"
-
-    if grep -qi "otel\|otlp" "$margo_file"; then
-      cat >> "$output_file" <<EOF
-    otlpEndpoint:
-      value: "http://otel-collector-opentelemetry-collector.observability:4318"
-      targets:
-      - pointer: env.OTEL_EXPORTER_OTLP_ENDPOINT
-        components: ["${component_name}"]
-EOF
+  if grep -q "^parameters:[[:space:]]*$" "$margo_file"; then
+    if ! command -v yq >/dev/null 2>&1; then
+      echo "❌ yq is required to parse parameters from margo.yaml" >&2
+      return 1
     fi
+
+    if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+      echo "❌ yq failed to parse margo.yaml (yq v4 required)" >&2
+      return 1
+    fi
+
+    local -A helm_component_lookup=()
+    local helm_component
+    for helm_component in "${selected_profile_components[@]}"; do
+      if [ -n "$helm_component" ]; then
+        helm_component_lookup["$helm_component"]=1
+      fi
+    done
+
+    local helm_components_csv
+    if [ ${#selected_profile_components[@]} -gt 0 ]; then
+      helm_components_csv=$(IFS=,; echo "${selected_profile_components[*]}")
+    else
+      helm_components_csv=""
+    fi
+
+    local parameter_names
+    if ! parameter_names=$(yq eval '(.parameters // {} | keys | .[])' "$margo_file"); then
+      echo "❌ Failed to read parameters from margo.yaml with yq (requires yq v4)" >&2
+      return 1
+    fi
+
+    local wrote_parameters=false
+    while IFS= read -r parameter_name; do
+      if [ -z "$parameter_name" ] || [ "$parameter_name" = "null" ]; then
+        continue
+      fi
+
+      local target_components
+      if ! target_components=$(PARAM_NAME="$parameter_name" yq eval -r '.parameters[env(PARAM_NAME)].targets[]?.components[]?' "$margo_file"); then
+        echo "❌ Failed to read parameter targets for '$parameter_name'" >&2
+        return 1
+      fi
+
+      local include_parameter=false
+      while IFS= read -r target_component; do
+        if [ -n "$target_component" ] && [ "$target_component" != "null" ] && [ -n "${helm_component_lookup[$target_component]:-}" ]; then
+          include_parameter=true
+          break
+        fi
+      done <<< "$target_components"
+
+      if [ "$include_parameter" = true ]; then
+        if [ "$wrote_parameters" = false ]; then
+          echo "  parameters:" >> "$output_file"
+          wrote_parameters=true
+        fi
+
+        if ! PARAM_NAME="$parameter_name" COMPONENTS_CSV="$helm_components_csv" yq eval '{
+          (env(PARAM_NAME)): (
+            .parameters[env(PARAM_NAME)]
+            | .targets |= map(
+                .components |= map(. as $c | select((env(COMPONENTS_CSV) | split(",") | contains([$c]))))
+                | select((.components | length) > 0)
+              )
+          )
+        }' "$margo_file" | sed 's/^/    /' >> "$output_file"; then
+          echo "❌ Failed to render filtered parameter '$parameter_name'" >&2
+          return 1
+        fi
+      fi
+    done <<< "$parameter_names"
   fi
 }
 

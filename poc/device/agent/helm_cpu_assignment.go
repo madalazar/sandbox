@@ -278,13 +278,19 @@ func (dm *DeploymentManager) mergePodAnnotations(existing any, annotations map[s
 }
 
 func (dm *DeploymentManager) generateNriValuesOverrideFile(deploymentID string, componentName string, annotations map[string]string,
+	cpuset string,
 ) (string, error) {
-	if len(annotations) == 0 {
-		return "", fmt.Errorf("no annotations to write")
+	if len(annotations) == 0 && strings.TrimSpace(cpuset) == "" {
+		return "", fmt.Errorf("no NRI values to write")
 	}
 
 	payload := map[string]any{
 		"podAnnotations": annotations,
+	}
+	if strings.TrimSpace(cpuset) != "" {
+		payload[componentName] = map[string]any{
+			"cpuset": cpuset,
+		}
 	}
 
 	bytes, err := yaml.Marshal(payload)
@@ -304,6 +310,35 @@ func (dm *DeploymentManager) generateNriValuesOverrideFile(deploymentID string, 
 	}
 
 	return filepath.Clean(file.Name()), nil
+}
+
+func (dm *DeploymentManager) mergeComponentCPUSet(existing any, cpuset string) map[string]any {
+	merged := map[string]any{}
+
+	switch typed := existing.(type) {
+	case nil:
+		// No existing component values to merge.
+	case map[string]any:
+		for k, v := range typed {
+			merged[k] = v
+		}
+	case map[string]string:
+		for k, v := range typed {
+			merged[k] = v
+		}
+	case map[any]any:
+		for k, v := range typed {
+			merged[fmt.Sprintf("%v", k)] = v
+		}
+	default:
+		dm.log.Warnw(
+			"Existing component value has unsupported type; replacing with resolved cpuset",
+			"type", fmt.Sprintf("%T", existing),
+		)
+	}
+
+	merged["cpuset"] = cpuset
+	return merged
 }
 
 func (dm *DeploymentManager) logNriAnnotationPlan(componentName string, releaseName string, annotations map[string]string) {

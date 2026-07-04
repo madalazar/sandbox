@@ -365,7 +365,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to convert deployment profiles: %w", err)
 			}
 			if v, exists := componentValues[helmComp.Name]; exists {
-				values = v
+				values = normalizeHelmValues(v)
 			}
 		}
 
@@ -407,7 +407,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		if hasNriAnnotations {
-			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, podAnnotations)
+			componentCPUSet := formatCPUSet(componentAssignments[helmComp.Name])
+			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, podAnnotations, componentCPUSet)
 			if err != nil {
 				return fmt.Errorf("failed to generate NRI values override file for component %s: %w", helmComp.Name, err)
 			}
@@ -420,8 +421,12 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			dm.logNriAnnotationPlan(helmComp.Name, releaseName, podAnnotations)
 			podAnnotationsValues := dm.mergePodAnnotations(values["podAnnotations"], podAnnotations)
 			values["podAnnotations"] = podAnnotationsValues
+			if strings.TrimSpace(componentCPUSet) != "" {
+				values[helmComp.Name] = dm.mergeComponentCPUSet(values[helmComp.Name], componentCPUSet)
+			}
 			dm.log.Infow("Applied NRI balloon annotations to Helm values", "componentName", helmComp.Name,
-				"releaseName", releaseName, "overrideFile", overrideFile, "podAnnotations", podAnnotationsValues)
+				"releaseName", releaseName, "overrideFile", overrideFile, "podAnnotations", podAnnotationsValues,
+				"componentCPUSet", componentCPUSet)
 		} else {
 			dm.log.Infow("No NRI balloon annotations resolved for component", "componentName", helmComp.Name,
 				"releaseName", releaseName)
@@ -1082,5 +1087,46 @@ func formatEnvValue(value any) string {
 		return strconv.FormatFloat(f, 'f', -1, 32)
 	default:
 		return fmt.Sprintf("%v", value)
+	}
+}
+
+// normalizeHelmValues recursively normalizes values before Helm templating.
+// JSON-decoded numeric values arrive as float64; convert whole-number floats
+// to int64 so templates render integers (e.g. 1000000 instead of 1e+06).
+func normalizeHelmValues(values map[string]any) map[string]any {
+	normalized := make(map[string]any, len(values))
+	for key, value := range values {
+		normalized[key] = normalizeHelmValue(value)
+	}
+	return normalized
+}
+
+func normalizeHelmValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(v))
+		for key, nested := range v {
+			normalized[key] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(v))
+		for i, nested := range v {
+			normalized[i] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) {
+			return int64(v)
+		}
+		return v
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) {
+			return int64(f)
+		}
+		return v
+	default:
+		return value
 	}
 }
