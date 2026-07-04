@@ -24,21 +24,23 @@ deploymentProfiles:
       Deploys Caterpillar and cyclictest latency benchmarks plus stress-ng as
       independent Helm releases on the same edge device.
     components:
-      - name: caterpillar_helm
+      # renamed the components from caterpillar_helm -> caterpillar
+      # to keep inline with helm chart name validation in deployment.go
+      - name: caterpillar
         properties:
           repository: oci://harbor.machine:8443/library/caterpillar
           revision: 0.1.0
           wait: false
           timeout: 4h
 
-      - name: cyclictest_helm
+      - name: cyclictest
         properties:
           repository: oci://harbor.machine:8443/library/cyclictest
           revision: 0.1.0
           wait: false
           timeout: 4h
 
-      - name: stressng_helm
+      - name: stressng
         properties:
           repository: oci://harbor.machine:8443/library/stressng
           revision: 0.1.0
@@ -98,20 +100,26 @@ parameters:
       - pointer: CYCLICTEST_CUSTOM
         components: ["cyclictest_compose"]
 
+  caterpillarSamples:
+    value: 900
+    targets:
+      - pointer: caterpillar.samples
+        components: ["caterpillar"]
+
   stressngMemcpy:
     value: 8
     targets:
       - pointer: STRESS_MEMCPY_WORKERS
         components: ["stressng_compose"]
       - pointer: stressng.memcpy
-        components: ["stressng_helm"]
+        components: ["stressng"]
   stressDuration:
     value: 1899
     targets:
       - pointer: STRESS_DURATION
         components: ["stressng_compose"]
       - pointer: stressng.duration
-        components: ["stressng_helm"]
+        components: ["stressng"]
 
 configuration:
   sections:
@@ -152,6 +160,14 @@ configuration:
           name: Stress Duration
           description: Duration for stress run (for example 300s)
           schema: requiredText
+        
+    - name: Caterpillar Configuration
+      settings:
+        # we should create a new section for caterpillar configuration
+        - parameter: caterpillarSamples
+          name: Caterpillar Samples
+          description: Number of latency samples to collect for Caterpillar
+          schema: positiveInteger
 
   schema:
     - name: requiredText
