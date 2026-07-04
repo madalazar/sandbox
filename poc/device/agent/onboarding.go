@@ -225,29 +225,39 @@ func (da *DeviceClientSettings) ReportCapabilities(
 }
 
 func summarizeCapabilitiesCPU(capabilities sbi.DeviceCapabilitiesManifest) string {
-	if len(capabilities.Properties.Resources.Cpu) == 0 {
+	cpu := capabilities.Properties.Resources.Cpu
+	if cpu.Cores == 0 && cpu.Architecture == nil && cpu.Kinds == nil {
 		return "none"
 	}
 
-	parts := make([]string, 0, len(capabilities.Properties.Resources.Cpu))
-	for index, cpu := range capabilities.Properties.Resources.Cpu {
-		architecture := "<nil>"
-		if cpu.Architecture != nil {
-			architecture = string(*cpu.Architecture)
+	if cpu.Kinds == nil || len(*cpu.Kinds) == 0 {
+		return "none"
+	}
+
+	architecture := "<nil>"
+	if cpu.Architecture != nil {
+		architecture = string(*cpu.Architecture)
+	}
+
+	parts := make([]string, 0, len(*cpu.Kinds))
+	for index, cpuKind := range *cpu.Kinds {
+		cpuCores := "<nil>"
+		if cpuKind.Cores != nil {
+			cpuCores = fmt.Sprintf("%g", *cpuKind.Cores)
 		}
 
 		cpuClass := "<nil>"
-		if cpu.Class != nil {
-			cpuClass = string(*cpu.Class)
+		if cpuKind.Class != nil {
+			cpuClass = string(*cpuKind.Class)
 		}
 
 		cpuType := "<nil>"
-		if cpu.Type != nil {
-			cpuType = string(*cpu.Type)
+		if cpuKind.Type != nil {
+			cpuType = string(*cpuKind.Type)
 		}
 
-		parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%g, class=%s, type=%s, architecture=%s}",
-			index, cpu.Cores, cpuClass, cpuType, architecture))
+		parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%s, class=%s, type=%s, architecture=%s}",
+			index, cpuCores, cpuClass, cpuType, architecture))
 	}
 
 	return strings.Join(parts, "; ")

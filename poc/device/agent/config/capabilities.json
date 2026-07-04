@@ -1,31 +1,53 @@
 {
-    "apiVersion": "device.margo.org/v1alpha1",
-    "kind": "DeviceCapabilitiesManifest",
-    "properties": {
-        "id": "device-id-from-manufacturer",
-        "vendor": "Northstar Industrial Applications",
-        "modelNumber": "332ANZE1-N1",
-        "serialNumber": "PF45343-AA",
-        "roles": ["Standalone Cluster"],
-        "resources": {
-            "cpu": [
-                {
-                    "architecture": "amd64",
-                    "cores": 2,
-                    "class": "performance",
-                    "type": "isolated"
-                },
-                {
-                    "architecture": "amd64",
-                    "cores": 118,
-                    "class": "performance",
-                    "type": "shared"
-                }
-            ],
-            "memory": "64",
-            "storage": "2000 Gi",
-            "peripherals": [],
-            "interfaces": []
+  "apiVersion": "device.margo.org/v1alpha1",
+  "kind": "DeviceCapabilitiesManifest",
+  "properties": {
+    "id": "device-id-from-manufacturer",
+    "vendor": "Northstar Industrial Applications",
+    "modelNumber": "332ANZE1-N1",
+    "serialNumber": "PF45343-AA",
+    "roles": [
+      "Standalone Cluster"
+    ],
+    "resources": {
+      "cpu": {
+        "cores": 120,
+        "architecture": "amd64",
+        "kinds": [
+          {
+            "cores": 2,
+            "class": "performance",
+            "type": "isolated"
+          },
+          {
+            "cores": 118,
+            "class": "performance",
+            "type": "shared"
+          }
+        ]
+      },
+      "memory": "64",
+      "storage": "2000 Gi",
+      "peripherals": [],
+      "interfaces": [],
+      "cache": [
+        {
+          "level": "L3",
+          "cacheId": "0",
+          "size": "115200KB",
+          "allocationTypes": [
+            "shared"
+          ]
+        },
+        {
+          "level": "L3",
+          "cacheId": "1",
+          "size": "115200KB",
+          "allocationTypes": [
+            "shared"
+          ]
         }
+      ]
     }
+  }
 }

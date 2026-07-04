@@ -35,6 +35,11 @@ deploymentProfiles:
             - level: L3
               allocation: exclusive
               size: 9216Ki
+          cpu:
+            - name: caterpillar_helm
+              cores: 1
+              class: performance
+              type: isolated
 
       - name: cyclictest_helm
         properties:
@@ -42,6 +47,12 @@ deploymentProfiles:
           revision: 0.1.0
           wait: false
           timeout: 4h
+        requiredResources:
+          cpu:
+            - name: cyclictest_helm
+              cores: 1
+              class: performance
+              type: isolated
 
       - name: stressng_helm
         properties:
@@ -51,21 +62,6 @@ deploymentProfiles:
           timeout: 4h
 
     requiredResources:
-      cpu:
-        - name: caterpillar_helm
-          cores: 1
-          class: performance
-          type: isolated
-          architectures:
-            - amd64
-            - x86_64
-        - name: cyclictest_helm
-          cores: 1
-          class: performance
-          type: isolated
-          architectures:
-            - amd64
-            - x86_64
       memory: 1024Mi
       storage: 2Gi
 
@@ -76,6 +72,12 @@ deploymentProfiles:
       - name: cyclictest_compose
         properties:
           packageLocation: oci://harbor.machine:8443/library/cyclictest-compose-package:latest
+        requiredResources:
+          cpu:
+            - name: cyclictest_compose
+              cores: 1
+              class: performance
+              type: isolated
       - name: stressng_compose
         properties:
           packageLocation: oci://harbor.machine:8443/library/stressng-compose-package:latest
@@ -87,22 +89,12 @@ deploymentProfiles:
             - level: L3
               allocation: exclusive
               size: 9216Ki
+          cpu:
+            - name: caterpillar_compose
+              cores: 1
+              class: performance
+              type: isolated
     requiredResources:
-      cpu:
-        - name: cyclictest_compose
-          cores: 1
-          class: performance
-          type: isolated
-          architectures:
-            - amd64
-            - x86_64
-        - name: caterpillar_compose
-          cores: 1
-          class: performance
-          type: isolated
-          architectures:
-            - amd64
-            - x86_64
       memory: 1024Mi
       storage: 1Gi
 

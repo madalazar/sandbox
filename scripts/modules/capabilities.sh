@@ -9,16 +9,19 @@
 # If Intel RDT appears supported in CPU flags but is not enabled/mounted yet,
 # cache update prints the commands needed to enable it and exits early.
 #
-# resources.cpu grouping uses:
-# 1) architecture
+# resources.cpu uses:
+# 1) top-level architecture
 #    - Derived from uname -m and mapped to API values:
 #      x86_64/amd64 -> amd64, aarch64/arm64 -> arm64, arm* -> arm.
 #
-# 2) core type (isolated/shared)
+# 2) top-level cores
+#    - Total physical cores discovered after SMT sibling collapse.
+#
+# 3) cpu.kinds[] grouped by core type + class
 #    - Derived from /sys/devices/system/cpu/isolated.
 #    - CPUs listed there are marked type=isolated; all others are type=shared.
 #
-# 3) cpu class (performance/efficiency/low-power)
+# 4) cpu class (performance/efficiency/low-power)
 #    - Uses cpuinfo_max_freq per selected physical CPU.
 #    - Unique max frequencies are sorted high-to-low.
 #    - Highest tier => performance.
@@ -46,18 +49,23 @@ update_capabilities_cpu_from_host() {
   # Load topology from cache (builds it if absent)
   read_cpu_topology_cache "$cache_file"
 
-  # ---- group cores into buckets: type|class|arch -> count ----------------
+  # ---- group cores into buckets: type|class -> count ---------------------
   declare -A cpu_buckets=()
+  local total_cpu_cores=0
   local cpu_id
   for cpu_id in "${_TOPO_SORTED_IDS[@]}"; do
     local meta="${_TOPO_CORE_META[$cpu_id]}"
-    local b_arch="${meta%%|*}" rest="${meta#*|}"
+    local _b_arch="${meta%%|*}" rest="${meta#*|}"
     local b_class="${rest%%|*}" b_type="${rest##*|}"
-    local bucket_key="${b_type}|${b_class}|${b_arch}"
+    local bucket_key="${b_type}|${b_class}"
     cpu_buckets["$bucket_key"]=$(( ${cpu_buckets["$bucket_key"]:-0} + 1 ))
+    total_cpu_cores=$((total_cpu_cores + 1))
   done
 
-  local cpu_json=""
+  local cpu_arch
+  cpu_arch="$(map_machine_arch_to_capability_arch "$(uname -m)")"
+
+  local cpu_kinds_json=""
   local first=true
   local stable_keys=()
   while IFS= read -r key; do
@@ -67,9 +75,7 @@ update_capabilities_cpu_from_host() {
   local key
   for key in "${stable_keys[@]}"; do
     local cpu_type="${key%%|*}"
-    local rest="${key#*|}"
-    local cpu_class="${rest%%|*}"
-    local cpu_arch="${rest##*|}"
+    local cpu_class="${key#*|}"
     local cpu_cores="${cpu_buckets[$key]}"
 
     [[ "$cpu_cores" -le 0 ]] && continue
@@ -77,18 +83,19 @@ update_capabilities_cpu_from_host() {
     if [[ "$first" == true ]]; then
       first=false
     else
-      cpu_json+=$',\n'
+      cpu_kinds_json+=','
     fi
 
-    cpu_json+="{\"architecture\":\"${cpu_arch}\",\"cores\":${cpu_cores},\"class\":\"${cpu_class}\",\"type\":\"${cpu_type}\"}"
+    cpu_kinds_json+="{\"cores\":${cpu_cores},\"class\":\"${cpu_class}\",\"type\":\"${cpu_type}\"}"
   done
 
-  if [[ -z "$cpu_json" ]]; then
+  if [[ -z "$cpu_kinds_json" || "$total_cpu_cores" -le 0 ]]; then
     echo "ERROR: Failed to construct CPU capabilities JSON"
     return 1
   fi
 
-  local cpu_array_json="[$cpu_json]"
+  local cpu_object_json
+  cpu_object_json="{\"cores\":${total_cpu_cores},\"architecture\":\"${cpu_arch}\",\"kinds\":[${cpu_kinds_json}]}"
 
   if ! command -v jq >/dev/null 2>&1; then
     echo "ERROR: jq is required to update capabilities.json"
@@ -98,28 +105,39 @@ update_capabilities_cpu_from_host() {
   local tmp_file
   tmp_file="$(mktemp)"
 
-  if ! jq --argjson cpu "$cpu_array_json" '
-    def cpu_item_ok:
-      # New schema: architecture + cores + class + type
+  if ! jq --argjson cpu "$cpu_object_json" '
+    def cpu_kind_ok:
+      # New schema (cpu.kinds[] item): cores + class + type
       (type == "object")
-      and (.architecture | type == "string")
       and (.cores | type == "number")
       and (.class | type == "string")
       and (.type | type == "string");
 
-    def cpu_item_legacy_ok:
-      # Legacy schema: architecture + cores only
+    def cpu_object_ok:
+      # New schema (cpu object): cores + architecture + kinds[]
       (type == "object")
-      and (.architecture | type == "string")
-      and (.cores | type == "number");
+      and (.cores | type == "number")
+      and ((has("architecture") | not) or (.architecture | type == "string"))
+      and (
+        (has("kinds") | not)
+        or ((.kinds | type) == "array" and (.kinds | all(.[]; cpu_kind_ok)))
+      );
+
+    def cpu_legacy_item_ok:
+      # Legacy schema item: architecture + cores (+ optional class/type)
+      (type == "object")
+      and (.cores | type == "number")
+      and ((has("architecture") | not) or (.architecture | type == "string"))
+      and ((has("class") | not) or (.class | type == "string"))
+      and ((has("type") | not) or (.type | type == "string"));
 
     def cpu_item_compatible_ok:
-      cpu_item_ok or cpu_item_legacy_ok;
+      cpu_object_ok or cpu_legacy_item_ok;
 
     def cpu_shape_similar_at($path):
       (getpath($path) | type) == "object"
       and (
-        ((getpath($path + ["cpu"]) | type) == "array" and (getpath($path + ["cpu"]) | all(.[]; cpu_item_compatible_ok)))
+        ((getpath($path + ["cpu"]) | type) == "array" and (getpath($path + ["cpu"]) | all(.[]; cpu_legacy_item_ok)))
         or
         ((getpath($path + ["cpu"]) | type) == "object" and (getpath($path + ["cpu"]) | cpu_item_compatible_ok))
       );
@@ -129,7 +147,7 @@ update_capabilities_cpu_from_host() {
     elif cpu_shape_similar_at(["resources"]) then
       setpath(["resources", "cpu"]; $cpu)
     else
-      error("Refusing CPU update: existing properties.resources.cpu/resources.cpu schema is not similar to expected CPU capability entries")
+      error("Refusing CPU update: existing properties.resources.cpu/resources.cpu schema is not similar to expected cpu object (cores, architecture, kinds[])")
     end
   ' "$capabilities_file" > "$tmp_file"; then
     rm -f "$tmp_file"

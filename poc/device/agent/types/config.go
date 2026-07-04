@@ -150,6 +150,9 @@ func LoadCapabilities(capabilitiesPath string) (*sbi.DeviceCapabilitiesManifest,
 		return nil, fmt.Errorf("failed to read capabilities file: %w", err)
 	}
 
+	// log data
+	fmt.Println("read capabilities from", capabilitiesPath, ":", string(data))
+
 	var capabilities sbi.DeviceCapabilitiesManifest
 	if err := json.Unmarshal(data, &capabilities); err != nil {
 		return nil, fmt.Errorf("failed to parse capabilities: %w", err)

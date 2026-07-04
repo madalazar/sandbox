@@ -78,17 +78,17 @@ const (
 	Arm64 DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture = "arm64"
 )
 
-// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuClass.
+// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass.
 const (
-	DeviceCapabilitiesManifestPropertiesResourcesCpuClassEfficiency  DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "efficiency"
-	DeviceCapabilitiesManifestPropertiesResourcesCpuClassLowPower    DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "low-power"
-	DeviceCapabilitiesManifestPropertiesResourcesCpuClassPerformance DeviceCapabilitiesManifestPropertiesResourcesCpuClass = "performance"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClassEfficiency  DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass = "efficiency"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClassLowPower    DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass = "low-power"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClassPerformance DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass = "performance"
 )
 
-// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuType.
+// Defines values for DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType.
 const (
-	DeviceCapabilitiesManifestPropertiesResourcesCpuTypeIsolated DeviceCapabilitiesManifestPropertiesResourcesCpuType = "isolated"
-	DeviceCapabilitiesManifestPropertiesResourcesCpuTypeShared   DeviceCapabilitiesManifestPropertiesResourcesCpuType = "shared"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuKindsTypeIsolated DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType = "isolated"
+	DeviceCapabilitiesManifestPropertiesResourcesCpuKindsTypeShared   DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType = "shared"
 )
 
 // Defines values for DeviceCapabilitiesManifestPropertiesRoles.
@@ -252,15 +252,17 @@ type DeviceCapabilitiesManifest struct {
 		Resources   struct {
 			// Cache Cache resources available on the device
 			Cache *[]CacheCapability `json:"cache,omitempty"`
-			Cpu   []struct {
+			Cpu   struct {
 				Architecture *DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture `json:"architecture,omitempty"`
+				Cores        float32                                                       `json:"cores"`
+				Kinds        *[]struct {
+					// Class Core class (P-core, E-core, etc.)
+					Class *DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass `json:"class,omitempty"`
+					Cores *float32                                                    `json:"cores,omitempty"`
 
-				// Class Core class (P-core, E-core, etc.)
-				Class *DeviceCapabilitiesManifestPropertiesResourcesCpuClass `json:"class,omitempty"`
-				Cores float32                                                `json:"cores"`
-
-				// Type Whether these cores are kernel-isolated
-				Type *DeviceCapabilitiesManifestPropertiesResourcesCpuType `json:"type,omitempty"`
+					// Type Whether these cores are kernel-isolated
+					Type *DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType `json:"type,omitempty"`
+				} `json:"kinds,omitempty"`
 			} `json:"cpu"`
 			Interfaces  []DeviceCommunicationInterface `json:"interfaces"`
 			Memory      string                         `json:"memory"`
@@ -279,11 +281,11 @@ type DeviceCapabilitiesManifestKind string
 // DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture defines model for DeviceCapabilitiesManifest.Properties.Resources.Cpu.Architecture.
 type DeviceCapabilitiesManifestPropertiesResourcesCpuArchitecture string
 
-// DeviceCapabilitiesManifestPropertiesResourcesCpuClass Core class (P-core, E-core, etc.)
-type DeviceCapabilitiesManifestPropertiesResourcesCpuClass string
+// DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass Core class (P-core, E-core, etc.)
+type DeviceCapabilitiesManifestPropertiesResourcesCpuKindsClass string
 
-// DeviceCapabilitiesManifestPropertiesResourcesCpuType Whether these cores are kernel-isolated
-type DeviceCapabilitiesManifestPropertiesResourcesCpuType string
+// DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType Whether these cores are kernel-isolated
+type DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType string
 
 // DeviceCapabilitiesManifestPropertiesRoles defines model for DeviceCapabilitiesManifest.Properties.Roles.
 type DeviceCapabilitiesManifestPropertiesRoles string

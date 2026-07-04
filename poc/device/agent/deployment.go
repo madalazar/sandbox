@@ -372,7 +372,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
 		podAnnotations, componentAssignments, hasCPUAnnotations, err := dm.resolveComponentBalloonAnnotations(
-			deploymentId, helmComp.Name, appDeployment.Spec.DeploymentProfile.RequiredResources, assignments)
+			deploymentId, helmComp.Name, helmComp.RequiredResources, assignments)
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
@@ -562,7 +562,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
 			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 			assignments, err = dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
-				appDeployment.Spec.DeploymentProfile.RequiredResources, composeAssignments)
+				composeComp.RequiredResources, composeAssignments)
 
 			dm.log.Debugw("assignments for current component", "assignments", assignments)
 
