@@ -24,24 +24,22 @@ deploymentProfiles:
       Deploys Caterpillar and cyclictest latency benchmarks plus stress-ng as
       independent Helm releases on the same edge device.
     components:
-      - name: caterpillar_helm
+      # renamed the components from caterpillar_helm -> caterpillar
+      # to keep inline with helm chart name validation in deployment.go
+      - name: caterpillar
         properties:
           repository: oci://harbor.machine:8443/library/caterpillar
           revision: 0.1.0
           wait: false
           timeout: 4h
         requiredResources:
-          cache:
-            - level: L3
-              allocation: exclusive
-              size: 9216Ki
           cpu:
-            - name: caterpillar_helm
+            - name: caterpillar
               cores: 1
               class: performance
               type: isolated
 
-      - name: cyclictest_helm
+      - name: cyclictest
         properties:
           repository: oci://harbor.machine:8443/library/cyclictest
           revision: 0.1.0
@@ -49,12 +47,12 @@ deploymentProfiles:
           timeout: 4h
         requiredResources:
           cpu:
-            - name: cyclictest_helm
+            - name: cyclictest
               cores: 1
               class: performance
               type: isolated
 
-      - name: stressng_helm
+      - name: stressng
         properties:
           repository: oci://harbor.machine:8443/library/stressng
           revision: 0.1.0
@@ -104,31 +102,49 @@ parameters:
     targets:
       - pointer: CYCLICTEST_THREADS
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.threads
+        components: ["cyclictest"]
   cyclictestPriority:
     value: 99
     targets:
       - pointer: CYCLICTEST_PRIORITY
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.priority
+        components: ["cyclictest"]
   cyclictestInterval:
     value: 9000
     targets:
       - pointer: CYCLICTEST_INTERVAL
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.interval
+        components: ["cyclictest"]
   cyclictestLoops:
     value: 1000000
     targets:
       - pointer: CYCLICTEST_LOOPS
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.loops
+        components: ["cyclictest"]
   cyclictestHistogram:
     value: 600
     targets:
       - pointer: CYCLICTEST_HISTOGRAM
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.histogramMax
+        components: ["cyclictest"]
   cyclictestCustom:
     value: -m
     targets:
       - pointer: CYCLICTEST_CUSTOM
         components: ["cyclictest_compose"]
+      - pointer: cyclictest.custom
+        components: ["cyclictest"]
+
+  caterpillarSamples:
+    value: 900
+    targets:
+      - pointer: caterpillar.samples
+        components: ["caterpillar"]
 
   stressngMemcpy:
     value: 8
@@ -136,14 +152,14 @@ parameters:
       - pointer: STRESS_MEMCPY_WORKERS
         components: ["stressng_compose"]
       - pointer: stressng.memcpy
-        components: ["stressng_helm"]
+        components: ["stressng"]
   stressDuration:
     value: 1899
     targets:
       - pointer: STRESS_DURATION
         components: ["stressng_compose"]
       - pointer: stressng.duration
-        components: ["stressng_helm"]
+        components: ["stressng"]
 
 configuration:
   sections:
@@ -176,6 +192,10 @@ configuration:
 
     - name: Stress Configuration
       settings:
+        - parameter: caterpillarSamples
+          name: Caterpillar Samples
+          description: Number of latency samples to collect for Caterpillar
+          schema: positiveInteger
         - parameter: stressngMemcpy
           name: Memcpy Stressor Workers
           description: Number of --memcpy stressor worker threads
