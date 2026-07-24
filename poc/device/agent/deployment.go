@@ -960,7 +960,7 @@ func (dm *DeploymentManager) removeCompose(
 				"projectName", projectName,
 				"componentName", composeComp.Name)
 
-			if err := dm.resetComposeComponentPQoSMask(ctx, composeComp.Name, record.CacheAssignments); err != nil {
+			if err := dm.resetComposeComponentPQoSMask(ctx, composeComp.Name, record.CacheAssignments, record.CpuAssignments); err != nil {
 				dm.log.Warnw("Failed to reset compose pqos mask during removal",
 					"deploymentId", deploymentId,
 					"componentName", composeComp.Name,

@@ -194,7 +194,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		}
 
 		pqosCommand := fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
+			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
 			cacheID,
 			cosID,
 			mask,
@@ -266,12 +266,14 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 	ctx context.Context,
 	componentName string,
 	cacheAssignmentsByComponent map[string][]database.CacheAssignment,
+	componentCPUAssignments map[string][]int,
 ) error {
 	if cacheAssignmentsByComponent == nil {
 		return nil
 	}
 
 	cacheAssignments := make([]database.CacheAssignment, 0)
+	// TODO: look for overuse of trimming the component name
 	trimmedComponentName := strings.TrimSpace(componentName)
 	if trimmedComponentName == "" {
 		return nil
@@ -293,8 +295,10 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 		return nil
 	}
 
+	classCPUSet := resolveComponentCPUListFromDB(trimmedComponentName, componentCPUAssignments)
+
 	processed := map[string]struct{}{}
-	classCPUSetCache := map[int]string{}
+	resetCacheEntries := make([]string, 0, len(cacheAssignments))
 	for _, assignment := range cacheAssignments {
 		if assignment.ClassID <= 0 {
 			dm.log.Warnw("Skipping compose pqos reset due to invalid class ID",
@@ -333,91 +337,49 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 		processed[key] = struct{}{}
 
 		cosID := strconv.Itoa(assignment.ClassID)
-		classCPUSet, cached := classCPUSetCache[assignment.ClassID]
-		if !cached {
-			resolvedCPUSet, resolveErr := dm.readResctrlClassCPUSet(ctx, assignment.ClassID)
-			if resolveErr != nil {
-				return fmt.Errorf("component %q failed to resolve resctrl cpuset for classId=%d: %w", componentName, assignment.ClassID, resolveErr)
-			}
-			classCPUSet = strings.TrimSpace(resolvedCPUSet)
-			classCPUSetCache[assignment.ClassID] = classCPUSet
-		}
+		resetCacheEntry := fmt.Sprintf("llc@%s:%s=%s", cacheID, cosID, resetMask)
+		resetCacheEntries = append(resetCacheEntries, resetCacheEntry)
 
-		pqosCommand := ""
-		if classCPUSet != "" {
-			pqosCommand = fmt.Sprintf(
-				"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s' -a 'core:0=%s'",
-				cacheID,
-				cosID,
-				resetMask,
-				classCPUSet,
-			)
-		} else {
-			pqosCommand = fmt.Sprintf(
-				"modprobe msr >/dev/null 2>&1 || true;  sudo pqos -e 'llc@%s:%s=%s'",
-				cacheID,
-				cosID,
-				resetMask,
-			)
-		}
-
-		dm.log.Debugw("Resetting compose pqos class mask to full cache-way mask",
+		dm.log.Debugw("Prepared compose pqos class mask reset entry",
 			"componentName", componentName,
 			"classID", assignment.ClassID,
 			"cacheID", cacheID,
 			"resetMask", resetMask,
 			"classCPUSet", classCPUSet,
-			"pqosCommand", pqosCommand,
+			"resetEntry", resetCacheEntry,
 		)
+	}
 
-		cmd := exec.CommandContext(
-			ctx,
-			"nsenter",
-			"-t",
-			"1",
-			"-m",
-			"-u",
-			"-i",
-			"-n",
-			"-p",
-			"--",
-			"/bin/sh",
-			"-c",
-			pqosCommand,
-		)
-
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf(
-				"failed to reset pqos class mask/core association for component %q (classId=%d cacheID=%s mask=%s cpuset=%s): %w: %s",
-				componentName,
-				assignment.ClassID,
-				cacheID,
-				resetMask,
-				classCPUSet,
-				err,
-				strings.TrimSpace(string(output)),
-			)
-		}
-
-		dm.log.Infow("Reset compose pqos class mask",
+	if len(resetCacheEntries) == 0 {
+		dm.log.Warnw("No compose pqos reset entries were prepared",
 			"componentName", componentName,
-			"classID", assignment.ClassID,
-			"cacheID", cacheID,
-			"mask", resetMask,
-			"cpusetMovedToCos0", classCPUSet,
+			"cacheAssignmentsCount", len(cacheAssignments),
+		)
+		return nil
+	}
+
+	resetSpec := strings.Join(resetCacheEntries, ";")
+	pqosCommand := ""
+	if classCPUSet != "" {
+		pqosCommand = fmt.Sprintf(
+			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e '%s' -a 'core:0=%s'",
+			resetSpec,
+			classCPUSet,
+		)
+	} else {
+		pqosCommand = fmt.Sprintf(
+			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e '%s'",
+			resetSpec,
 		)
 	}
 
-	return nil
-}
+	dm.log.Debugw("Resetting compose pqos class masks with single pqos command",
+		"componentName", componentName,
+		"classCPUSet", classCPUSet,
+		"resetSpec", resetSpec,
+		"pqosCommand", pqosCommand,
+	)
 
-func (dm *DeploymentManager) readResctrlClassCPUSet(ctx context.Context, classID int) (string, error) {
-	if classID <= 0 {
-		return "", fmt.Errorf("invalid class ID %d", classID)
-	}
-
-	resctrlPath := fmt.Sprintf("/sys/fs/resctrl/COS%d/cpus_list", classID)
 	cmd := exec.CommandContext(
 		ctx,
 		"nsenter",
@@ -431,15 +393,74 @@ func (dm *DeploymentManager) readResctrlClassCPUSet(ctx context.Context, classID
 		"--",
 		"/bin/sh",
 		"-c",
-		fmt.Sprintf("cat %s 2>/dev/null || true", resctrlPath),
+		pqosCommand,
 	)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to read %s: %w: %s", resctrlPath, err, strings.TrimSpace(string(output)))
+		return fmt.Errorf(
+			"failed to reset pqos class masks/core association for component %q (resetSpec=%s cpuset=%s): %w: %s",
+			componentName,
+			resetSpec,
+			classCPUSet,
+			err,
+			strings.TrimSpace(string(output)),
+		)
 	}
 
-	return strings.TrimSpace(string(output)), nil
+	dm.log.Infow("Reset compose pqos class masks",
+		"componentName", componentName,
+		"resetSpec", resetSpec,
+		"cpusetMovedToCos0", classCPUSet,
+	)
+
+	return nil
+}
+
+func resolveComponentCPUListFromDB(
+	componentName string,
+	componentCPUAssignments map[string][]int,
+) string {
+	if len(componentCPUAssignments) == 0 {
+		return ""
+	}
+
+	componentName = strings.TrimSpace(componentName)
+	if componentName == "" {
+		return ""
+	}
+
+	collected := make([]int, 0)
+	seen := map[int]struct{}{}
+
+	appendUnique := func(cpus []int) {
+		for _, cpu := range cpus {
+			if _, exists := seen[cpu]; exists {
+				continue
+			}
+			seen[cpu] = struct{}{}
+			collected = append(collected, cpu)
+		}
+	}
+
+	if cpus, ok := componentCPUAssignments[componentName]; ok {
+		appendUnique(cpus)
+	}
+
+	for key, cpus := range componentCPUAssignments {
+		if strings.TrimSpace(key) == componentName {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), componentName) {
+			appendUnique(cpus)
+		}
+	}
+
+	if len(collected) == 0 {
+		return ""
+	}
+
+	return formatCPUSet(collected)
 }
 
 func nextAvailablePQoSClassID(
