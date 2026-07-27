@@ -220,8 +220,16 @@ func NewAgent(configPath string) (*Agent, error) {
 	}
 	log.Infow("Loaded CPU topology artifact", "path", topologyArtifactPath, "isolatedCoreCount", len(topologyLookup.IsolatedCPUIndices))
 
+	var pqosFactory pqosCommandFactory
+	if composeClient != nil {
+		pqosFactory, err = newPQoSCommandFactory(topologyLookup.PQoSInterface)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pqos interface in topology artifact: %w", err)
+		}
+	}
+
 	// Create components
-	deployer := NewDeploymentManager(db, helmClient, composeClient, balloonPolicy, topologyLookup, log)
+	deployer := NewDeploymentManager(db, helmClient, composeClient, pqosFactory, balloonPolicy, topologyLookup, log)
 	monitor := NewDeploymentMonitor(db, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,

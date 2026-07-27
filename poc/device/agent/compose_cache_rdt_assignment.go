@@ -163,6 +163,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 	componentName string,
 	cacheAssignments []database.CacheAssignment,
 	componentCPUAssignments map[string][]int,
+	factory pqosCommandFactory,
 ) error {
 	if len(cacheAssignments) == 0 {
 		return nil
@@ -177,7 +178,8 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 	if strings.TrimSpace(cpuset) == "" {
 		return fmt.Errorf("component %q resolved empty cpuset for pqos association", componentName)
 	}
-
+	// TODO: this usually has only one CLOS assignment, if we were to support
+	// multiple CLOS we  need to think about how to associate the cpuset
 	for _, assignment := range cacheAssignments {
 		if assignment.ClassID <= 0 {
 			return fmt.Errorf("component %q has invalid class ID %d", componentName, assignment.ClassID)
@@ -193,18 +195,12 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 			return fmt.Errorf("component %q has empty cache mask", componentName)
 		}
 
-		pqosCommand := fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e 'llc@%s:%s=%s' -a 'core:%s=%s'",
-			cacheID,
-			cosID,
-			mask,
-			cosID,
-			cpuset,
-		)
+		pqosCommand := factory.BuildApplyCommand(cacheID, cosID, mask, cpuset)
 
 		dm.log.Debugw("Applying compose pqos assignment using direct host namespace exec",
 			"componentName", componentName,
 			"classID", assignment.ClassID,
+			"pqosInterface", factory.GetPQoSInterface(),
 			"cacheID", cacheID,
 			"mask", mask,
 			"cpuset", cpuset,
@@ -230,6 +226,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		dm.log.Debugw("Executing pqos command in host namespace",
 			"componentName", componentName,
 			"classID", assignment.ClassID,
+			"pqosInterface", factory.GetPQoSInterface(),
 			"cacheID", cacheID,
 			"mask", mask,
 			"cpuset", cpuset,
@@ -253,6 +250,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		dm.log.Infow("Applied compose pqos assignment using direct host namespace exec",
 			"componentName", componentName,
 			"classID", assignment.ClassID,
+			"pqosInterface", factory.GetPQoSInterface(),
 			"cacheID", cacheID,
 			"mask", mask,
 			"cpuset", cpuset,
@@ -267,6 +265,7 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 	componentName string,
 	cacheAssignmentsByComponent map[string][]database.CacheAssignment,
 	componentCPUAssignments map[string][]int,
+	factory pqosCommandFactory,
 ) error {
 	if cacheAssignmentsByComponent == nil {
 		return nil
@@ -359,22 +358,11 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 	}
 
 	resetSpec := strings.Join(resetCacheEntries, ";")
-	pqosCommand := ""
-	if classCPUSet != "" {
-		pqosCommand = fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e '%s' -a 'core:0=%s'",
-			resetSpec,
-			classCPUSet,
-		)
-	} else {
-		pqosCommand = fmt.Sprintf(
-			"modprobe msr >/dev/null 2>&1 || true;  sudo pqos --iface=msr -e '%s'",
-			resetSpec,
-		)
-	}
+	pqosCommand := factory.BuildResetCommand(resetSpec, classCPUSet)
 
 	dm.log.Debugw("Resetting compose pqos class masks with single pqos command",
 		"componentName", componentName,
+		"pqosInterface", factory.GetPQoSInterface(),
 		"classCPUSet", classCPUSet,
 		"resetSpec", resetSpec,
 		"pqosCommand", pqosCommand,
@@ -410,6 +398,7 @@ func (dm *DeploymentManager) resetComposeComponentPQoSMask(
 
 	dm.log.Infow("Reset compose pqos class masks",
 		"componentName", componentName,
+		"pqosInterface", factory.GetPQoSInterface(),
 		"resetSpec", resetSpec,
 		"cpusetMovedToCos0", classCPUSet,
 	)

@@ -14,6 +14,7 @@ type TopologyLookup struct {
 	IsolatedCPUIndices []int
 	IsolatedCPUSet     map[int]struct{}
 	L3Caches           []TopologyCacheInfo
+	PQoSInterface      string
 }
 
 type TopologyCoreInfo struct {
@@ -34,6 +35,7 @@ type TopologyCacheInfo struct {
 type topologyArtifact struct {
 	SchemaVersion string              `json:"schemaVersion"`
 	GeneratedAt   string              `json:"generatedAt"`
+	PQoSInterface string              `json:"pqos_interface"`
 	Cores         []TopologyCoreInfo  `json:"cores"`
 	Caches        []TopologyCacheInfo `json:"caches"`
 }
@@ -139,6 +141,26 @@ func ReadCacheInfoFromAgentArtifact(path string) ([]TopologyCacheInfo, error) {
 	return caches, nil
 }
 
+func ReadPQoSInterfaceFromAgentArtifact(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read topology artifact %s: %w", path, err)
+	}
+
+	var artifact topologyArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return "", fmt.Errorf("parse topology artifact %s: %w", path, err)
+	}
+
+	iface := strings.ToLower(strings.TrimSpace(artifact.PQoSInterface))
+	switch iface {
+	case "os", "msr":
+		return iface, nil
+	default:
+		return "", fmt.Errorf("parse topology artifact %s: invalid pqos_interface %q (expected os or msr)", path, artifact.PQoSInterface)
+	}
+}
+
 func LoadCPUIndicesFromTopologyArtifact(path string) (TopologyLookup, error) {
 	cores, err := ReadCoreInfoFromAgentArtifact(path)
 	if err != nil {
@@ -151,6 +173,12 @@ func LoadCPUIndicesFromTopologyArtifact(path string) (TopologyLookup, error) {
 
 	lookup := CPUIndicesFromCoreInfo(cores)
 	lookup.L3Caches = caches
+	pqosInterface, err := ReadPQoSInterfaceFromAgentArtifact(path)
+	if err != nil {
+		return TopologyLookup{}, err
+	}
+	lookup.PQoSInterface = pqosInterface
+
 	return lookup, nil
 }
 

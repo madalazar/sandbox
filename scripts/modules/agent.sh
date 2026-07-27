@@ -179,6 +179,7 @@ start_device_agent_docker_service() {
 
   update_capabilities_cpu_from_host || return 1
   generate_cpu_topology_agent_artifact || return 1
+  update_pqos_interface_in_cpu_topology_agent_artifact || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
   cp ../poc/device/agent/config/cpu-topology-agent.json ./config/

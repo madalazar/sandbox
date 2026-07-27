@@ -39,6 +39,7 @@ type DeploymentManager struct {
 	database       database.DatabaseIfc
 	helmClient     *workloads.HelmClient
 	composeClient  *workloads.DockerComposeCliClient
+	pqosFactory    pqosCommandFactory
 	policyReader   BalloonPolicyReader
 	topologyLookup device.TopologyLookup
 	log            *zap.SugaredLogger
@@ -51,6 +52,7 @@ func NewDeploymentManager(
 	db database.DatabaseIfc,
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
+	pqosFactory pqosCommandFactory,
 	policyReader BalloonPolicyReader,
 	topologyLookup device.TopologyLookup,
 	log *zap.SugaredLogger,
@@ -59,6 +61,7 @@ func NewDeploymentManager(
 		database:       db,
 		helmClient:     helmClient,
 		composeClient:  composeClient,
+		pqosFactory:    pqosFactory,
 		policyReader:   policyReader,
 		topologyLookup: topologyLookup,
 		log:            log,
@@ -516,6 +519,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	composeAssignments := map[string][]int{}
 	composeCacheAssignments := map[string][]database.CacheAssignment{}
 
+	if dm.pqosFactory == nil {
+		return fmt.Errorf("pqos command factory is not initialized")
+	}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -579,7 +586,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				componentCPUAssignments = toAssignmentMap(assignments)
 			}
 		}
-
+		//TODO: we should understand here if we have multiple cache assignments for the same component
+		// if we do, then how do we assign the cpu-set?
 		componentCacheAssignments, hasCacheAssignments, err := dm.resolveComposeComponentCacheAssignments(
 			deploymentId,
 			composeComp.Name,
@@ -692,7 +700,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		)
 
 		if hasCacheAssignments {
-			if err := dm.applyComposeComponentPQoS(ctx, composeComp.Name, composeCacheAssignments[composeComp.Name], componentCPUAssignments); err != nil {
+			if err := dm.applyComposeComponentPQoS(ctx, composeComp.Name, composeCacheAssignments[composeComp.Name], componentCPUAssignments, dm.pqosFactory); err != nil {
 				return fmt.Errorf("failed to apply compose pqos assignment for component %s: %w", composeComp.Name, err)
 			}
 		}
@@ -931,6 +939,10 @@ func (dm *DeploymentManager) removeCompose(
 	if err != nil {
 		return fmt.Errorf("failed to load deployment record for compose cache reset cleanup: %w", err)
 	}
+	//TODO, not sure
+	if dm.pqosFactory == nil {
+		return fmt.Errorf("pqos command factory is not initialized")
+	}
 
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
@@ -960,7 +972,7 @@ func (dm *DeploymentManager) removeCompose(
 				"projectName", projectName,
 				"componentName", composeComp.Name)
 
-			if err := dm.resetComposeComponentPQoSMask(ctx, composeComp.Name, record.CacheAssignments, record.CpuAssignments); err != nil {
+			if err := dm.resetComposeComponentPQoSMask(ctx, composeComp.Name, record.CacheAssignments, record.CpuAssignments, dm.pqosFactory); err != nil {
 				dm.log.Warnw("Failed to reset compose pqos mask during removal",
 					"deploymentId", deploymentId,
 					"componentName", composeComp.Name,

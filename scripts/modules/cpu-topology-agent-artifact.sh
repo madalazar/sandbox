@@ -6,6 +6,88 @@ source "$SCRIPT_DIR_CPU_TOPO_AGENT/cpu-topology.sh"
 # shellcheck source=./cache-topology.sh
 source "$SCRIPT_DIR_CPU_TOPO_AGENT/cache-topology.sh"
 
+_install_pqos_from_source() {
+	if ! command -v git >/dev/null 2>&1; then
+		echo "[ERROR] git is required to install pqos from source" >&2
+		return 1
+	fi
+	if ! command -v make >/dev/null 2>&1; then
+		echo "[ERROR] make is required to install pqos from source" >&2
+		return 1
+	fi
+
+	local tmp_dir repo_dir
+	tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/intel-cmt-cat-XXXXXX")" || return 1
+	repo_dir="$tmp_dir/intel-cmt-cat"
+
+	echo "[INFO] Installing pqos from Intel upstream source (intel-cmt-cat/pqos)"
+	if ! git clone --depth 1 https://github.com/intel/intel-cmt-cat.git "$repo_dir"; then
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+
+	if ! (
+		cd "$repo_dir" &&
+		make -C lib &&
+		make -C pqos &&
+		sudo make -C lib install &&
+		sudo make -C pqos install
+	); then
+		rm -rf "$tmp_dir"
+		return 1
+	fi
+
+	rm -rf "$tmp_dir"
+	return 0
+}
+
+ensure_pqos_available() {
+	if command -v pqos >/dev/null 2>&1; then
+		return 0
+	fi
+
+	echo "[WARN] pqos is not installed; attempting source installation"
+	if ! _install_pqos_from_source; then
+		echo "[ERROR] Failed to install pqos from source" >&2
+		return 1
+	fi
+
+	if ! command -v pqos >/dev/null 2>&1; then
+		echo "[ERROR] pqos is still unavailable after source installation attempt" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+detect_pqos_interface() {
+	local forced_iface
+
+	if sudo printenv RDT_IFACE >/dev/null 2>&1; then
+		forced_iface="$(sudo printenv RDT_IFACE 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+		forced_iface="$(echo "$forced_iface" | tr -d '[:space:]')"
+		case "$forced_iface" in
+		os|msr)
+			echo "$forced_iface"
+			return 0
+			;;
+		esac
+		echo "[WARN] Ignoring unsupported RDT_IFACE value: $forced_iface" >&2
+	fi
+
+	if sudo pqos --iface=os -s >/dev/null 2>&1; then
+		echo "os"
+		return 0
+	fi
+
+	if sudo pqos --iface=msr -s >/dev/null 2>&1; then
+		echo "msr"
+		return 0
+	fi
+
+	return 1
+}
+
 # Read cache topology from TSV and build caches JSON array.
 _build_caches_json() {
 	local cache_tsv_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
@@ -106,6 +188,49 @@ export_cpu_topology_agent_json() {
 		<<<"$base_json" > "$out_file"
 }
 
+update_pqos_interface_in_cpu_topology_agent_artifact() {
+	local default_output_path="${HOME}/sandbox/poc/device/agent/config/cpu-topology-agent.json"
+	local output_path="${1:-$default_output_path}"
+
+	if ! command -v jq >/dev/null 2>&1; then
+		echo "[ERROR] jq is required to update pqos_interface in topology artifact" >&2
+		return 1
+	fi
+
+	if [[ ! -f "$output_path" ]]; then
+		echo "[ERROR] Topology artifact does not exist: $output_path" >&2
+		return 1
+	fi
+
+	if ! ensure_pqos_available; then
+		echo "[ERROR] Failed to install or detect pqos utility" >&2
+		return 1
+	fi
+
+	local pqos_interface
+	if ! pqos_interface="$(detect_pqos_interface)"; then
+		echo "[ERROR] No usable pqos interface detected (os or msr)" >&2
+		return 1
+	fi
+
+	local current_interface
+	current_interface="$(jq -r '.pqos_interface // ""' "$output_path")"
+	if [[ "$current_interface" == "$pqos_interface" ]]; then
+		echo "[INFO] pqos_interface unchanged in topology artifact: $pqos_interface"
+		return 0
+	fi
+
+	local tmp_file
+	tmp_file="$(mktemp)" || return 1
+	if ! jq --arg pqos_interface "$pqos_interface" '.schemaVersion //= "v1" | .pqos_interface = $pqos_interface' "$output_path" > "$tmp_file"; then
+		rm -f "$tmp_file"
+		return 1
+	fi
+
+	mv "$tmp_file" "$output_path"
+	echo "[INFO] Updated pqos_interface in topology artifact: $pqos_interface"
+}
+
 generate_cpu_topology_agent_artifact() {
 	local default_output_path="${HOME}/sandbox/poc/device/agent/config/cpu-topology-agent.json"
 	local output_path="${1:-$default_output_path}"
@@ -123,6 +248,7 @@ generate_cpu_topology_agent_artifact() {
 	fi
 
 	CACHE_TOPOLOGY_CACHE_FILE="$cache_tsv_file"
+
 	if ! build_cache_topology_cache "$cache_tsv_file"; then
 		echo "❌ Failed to refresh cache topology cache: $cache_tsv_file"
 		if [[ -n "$generated_tmp_cache" ]]; then
