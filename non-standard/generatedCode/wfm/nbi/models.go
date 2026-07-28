@@ -132,6 +132,12 @@ const (
 	ONBOARDED  DeviceOnboardStatus = "ONBOARDED"
 )
 
+// Defines values for MemoryBandwidthAllocationUnit.
+const (
+	MBps    MemoryBandwidthAllocationUnit = "MBps"
+	Percent MemoryBandwidthAllocationUnit = "percent"
+)
+
 // Defines values for OciAuthenticationType.
 const (
 	Basic OciAuthenticationType = "basic"
@@ -792,6 +798,27 @@ type HelmDeploymentProfileComponent struct {
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
+// MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
+type MemoryBandwidthAllocation struct {
+	// Unit Unit for memory bandwidth capping
+	Unit MemoryBandwidthAllocationUnit `json:"unit" yaml:"unit"`
+
+	// Value Requested bandwidth cap in the selected unit
+	Value int `json:"value" yaml:"value"`
+}
+
+// MemoryBandwidthAllocationUnit Unit for memory bandwidth capping
+type MemoryBandwidthAllocationUnit string
+
+// MemoryRequirement Memory requirement for a deployment profile or component
+type MemoryRequirement struct {
+	// BandwidthAllocation Memory bandwidth allocation requested by a workload
+	BandwidthAllocation *MemoryBandwidthAllocation `json:"bandwidthAllocation,omitempty"`
+
+	// Size Required memory size (e.g., "1Gi")
+	Size string `json:"size" yaml:"size"`
+}
+
 // Metadata defines model for Metadata.
 type Metadata struct {
 	// Annotations Annotations for the resource
@@ -867,8 +894,8 @@ type RequiredResources struct {
 		Type *string `json:"type" yaml:"type"`
 	} `json:"interfaces" yaml:"interfaces"`
 
-	// Memory Required memory (e.g., "1024Mi")
-	Memory      *string `json:"memory" yaml:"memory"`
+	// Memory Memory requirement for a deployment profile or component
+	Memory      *MemoryRequirement `json:"memory,omitempty"`
 	Peripherals *[]struct {
 		// Manufacturer Manufacturer requirement
 		Manufacturer *string `json:"manufacturer" yaml:"manufacturer"`

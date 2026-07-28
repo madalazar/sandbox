@@ -118,6 +118,18 @@ const (
 	Speaker    DevicePeripheralType = "speaker"
 )
 
+// Defines values for MemoryBandwidthAllocationUnit.
+const (
+	MBps    MemoryBandwidthAllocationUnit = "MBps"
+	Percent MemoryBandwidthAllocationUnit = "percent"
+)
+
+// Defines values for MemoryCapabilityBandwidthAllocationTypes.
+const (
+	PercentThrottling MemoryCapabilityBandwidthAllocationTypes = "percent-throttling"
+	RateLimiting      MemoryCapabilityBandwidthAllocationTypes = "rate-limiting"
+)
+
 // Defines values for AppDeploymentProfileType.
 const (
 	Compose AppDeploymentProfileType = "compose"
@@ -264,10 +276,12 @@ type DeviceCapabilitiesManifest struct {
 					Type *DeviceCapabilitiesManifestPropertiesResourcesCpuKindsType `json:"type,omitempty"`
 				} `json:"kinds,omitempty"`
 			} `json:"cpu"`
-			Interfaces  []DeviceCommunicationInterface `json:"interfaces"`
-			Memory      string                         `json:"memory"`
-			Peripherals []DevicePeripheral             `json:"peripherals"`
-			Storage     string                         `json:"storage"`
+			Interfaces []DeviceCommunicationInterface `json:"interfaces"`
+
+			// Memory Memory capability reported by the device
+			Memory      MemoryCapability   `json:"memory"`
+			Peripherals []DevicePeripheral `json:"peripherals"`
+			Storage     string             `json:"storage"`
 		} `json:"resources"`
 		Roles        []DeviceCapabilitiesManifestPropertiesRoles `json:"roles"`
 		SerialNumber string                                      `json:"serialNumber"`
@@ -310,6 +324,39 @@ type DevicePeripheralType string
 
 // ManifestVersion Monotonically increasing unsigned 64-bit integer in the inclusive range [1, 2^64-1]. Prevents rollback attacks. The first manifest MUST use 1.
 type ManifestVersion = float32
+
+// MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
+type MemoryBandwidthAllocation struct {
+	// Unit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+	Unit MemoryBandwidthAllocationUnit `json:"unit"`
+
+	// Value Requested bandwidth cap value expressed in the selected unit
+	Value int `json:"value"`
+}
+
+// MemoryBandwidthAllocationUnit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+type MemoryBandwidthAllocationUnit string
+
+// MemoryCapability Memory capability reported by the device
+type MemoryCapability struct {
+	// BandwidthAllocationTypes Supported memory bandwidth allocation strategies. percent-throttling = cap memory bandwidth usage by percentage. rate-limiting = cap memory bandwidth to a fixed throughput.
+	BandwidthAllocationTypes *[]MemoryCapabilityBandwidthAllocationTypes `json:"bandwidthAllocationTypes,omitempty"`
+
+	// Size Total available memory on the device (e.g., "16Gi")
+	Size string `json:"size"`
+}
+
+// MemoryCapabilityBandwidthAllocationTypes defines model for MemoryCapability.BandwidthAllocationTypes.
+type MemoryCapabilityBandwidthAllocationTypes string
+
+// MemoryRequirement Memory requirement for a deployment profile or component
+type MemoryRequirement struct {
+	// BandwidthAllocation Memory bandwidth allocation requested by a workload
+	BandwidthAllocation *MemoryBandwidthAllocation `json:"bandwidthAllocation,omitempty"`
+
+	// Size Required memory for the deployment profile (e.g., "1Gi")
+	Size string `json:"size"`
+}
 
 // UnsignedAppStateManifest defines model for UnsignedAppStateManifest.
 type UnsignedAppStateManifest struct {
@@ -480,8 +527,8 @@ type RequiredResources struct {
 	// Cpu CPU requirements for the deployment profile
 	Cpu *[]Cpu `json:"cpu,omitempty"`
 
-	// Memory Required memory for the deployment profile
-	Memory *string `json:"memory,omitempty"`
+	// Memory Memory requirement for a deployment profile or component
+	Memory *MemoryRequirement `json:"memory,omitempty"`
 
 	// Storage Required storage for the deployment profile
 	Storage *string `json:"storage,omitempty"`

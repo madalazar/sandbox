@@ -48,7 +48,8 @@ deploymentProfiles:
           timeout: 4h
 
     requiredResources:
-      memory: 1024Mi
+      memory:
+        size: 1024Mi
       storage: 2Gi
 
   - type: compose
@@ -65,7 +66,8 @@ deploymentProfiles:
         properties:
           packageLocation: oci://harbor.machine:8443/library/caterpillar-compose-package:latest
     requiredResources:
-      memory: 1024Mi
+      memory:
+        size: 1024Mi
       storage: 1Gi
 
 parameters:

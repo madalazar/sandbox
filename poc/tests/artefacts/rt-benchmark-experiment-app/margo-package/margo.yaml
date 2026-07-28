@@ -60,7 +60,8 @@ deploymentProfiles:
           timeout: 4h
 
     requiredResources:
-      memory: 1024Mi
+      memory:
+        size: 1024Mi
       storage: 2Gi
 
   - type: compose
@@ -93,7 +94,8 @@ deploymentProfiles:
               class: performance
               type: isolated
     requiredResources:
-      memory: 1024Mi
+      memory:
+        size: 1024Mi
       storage: 1Gi
 
 parameters:
