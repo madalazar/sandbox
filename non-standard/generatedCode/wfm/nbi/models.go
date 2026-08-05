@@ -145,6 +145,14 @@ const (
 	Token OciAuthenticationType = "token"
 )
 
+// Defines values for WorkloadSchedulingType.
+const (
+	Background WorkloadSchedulingType = "background"
+	BestEffort WorkloadSchedulingType = "best-effort"
+	Deadline   WorkloadSchedulingType = "deadline"
+	RealTime   WorkloadSchedulingType = "real-time"
+)
+
 // APIResponse defines model for APIResponse.
 type APIResponse struct {
 	// RequestId Request identifier
@@ -524,6 +532,9 @@ type ComposeApplicationDeploymentProfileComponent struct {
 		Wait *bool `json:"wait" yaml:"wait"`
 	} `json:"properties" yaml:"properties"`
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // ComposeDeploymentProfileComponent Compose Application Deployment Profile Component
@@ -544,6 +555,9 @@ type ComposeDeploymentProfileComponent struct {
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // ConfigurationSchema defines model for ConfigurationSchema.
@@ -776,6 +790,9 @@ type HelmApplicationDeploymentProfileComponent struct {
 		Wait *bool `json:"wait" yaml:"wait"`
 	} `json:"properties" yaml:"properties"`
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // HelmDeploymentProfileComponent Helm Application Deployment Profile Component
@@ -796,6 +813,9 @@ type HelmDeploymentProfileComponent struct {
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
@@ -916,6 +936,36 @@ type ValidationError struct {
 	// Message Validation error message
 	Message string `json:"message"`
 }
+
+// Workload Workload scheduling configuration for a component
+type Workload struct {
+	// Deadline Deadline scheduling configuration
+	Deadline *WorkloadDeadline `json:"deadline,omitempty"`
+
+	// Nice Nice value for best-effort/background scheduling
+	Nice *int `json:"nice,omitempty"`
+
+	// Priority Static priority for real-time scheduling
+	Priority *int `json:"priority,omitempty"`
+
+	// Scheduling Workload scheduling class. background covers SCHED_BATCH and SCHED_IDLE, best-effort covers SCHED_NORMAL/SCHED_OTHER, deadline maps to SCHED_DEADLINE, real-time maps to SCHED_FIFO/SCHED_RR.
+	Scheduling *WorkloadSchedulingType `json:"scheduling,omitempty"`
+}
+
+// WorkloadDeadline Deadline scheduling configuration
+type WorkloadDeadline struct {
+	// Deadline Task finish time
+	Deadline *int `json:"deadline,omitempty"`
+
+	// Period Task activation frequency
+	Period *int `json:"period,omitempty"`
+
+	// Runtime CPU runtime needed per period
+	Runtime *int `json:"runtime,omitempty"`
+}
+
+// WorkloadSchedulingType Workload scheduling class. background covers SCHED_BATCH and SCHED_IDLE, best-effort covers SCHED_NORMAL/SCHED_OTHER, deadline maps to SCHED_DEADLINE, real-time maps to SCHED_FIFO/SCHED_RR.
+type WorkloadSchedulingType string
 
 // ListApplicationDeploymentsParams defines parameters for ListApplicationDeployments.
 type ListApplicationDeploymentsParams struct {

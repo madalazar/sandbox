@@ -149,6 +149,14 @@ const (
 	CpuTypeShared   CpuType = "shared"
 )
 
+// Defines values for WorkloadSchedulingType.
+const (
+	Background WorkloadSchedulingType = "background"
+	BestEffort WorkloadSchedulingType = "best-effort"
+	Deadline   WorkloadSchedulingType = "deadline"
+	RealTime   WorkloadSchedulingType = "real-time"
+)
+
 // Defines values for PostApiV1OnboardingJSONBodyKind.
 const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
@@ -286,6 +294,11 @@ type DeviceCapabilitiesManifest struct {
 		Roles        []DeviceCapabilitiesManifestPropertiesRoles `json:"roles"`
 		SerialNumber string                                      `json:"serialNumber"`
 		Vendor       string                                      `json:"vendor"`
+
+		// Workload Supported workload scheduling types on the device
+		Workload *struct {
+			SchedulingTypes *[]WorkloadSchedulingType `json:"schedulingTypes,omitempty"`
+		} `json:"workload,omitempty"`
 	} `json:"properties"`
 }
 
@@ -471,6 +484,9 @@ type ComposeApplicationDeploymentProfileComponent struct {
 
 	// RequiredResources Required resources for a deployment profile or component
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // Cpu CPU requirement for a workload or deployment profile
@@ -517,6 +533,9 @@ type HelmApplicationDeploymentProfileComponent struct {
 
 	// RequiredResources Required resources for a deployment profile or component
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+
+	// Workload Workload scheduling configuration for a component
+	Workload *Workload `json:"workload,omitempty"`
 }
 
 // RequiredResources Required resources for a deployment profile or component
@@ -533,6 +552,36 @@ type RequiredResources struct {
 	// Storage Required storage for the deployment profile
 	Storage *string `json:"storage,omitempty"`
 }
+
+// Workload Workload scheduling configuration for a component
+type Workload struct {
+	// Deadline Deadline scheduling configuration
+	Deadline *WorkloadDeadline `json:"deadline,omitempty"`
+
+	// Nice Nice value for best-effort/background scheduling
+	Nice *int `json:"nice,omitempty"`
+
+	// Priority Static priority for real-time scheduling
+	Priority *int `json:"priority,omitempty"`
+
+	// Scheduling Workload scheduling class. background covers SCHED_BATCH and SCHED_IDLE, best-effort covers SCHED_NORMAL/SCHED_OTHER, deadline maps to SCHED_DEADLINE, real-time maps to SCHED_FIFO/SCHED_RR.
+	Scheduling *WorkloadSchedulingType `json:"scheduling,omitempty"`
+}
+
+// WorkloadDeadline Deadline scheduling configuration
+type WorkloadDeadline struct {
+	// Deadline Task finish time
+	Deadline *int `json:"deadline,omitempty"`
+
+	// Period Task activation frequency
+	Period *int `json:"period,omitempty"`
+
+	// Runtime CPU runtime needed per period
+	Runtime *int `json:"runtime,omitempty"`
+}
+
+// WorkloadSchedulingType Workload scheduling class. background covers SCHED_BATCH and SCHED_IDLE, best-effort covers SCHED_NORMAL/SCHED_OTHER, deadline maps to SCHED_DEADLINE, real-time maps to SCHED_FIFO/SCHED_RR.
+type WorkloadSchedulingType string
 
 // GetApiV1ClientsClientIdBundlesDigestParams defines parameters for GetApiV1ClientsClientIdBundlesDigest.
 type GetApiV1ClientsClientIdBundlesDigestParams struct {

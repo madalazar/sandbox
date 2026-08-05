@@ -71,6 +71,14 @@ deploymentProfiles:
       - name: cyclictest_compose
         properties:
           packageLocation: oci://harbor.machine:8443/library/cyclictest-compose-package:latest
+        workload:
+          scheduling: real-time
+          priority: 95
+          nice: 10
+          deadline:
+            deadline: 10
+            period: 16
+            runtime: 5
         requiredResources:
           cpu:
             - name: cyclictest_compose
