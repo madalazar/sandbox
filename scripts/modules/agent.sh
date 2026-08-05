@@ -32,6 +32,21 @@ set_capabilities_roles() {
   fi
 }
 
+set_capabilities_deployment_type() {
+  local file="./config/capabilities.json"
+
+  if [[ -f "$file" ]]; then
+        jq '.properties.supportedDeploymentTypes = $ARGS.positional' \
+       "$file" \
+       --args "$@" > "${file}.tmp" &&
+    mv "${file}.tmp" "$file"
+    echo "capabilities.json deployment type set to"
+    jq -c '.properties.supportedDeploymentTypes' "$file"
+  else
+    echo "capabilities.json not found at $file, skipping deployment type update"
+  fi
+}
+
 enable_kubernetes_runtime() {
   CONFIG_FILE="$HOME/sandbox/helmchart/config/config.yaml"
   echo "Enabling Kubernetes section in config.yaml for ServiceAccount authentication..."
@@ -145,7 +160,6 @@ start_device_agent_docker_service() {
   cd "$HOME/sandbox/docker-compose"
   mkdir -p config
 
-  set_capabilities_roles "Standalone Device"
 
   if [ -f "$HOME/certs/device-private.key" ] && [ -f "$HOME/certs/device-public.crt" ] && [ -f "$HOME/certs/device-ecdsa.crt" ] && [ -f "$HOME/certs/device-ecdsa.key" ] && [ -f "$HOME/certs/ca-cert.pem" ]; then
     echo "Creating TLS secrets..."
@@ -162,6 +176,7 @@ start_device_agent_docker_service() {
 
   cp ../poc/device/agent/config/capabilities.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
+  set_capabilities_deployment_type compose
 
   mkdir -p data
   enable_docker_runtime
@@ -249,12 +264,12 @@ build_start_device_agent_k3s_service() {
       return 1
     fi
 
-    set_capabilities_roles "Standalone Cluster"
     update_agent_sbi_url
 
     echo "Copying configuration files..."
     mkdir -p config
     cp -r ../poc/device/agent/config/* ./config
+    set_capabilities_deployment_type helm
 
     if [ $? -eq 0 ]; then
       echo "✅ Configuration files copied successfully"

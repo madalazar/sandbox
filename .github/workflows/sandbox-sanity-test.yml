@@ -353,7 +353,7 @@ jobs:
           done
 
 
-      - name: WFM-Client (Standalone Cluster) – Start
+      - name: WFM-Client (Helm-capable device) - Start
         working-directory: scripts
         run: |
           sudo -E bash ./device-agent.sh k3s start-k3s
@@ -370,7 +370,7 @@ jobs:
             sleep 2
           done
 
-      - name: WFM-Client (Standalone Device) – Start
+      - name: WFM-Client (Compose-capable device) - Start
         working-directory: scripts
         run: |
           sudo -E bash ./device-agent.sh docker create-rsa-certs
@@ -441,7 +441,7 @@ jobs:
           (
             echo "📋 Deploying to K3s..."
             PACKAGE_ID=$(sudo -E bash ./wfm-cli.sh get-package-id-by-name "${APP_PACKAGE_NAME_K3S}" | tail -n1)
-            DEVICE_ID=$(sudo -E bash ./wfm-cli.sh get-device-id-by-role "Standalone Cluster" | tail -n1)
+            DEVICE_ID=$(sudo -E bash ./wfm-cli.sh get-device-id-by-deployment-type "helm" | tail -n1)
 
             if [ -z "$PACKAGE_ID" ] || [ "$PACKAGE_ID" = "null" ] || [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "null" ]; then
               echo "❌ K3s: Invalid IDs"
@@ -474,7 +474,7 @@ jobs:
           (
             echo "📋 Deploying to Docker..."
             PACKAGE_ID=$(sudo -E bash ./wfm-cli.sh get-package-id-by-name "${APP_PACKAGE_NAME_DOCKER}" | tail -n1)
-            DEVICE_ID=$(sudo -E bash ./wfm-cli.sh get-device-id-by-role "Standalone Device" | tail -n1)
+            DEVICE_ID=$(sudo -E bash ./wfm-cli.sh get-device-id-by-deployment-type "compose" | tail -n1)
 
             if [ -z "$PACKAGE_ID" ] || [ "$PACKAGE_ID" = "null" ] || [ -z "$DEVICE_ID" ] || [ "$DEVICE_ID" = "null" ]; then
               echo "❌ Docker: Invalid IDs"
