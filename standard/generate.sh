@@ -5,7 +5,11 @@ set -e
 # Configuration
 #WFM_SBI_SPEC=("spec/wfm-sbi.yaml")
 
-WFM_SBI_SPEC="/home/labrat/temp-workspace/specification/system-design/specification/margo-management-interface/workload-management-api-1.0.0.yaml"
+TMP_SPEC="snapshot.spec.yaml"
+SPEC_URL="https://raw.githubusercontent.com/margo/specification/pre-draft/system-design/specification/margo-management-interface/workload-management-api-1.0.0.yaml"
+curl -sSL -o "$TMP_SPEC" \
+  "$SPEC_URL"
+WFM_SBI_SPEC="$TMP_SPEC"
 OUTPUT_DIR="./generatedCode"
 WFM_SBI_PACKAGE_NAME="github.com/margo/sandbox/standard/generatedCode/wfm"
 
