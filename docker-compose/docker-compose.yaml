@@ -5,7 +5,17 @@ services:
     container_name: workload-fleet-management-client
     image: ${workload_Fleet_Management_Client_IMAGE_REF:-ghcr.io/margo/margo.org/workload-fleet-management-client:latest}
     pull_policy: never  # Options: always, never, missing, build
-    privileged: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN   # Required for nsenter/setns into host namespaces (-m -u -i -n -p)
+      - SYS_PTRACE  # Required to read /proc/1/ns/* handles (host PID namespace visibility checks)
+      - SYS_CHROOT  # Required for nsenter mount-namespace reassociation on this host
+      - SYS_RAWIO   # Required when pqos uses --iface=msr to access MSR devices
+      # - SYS_NICE
+      # - SYS_MODULE  # Required for modprobe msr (executed via host-namespace nsenter)
+    security_opt:
+      - apparmor=unconfined  # Required with SYS_PTRACE to allow opening /proc/1/ns/ipc on this host
     pid: "host"
     network_mode: "host"
     environment:
