@@ -88,7 +88,89 @@ list_all_non_interactive() {
   fi
   
   echo ""
-  
+}
+
+# Resolve supported deployment profile types for a device using supportedDeploymentTypes.
+# Returns a comma-separated list such as: compose,helm
+# Fails if supportedDeploymentTypes are missing or do not map to known deployment profile types.
+get_supported_deployments_for_device() {
+  local device_id="$1"
+
+  if [ -z "$device_id" ]; then
+    echo "❌ Error: Device ID is required" >&2
+    return 1
+  fi
+
+  if ! check_maestro_cli; then
+    echo "❌ Maestro CLI not available" >&2
+    return 1
+  fi
+
+  local devices=$(${MAESTRO_CLI_PATH}/maestro wfm --host "$EXPOSED_SYMPHONY_HOST" --port "$EXPOSED_SYMPHONY_PORT" list devices -o json 2>/dev/null)
+  if [ $? -ne 0 ] || [ -z "$devices" ]; then
+    echo "❌ Failed to get device list" >&2
+    return 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "❌ jq is required but not installed" >&2
+    return 1
+  fi
+
+  local supported_types
+  supported_types=$(echo "$devices" | jq -r --arg id "$device_id" '
+    .Data[] | .items[] |
+    select(.id == $id) |
+    (.spec.capabilities.properties.supportedDeploymentTypes[]?)
+  ')
+
+  if [ -z "$supported_types" ]; then
+    echo "❌ Device '$device_id' has no supportedDeploymentTypes in capabilities" >&2
+    return 1
+  fi
+
+  local normalized=()
+  local unknown_types=()
+
+  while IFS= read -r value; do
+    [ -z "$value" ] && continue
+    case "${value,,}" in
+      compose)
+        normalized+=("compose")
+        ;;
+      helm)
+        normalized+=("helm")
+        ;;
+      *)
+        unknown_types+=("$value")
+        ;;
+    esac
+  done <<< "$supported_types"
+
+  if [ ${#unknown_types[@]} -gt 0 ]; then
+    echo "❌ Device '$device_id' has unsupported supportedDeploymentTypes: ${unknown_types[*]}" >&2
+    return 1
+  fi
+
+  if [ ${#normalized[@]} -eq 0 ]; then
+    echo "❌ Device '$device_id' has no usable supportedDeploymentTypes in capabilities" >&2
+    return 1
+  fi
+
+  local out=""
+  for type in "${normalized[@]}"; do
+    if [[ ",$out," != *",$type,"* ]]; then
+      if [ -z "$out" ]; then
+        out="$type"
+      else
+        out="$out,$type"
+      fi
+    fi
+  done
+
+  [ -n "$out" ] || return 1
+  echo "$out"
+  return 0
 }
 
 deploy_instance() {
@@ -120,6 +202,13 @@ deploy_instance() {
     return 1
   fi
   
+  local device_supported_deployments=""
+  if ! device_supported_deployments=$(get_supported_deployments_for_device "$device_id"); then
+    echo "❌ Unable to determine device supported deployment types for device '$device_id'"
+    echo "   Deployment aborted. Ensure device supportedDeploymentTypes"
+    return 1
+  fi
+
   # Get app package details and extract metadata.name
   app_packages=$(${MAESTRO_CLI_PATH}/maestro wfm --host "$EXPOSED_SYMPHONY_HOST" --port "$EXPOSED_SYMPHONY_PORT" list app-pkg -o json 2>/dev/null)
   
@@ -149,11 +238,11 @@ deploy_instance() {
   
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
-  
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" 2>/dev/null; then
+
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
-    
+
     if [ $? -ne 0 ] || [ -z "$deploy_file" ] || [ ! -f "$deploy_file" ]; then
       echo "❌ No template found and dynamic generation failed"
       return 1
@@ -201,6 +290,8 @@ deploy_instance() {
   fi
   
   # Cleanup temporary file
+  echo "will print deploy file for confirmation: "
+  cat "$deploy_file"  # Display the contents of the deployment file for user confirmation
   rm -f "$temp_instance_file"
   
   echo ""
@@ -210,7 +301,8 @@ deploy_instance() {
 deploy_instance_non_interactive() {
   local package_id="$1"
   local device_id="$2"
-  
+  local device_supported_deployments=""
+
   echo "🚀 Deploy Instance (Non-Interactive)"
   echo "===================================="
   
@@ -225,10 +317,15 @@ deploy_instance_non_interactive() {
     echo "Usage: deploy_instance_non_interactive <package_id> <device_id>"
     return 1
   fi
-  
+
+  if ! device_supported_deployments=$(get_supported_deployments_for_device "$device_id"); then
+    echo "❌ Unable to determine device supported deployment types for device '$device_id'"
+    echo "   Deployment aborted. Ensure device capabilities.roles are set (Standalone Device or Standalone Cluster)."
+    return 1
+  fi
+
   echo "📦 Package: $package_id"
   echo "🖥️  Device: $device_id"
-  
   # Get app package details and extract metadata.name
   app_packages=$(${MAESTRO_CLI_PATH}/maestro wfm --host "$EXPOSED_SYMPHONY_HOST" --port "$EXPOSED_SYMPHONY_PORT" list app-pkg -o json 2>/dev/null)
   
@@ -259,7 +356,7 @@ deploy_instance_non_interactive() {
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
   
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" 2>/dev/null; then
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
     
@@ -319,6 +416,9 @@ deploy_instance_non_interactive() {
     rm -f "$temp_instance_file"
     return 1
   fi
+
+  echo "will print deploy file for confirmation (non-interactive): "
+  cat "$deploy_file"  # Display the contents of the deployment file for user confirmation
 }
 
 
@@ -391,4 +491,3 @@ delete_instance_non_interactive() {
     return 1
   fi
 }
-
