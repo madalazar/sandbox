@@ -2,7 +2,7 @@
 # Common utility functions for WFM CLI
 
 install_basic_utilities() {
-  local PACKAGES="jq yq"
+  local PACKAGES="jq"
 
   echo "🔄 Installing CLI utilities..."
   INSTALLATION_NEEDED="false"
