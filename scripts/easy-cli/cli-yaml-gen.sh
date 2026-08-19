@@ -73,10 +73,6 @@ generate_instance_yaml_from_oci() {
   fi
 
   if [ -z "$deployment_type" ]; then
-    echo "No compatible deployment type match found from supported_deployments; strict compatibility enforcement will fail deployment" >&2
-  fi
-
-  if [ -z "$deployment_type" ]; then
     echo "❌ No strict profile-type match between device support [${supported_deployments[*]}] and app deploymentProfiles [${deployment_types[*]}]" >&2
     cd - >/dev/null
     rm -rf "$temp_dir"
