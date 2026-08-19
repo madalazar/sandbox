@@ -41,7 +41,16 @@ generate_instance_yaml_from_oci() {
 
   # Determine deployment type(s)
   local deployment_types=()
-  mapfile -t deployment_types < <(yq eval -r '.deploymentProfiles[]?.type // empty' margo.yaml | tr -d '"' | tr -d "'" | xargs -n1)
+  local deployment_types_raw
+  if ! deployment_types_raw=$(yq eval -r '.deploymentProfiles[]?.type // "" | select(. != "")' margo.yaml 2>/dev/null); then
+    echo "❌ Failed to parse deploymentProfiles types from margo.yaml" >&2
+    cd - >/dev/null
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  if [ -n "$deployment_types_raw" ]; then
+    mapfile -t deployment_types < <(echo "$deployment_types_raw" | tr -d '"' | tr -d "'" | awk 'NF')
+  fi
   local deployment_type=""
   local supported_deployments=()
 
