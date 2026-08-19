@@ -320,7 +320,7 @@ deploy_instance_non_interactive() {
 
   if ! device_supported_deployments=$(get_supported_deployments_for_device "$device_id"); then
     echo "❌ Unable to determine device supported deployment types for device '$device_id'"
-    echo "   Deployment aborted. Ensure device capabilities.roles are set (Standalone Device or Standalone Cluster)."
+    echo "   Deployment aborted. Ensure device .capabilities.roles are set (Standalone Device or Standalone Cluster)."
     return 1
   fi
 

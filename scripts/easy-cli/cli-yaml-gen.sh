@@ -1,25 +1,6 @@
 #!/bin/bash
 # YAML generation functions for WFM CLI
 
-ensure_yq_available() {
-  if [ "${YQ_AVAILABLE_CHECKED:-false}" = "true" ]; then
-    return 0
-  fi
-
-  if ! command -v yq >/dev/null 2>&1; then
-    echo "❌ yq is required for deployment profile and parameter extraction from margo.yaml" >&2
-    return 1
-  fi
-
-  if ! yq eval --null-input 'true' >/dev/null 2>&1; then
-    echo "❌ yq v4 is required (tested with 'yq eval')" >&2
-    return 1
-  fi
-
-  YQ_AVAILABLE_CHECKED="true"
-  return 0
-}
-
 generate_instance_yaml_from_oci() {
   local package_name="$1"
   local package_id="$2"
@@ -48,13 +29,6 @@ generate_instance_yaml_from_oci() {
     return 1
   fi
 
-  if ! ensure_yq_available; then
-    cd - >/dev/null
-    rm -rf "$temp_dir"
-    return 1
-  fi
-
-
   echo "print extracted margo.yaml for debugging:"
   cat margo.yaml
 
@@ -67,7 +41,7 @@ generate_instance_yaml_from_oci() {
 
   # Determine deployment type(s)
   local deployment_types=()
-  mapfile -t deployment_types < <(awk '/^deploymentProfiles:/{in_profiles=1;next} in_profiles&&/^[^[:space:]]/{in_profiles=0} in_profiles&&/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/{sub(/^[[:space:]]*-[[:space:]]*type:[[:space:]]*/,""); print}' margo.yaml | tr -d '"' | tr -d "'" | xargs -n1)
+  mapfile -t deployment_types < <(yq eval -r '.deploymentProfiles[]?.type // empty' margo.yaml | tr -d '"' | tr -d "'" | xargs -n1)
   local deployment_type=""
   local supported_deployments=()
 
@@ -147,10 +121,6 @@ append_component_parameters() {
   local margo_file="$1"
   local output_file="$2"
   local components_csv="$3"
-
-  if ! ensure_yq_available; then
-    return 1
-  fi
 
   if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
     echo "❌ yq failed to parse margo.yaml" >&2
@@ -233,10 +203,6 @@ extract_profile_component_kv() {
   local margo_file="$1"
   local target_profile_type="$2"
   local profile_kind="$3"
-
-  if ! ensure_yq_available; then
-    return 1
-  fi
 
   if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
     echo "❌ yq failed to parse margo.yaml" >&2

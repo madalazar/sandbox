@@ -115,7 +115,13 @@ install_yq() {
 
   if command -v yq >/dev/null 2>&1; then
     echo "⚡️ yq already installed: $(yq --version 2>/dev/null || true)"
-    return 0
+    if yq --help 2>&1 | grep -q 'github.com/mikefarah/yq'; then \
+      echo "✓ yq is the mikefarah/yq implementation"; \
+      return 0
+    else \
+      echo "✗ Wrong yq detected — this Makefile requires mikefarah/yq (GitHub release), not kislyuk/yq" >&2; \
+      exit 1; \
+    fi
   fi
 
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
