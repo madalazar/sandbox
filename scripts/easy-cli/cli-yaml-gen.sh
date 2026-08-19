@@ -208,6 +208,50 @@ append_component_parameters() {
   return 0
 }
 
+append_profile_required_resources() {
+  local margo_file="$1"
+  local output_file="$2"
+  local target_profile_type="$3"
+
+  if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+    echo "❌ yq failed to parse margo.yaml" >&2
+    return 1
+  fi
+
+  local has_required_resources
+  if ! has_required_resources=$(PROFILE_WANTED="$target_profile_type" yq eval -r '
+    (((.deploymentProfiles // [])
+      | map(select((.type // "") == strenv(PROFILE_WANTED)))
+      | .[0].requiredResources // {})
+      | ((type == "!!map") and (length > 0)))
+  ' "$margo_file"); then
+    echo "❌ Failed to detect requiredResources for deployment profile '$target_profile_type'" >&2
+    return 1
+  fi
+
+  if [ "$has_required_resources" != "true" ]; then
+    return 0
+  fi
+
+  if ! (
+    set -o pipefail
+    PROFILE_WANTED="$target_profile_type" yq eval '
+      {
+        "requiredResources": (
+          ((.deploymentProfiles // [])
+            | map(select((.type // "") == strenv(PROFILE_WANTED)))
+            | .[0].requiredResources // {})
+        )
+      }
+    ' "$margo_file" | sed 's/^/    /' >> "$output_file"
+  ); then
+    echo "❌ Failed to render requiredResources for deployment profile '$target_profile_type'" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 extract_profile_component_kv() {
   local margo_file="$1"
   local target_profile_type="$2"
@@ -334,6 +378,10 @@ COMPONENT
     helm_components_csv=$(IFS=,; echo "${selected_profile_components[*]}")
   fi
 
+  if ! append_profile_required_resources "$margo_file" "$output_file" "$target_profile_type"; then
+    return 1
+  fi
+
   if ! append_component_parameters "$margo_file" "$output_file" "$helm_components_csv"; then
     return 1
   fi
@@ -410,6 +458,10 @@ COMPONENT
   local compose_components_csv=""
   if [ ${#selected_profile_components[@]} -gt 0 ]; then
     compose_components_csv=$(IFS=,; echo "${selected_profile_components[*]}")
+  fi
+
+  if ! append_profile_required_resources "$margo_file" "$output_file" "$target_profile_type"; then
+    return 1
   fi
 
   if ! append_component_parameters "$margo_file" "$output_file" "$compose_components_csv"; then
