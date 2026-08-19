@@ -29,9 +29,6 @@ generate_instance_yaml_from_oci() {
     return 1
   fi
 
-  echo "print extracted margo.yaml for debugging:"
-  cat margo.yaml
-
   # Extract metadata
   local app_id=$(grep -E "^\s*id:" margo.yaml | head -1 | sed 's/.*id:\s*//' | tr -d '"' | tr -d "'" | xargs)
   local app_name=$(grep -E "^\s*name:" margo.yaml | head -1 | sed 's/.*name:\s*//' | tr -d '"' | tr -d "'" | xargs)
@@ -79,10 +76,6 @@ generate_instance_yaml_from_oci() {
     echo "No compatible deployment type match found from supported_deployments; strict compatibility enforcement will fail deployment" >&2
   fi
 
-  echo "print supported deployment types for device: ${supported_deployments[*]}"
-  echo "print extracted deployment types for debugging: ${deployment_types[*]}"
-  echo "print extracted deployment type for debugging: $deployment_type"
-
   if [ -z "$deployment_type" ]; then
     echo "❌ No strict profile-type match between device support [${supported_deployments[*]}] and app deploymentProfiles [${deployment_types[*]}]" >&2
     cd - >/dev/null
@@ -91,7 +84,6 @@ generate_instance_yaml_from_oci() {
   fi
 
   deployment_type="${deployment_type,,}"
-  echo "print extracted deployment type for debugging: $deployment_type"
 
   local profile_type="$deployment_type"
 
@@ -117,9 +109,6 @@ generate_instance_yaml_from_oci() {
     rm -rf "$temp_dir"
     return 1
   fi
-
-  echo "Generated instance.yaml for package '$package_name' at: $output_file"
-  cat "$output_file"  # Print the generated instance.yaml for debugging
 
   cd - >/dev/null
   rm -rf "$temp_dir"

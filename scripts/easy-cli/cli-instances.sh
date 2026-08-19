@@ -290,8 +290,6 @@ deploy_instance() {
   fi
   
   # Cleanup temporary file
-  echo "will print deploy file for confirmation: "
-  cat "$deploy_file"  # Display the contents of the deployment file for user confirmation
   rm -f "$temp_instance_file"
   
   echo ""
