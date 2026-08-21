@@ -181,9 +181,9 @@ append_component_parameters() {
     done <<< "$target_components"
 
     if [ "$include_parameter" != true ]; then
-      echo "❌ Parameter '$parameter_name' has targets but none match selected deployment components" >&2
-      echo "   Update parameter targets or deployment profile components in margo.yaml." >&2
-      return 1
+      # Parameter is valid but scoped to other profile components (for example helm-only while generating compose).
+      # Skip it so mixed-profile application packages can still generate deployable instances.
+      continue
     fi
 
     if [ "$wrote_parameters" = false ]; then
