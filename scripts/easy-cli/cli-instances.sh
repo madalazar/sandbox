@@ -237,7 +237,8 @@ deploy_instance() {
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
 
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments"; then
+    echo "⚠️  Dynamic instance generation failed. Falling back to legacy template lookup..."
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
 
@@ -352,7 +353,8 @@ deploy_instance_non_interactive() {
   # Generate instance.yaml dynamically from OCI metadata
   local temp_instance_file=$(mktemp --suffix=.yaml)
   
-  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments" 2>/dev/null; then
+  if ! generate_instance_yaml_from_oci "$package_name" "$package_id" "$device_id" "$temp_instance_file" "$device_supported_deployments"; then
+    echo "⚠️  Dynamic instance generation failed. Falling back to legacy template lookup..."
     # Fallback to template discovery
     deploy_file=$(get_instance_file_path "$package_name")
     
