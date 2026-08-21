@@ -168,9 +168,7 @@ get_supported_deployments_for_device() {
     fi
   done
 
-  [ -n "$out" ] || return 1
   echo "$out"
-  return 0
 }
 
 deploy_instance() {

@@ -122,7 +122,11 @@ append_component_parameters() {
   fi
 
   local has_parameters
-  if ! has_parameters=$(yq eval -r 'has("parameters") and (.parameters != null) and ((.parameters | type) == "!!map") and ((.parameters | length) > 0)' "$margo_file"); then
+  local yq_status
+  has_parameters=$(yq eval -r 'has("parameters") and (.parameters != null) and ((.parameters | type) == "!!map") and ((.parameters | length) > 0)' "$margo_file")
+  yq_status=$?
+
+  if [ $yq_status -ne 0 ]; then
     echo "❌ Failed to detect parameters in margo.yaml with yq" >&2
     return 1
   fi
@@ -153,8 +157,18 @@ append_component_parameters() {
     fi
 
     local target_components
-    if ! target_components=$(PARAM_NAME="$parameter_name" yq eval -r '.parameters[env(PARAM_NAME)].targets[]?.components[]?' "$margo_file"); then
+    local target_components_status
+    target_components=$(PARAM_NAME="$parameter_name" yq eval -r '.parameters[env(PARAM_NAME)].targets[]?.components[]?' "$margo_file")
+    target_components_status=$?
+
+    if [ "$target_components_status" -ne 0 ]; then
       echo "❌ Failed to read parameter targets for '$parameter_name'" >&2
+      return 1
+    fi
+
+    if [ -z "$target_components" ]; then
+      echo "❌ Parameter '$parameter_name' has no target components in margo.yaml" >&2
+      echo "   Add at least one component target or remove this parameter." >&2
       return 1
     fi
 
@@ -166,27 +180,31 @@ append_component_parameters() {
       fi
     done <<< "$target_components"
 
-    if [ "$include_parameter" = true ]; then
-      if [ "$wrote_parameters" = false ]; then
-        echo "  parameters:" >> "$output_file"
-        wrote_parameters=true
-      fi
+    if [ "$include_parameter" != true ]; then
+      echo "❌ Parameter '$parameter_name' has targets but none match selected deployment components" >&2
+      echo "   Update parameter targets or deployment profile components in margo.yaml." >&2
+      return 1
+    fi
 
-      if ! (
-        set -o pipefail
-        PARAM_NAME="$parameter_name" COMPONENTS_CSV="$components_csv" yq eval '{
-          (env(PARAM_NAME)): (
-            .parameters[env(PARAM_NAME)]
-            | .targets |= map(
-                .components |= map(. as $c | select(((env(COMPONENTS_CSV) | split(",") | map(select(. == $c)) | length) > 0)))
-                | select((.components | length) > 0)
-              )
-          )
-        }' "$margo_file" | sed 's/^/    /' >> "$output_file"
-      ); then
-        echo "❌ Failed to render filtered parameter '$parameter_name'" >&2
-        return 1
-      fi
+    if [ "$wrote_parameters" = false ]; then
+      echo "  parameters:" >> "$output_file"
+      wrote_parameters=true
+    fi
+
+    if ! (
+      set -o pipefail
+      PARAM_NAME="$parameter_name" COMPONENTS_CSV="$components_csv" yq eval '{
+        (env(PARAM_NAME)): (
+          .parameters[env(PARAM_NAME)]
+          | .targets |= map(
+              .components |= map(. as $c | select(((env(COMPONENTS_CSV) | split(",") | map(select(. == $c)) | length) > 0)))
+              | select((.components | length) > 0)
+            )
+        )
+      }' "$margo_file" | sed 's/^/    /' >> "$output_file"
+    ); then
+      echo "❌ Failed to render filtered parameter '$parameter_name'" >&2
+      return 1
     fi
   done <<< "$parameter_names"
 
@@ -204,12 +222,16 @@ append_profile_required_resources() {
   fi
 
   local has_required_resources
-  if ! has_required_resources=$(PROFILE_WANTED="$target_profile_type" yq eval -r '
+  local has_required_resources_status
+  has_required_resources=$(PROFILE_WANTED="$target_profile_type" yq eval -r '
     (((.deploymentProfiles // [])
       | map(select((.type // "") == strenv(PROFILE_WANTED)))
       | .[0].requiredResources // {})
       | ((type == "!!map") and (length > 0)))
-  ' "$margo_file"); then
+  ' "$margo_file")
+  has_required_resources_status=$?
+
+  if [ "$has_required_resources_status" -ne 0 ]; then
     echo "❌ Failed to detect requiredResources for deployment profile '$target_profile_type'" >&2
     return 1
   fi
