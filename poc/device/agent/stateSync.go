@@ -431,6 +431,10 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 		deploymentRef.DeploymentId,
 		deployment.Spec.DeploymentProfile.Components,
 	)
+	ss.logDeploymentProfileMemoryRequirements(
+		deploymentRef.DeploymentId,
+		deployment.Spec.DeploymentProfile,
+	)
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
 
@@ -618,6 +622,7 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		jsonCompatible := convertYAMLToJSON(yamlInterface)
 		ss.logDeploymentCPURequirementsFromRawYAML(deploymentId, jsonCompatible)
 		ss.logDeploymentCacheRequirementsFromRawYAML(deploymentId, jsonCompatible)
+		ss.logDeploymentMemoryRequirementsFromRawYAML(deploymentId, jsonCompatible)
 
 		// Convert to JSON (which will be properly unmarshaled by UnmarshalJSON())
 		jsonData, err := json.Marshal(jsonCompatible)
@@ -648,6 +653,10 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		ss.logDeploymentProfileCacheRequirements(
 			deploymentId,
 			deployment.Spec.DeploymentProfile.Components,
+		)
+		ss.logDeploymentProfileMemoryRequirements(
+			deploymentId,
+			deployment.Spec.DeploymentProfile,
 		)
 
 		// Store deployment
@@ -702,6 +711,29 @@ func (ss *StateSyncer) logDeploymentProfileCacheRequirements(
 	}
 
 	ss.logCacheRequirementsByComponent(deploymentID, rawComponents, "typed profile")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logDeploymentProfileMemoryRequirements(
+	deploymentID string,
+	profile sbi.AppDeploymentProfile,
+) {
+	if profile.RequiredResources == nil || profile.RequiredResources.Memory == nil {
+		return
+	}
+
+	memoryJSON, err := json.Marshal(profile.RequiredResources.Memory)
+	if err != nil {
+		ss.log.Errorw("Failed to marshal deployment profile memory requirement",
+			"deploymentId", deploymentID,
+			"error", err)
+		return
+	}
+
+	ss.log.Infow("Parsed deployment memory requirement",
+		"deploymentId", deploymentID,
+		"source", "typed profile",
+		"memory", string(memoryJSON))
 }
 
 func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
@@ -775,6 +807,59 @@ func (ss *StateSyncer) logDeploymentCacheRequirementsFromRawYAML(
 	}
 
 	ss.logCacheRequirementsByComponent(deploymentID, components, "raw YAML")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logDeploymentMemoryRequirementsFromRawYAML(
+	deploymentID string,
+	rawManifest any,
+) {
+	manifestObj, ok := rawManifest.(map[string]any)
+	if !ok {
+		ss.log.Debugw("Raw deployment manifest is not an object",
+			"deploymentId", deploymentID,
+			"type", fmt.Sprintf("%T", rawManifest))
+		return
+	}
+
+	specObj, ok := manifestObj["spec"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No spec found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	profileObj, ok := specObj["deploymentProfile"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No deploymentProfile found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	resourcesObj, ok := profileObj["requiredResources"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No deployment profile requiredResources found in raw deployment",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	memoryObj, ok := resourcesObj["memory"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No deployment profile memory found in raw deployment",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	var bandwidthAllocation any
+	if bw, exists := memoryObj["bandwidthAllocation"]; exists {
+		bandwidthAllocation = bw
+	}
+
+	ss.log.Infow("Parsed deployment memory requirement",
+		"deploymentId", deploymentID,
+		"source", "raw YAML",
+		"size", memoryObj["size"],
+		"bandwidthAllocation", bandwidthAllocation)
 }
 
 func (ss *StateSyncer) logCPURequirementsByComponent(
@@ -885,6 +970,52 @@ func (ss *StateSyncer) logCacheRequirementsByComponent(
 				"allocation", cacheObj["allocation"],
 				"size", cacheObj["size"])
 		}
+	}
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logMemoryRequirementsByComponent(
+	deploymentID string,
+	components []any,
+	source string,
+) {
+	for componentIndex, componentItem := range components {
+		component, ok := componentItem.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		componentName, _ := component["name"].(string)
+		resources, _ := component["requiredResources"].(map[string]any)
+		if resources == nil {
+			if properties, ok := component["properties"].(map[string]any); ok {
+				resources, _ = properties["requiredResources"].(map[string]any)
+			}
+		}
+		if resources == nil {
+			resources, _ = component["resourceRequirements"].(map[string]any)
+		}
+		if resources == nil {
+			continue
+		}
+
+		memoryObj, ok := resources["memory"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		var bandwidthAllocation any
+		if bw, exists := memoryObj["bandwidthAllocation"]; exists {
+			bandwidthAllocation = bw
+		}
+
+		ss.log.Infow("Parsed deployment memory requirement",
+			"deploymentId", deploymentID,
+			"source", source,
+			"component", componentName,
+			"componentIndex", componentIndex,
+			"size", memoryObj["size"],
+			"bandwidthAllocation", bandwidthAllocation)
 	}
 }
 

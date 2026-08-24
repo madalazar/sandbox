@@ -201,6 +201,24 @@ func (e DeviceCapabilitiesManifestPropertiesCpusKindsType) Valid() bool {
 	}
 }
 
+// Defines values for DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes.
+const (
+	PercentThrottling DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes = "percent-throttling"
+	RateLimiting      DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes = "rate-limiting"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes enum.
+func (e DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes) Valid() bool {
+	switch e {
+	case PercentThrottling:
+		return true
+	case RateLimiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes.
 const (
 	DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypesCompose DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes = "compose"
@@ -393,6 +411,24 @@ func (e CpuType) Valid() bool {
 	}
 }
 
+// Defines values for MemoryBandwidthAllocationUnit.
+const (
+	MBps    MemoryBandwidthAllocationUnit = "MBps"
+	Percent MemoryBandwidthAllocationUnit = "percent"
+)
+
+// Valid indicates whether the value is a known member of the MemoryBandwidthAllocationUnit enum.
+func (e MemoryBandwidthAllocationUnit) Valid() bool {
+	switch e {
+	case MBps:
+		return true
+	case Percent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PostApiV1OnboardingJSONBodyKind.
 const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
@@ -512,9 +548,17 @@ type DeviceCapabilitiesManifest struct {
 				Type *DeviceCapabilitiesManifestPropertiesCpusKindsType `json:"type,omitempty"`
 			} `json:"kinds,omitempty"`
 		} `json:"cpus,omitempty"`
-		Id                       DeviceId                                                        `json:"id"`
-		Interfaces               *[]DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
-		Memory                   *string                                                         `json:"memory,omitempty"`
+		Id         DeviceId                        `json:"id"`
+		Interfaces *[]DeviceCommunicationInterface `json:"interfaces,omitempty"`
+
+		// Memory Memory capability reported by the device
+		Memory *struct {
+			// BandwidthAllocationTypes Supported memory bandwidth allocation strategies. percent-throttling = cap memory bandwidth usage by percentage. rate-limiting = cap memory bandwidth to a fixed throughput.
+			BandwidthAllocationTypes *[]DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes `json:"bandwidthAllocationTypes,omitempty"`
+
+			// Size Total available memory on the device (e.g., "16Gi")
+			Size string `json:"size"`
+		} `json:"memory,omitempty"`
 		ModelNumber              string                                                          `json:"modelNumber"`
 		OtelCollector            *bool                                                           `json:"otelCollector,omitempty"`
 		Peripherals              *[]DevicePeripheral                                             `json:"peripherals,omitempty"`
@@ -543,6 +587,9 @@ type DeviceCapabilitiesManifestPropertiesCpusKindsClass string
 
 // DeviceCapabilitiesManifestPropertiesCpusKindsType Whether these cores are kernel-isolated
 type DeviceCapabilitiesManifestPropertiesCpusKindsType string
+
+// DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes defines model for DeviceCapabilitiesManifest.Properties.Memory.BandwidthAllocationTypes.
+type DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes string
 
 // DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes defines model for DeviceCapabilitiesManifest.Properties.SupportedDeploymentTypes.
 type DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes string
@@ -627,6 +674,9 @@ type AppDeploymentParams map[string]AppParameterValue
 type AppDeploymentProfile struct {
 	// Components Components of the deployment profile
 	Components []AppDeploymentProfile_Components_Item `json:"components"`
+
+	// RequiredResources Required resources for this deployment profile
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 
 	// Type Type of deployment profile
 	Type AppDeploymentProfileType `json:"type"`
@@ -756,6 +806,27 @@ type HelmApplicationDeploymentProfileComponent struct {
 	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
+// Memory Memory requirement for a deployment profile or component
+type Memory struct {
+	// BandwidthAllocation Optional memory bandwidth capping request
+	BandwidthAllocation *MemoryBandwidthAllocation `json:"bandwidthAllocation,omitempty"`
+
+	// Size Required memory for the deployment profile (e.g., "1Gi")
+	Size string `json:"size"`
+}
+
+// MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
+type MemoryBandwidthAllocation struct {
+	// Unit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+	Unit MemoryBandwidthAllocationUnit `json:"unit"`
+
+	// Value Requested bandwidth cap value expressed in the selected unit
+	Value int `json:"value"`
+}
+
+// MemoryBandwidthAllocationUnit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+type MemoryBandwidthAllocationUnit string
+
 // RequiredResources Required resources for a deployment profile or component
 type RequiredResources struct {
 	// Cache Cache resources available on the device
@@ -764,8 +835,8 @@ type RequiredResources struct {
 	// Cpu CPU requirements for the deployment profile
 	Cpu *[]Cpu `json:"cpu,omitempty"`
 
-	// Memory Required memory for the deployment profile
-	Memory *string `json:"memory,omitempty"`
+	// Memory Required memory and optional bandwidth allocation for the deployment profile
+	Memory *Memory `json:"memory,omitempty"`
 
 	// Storage Required storage for the deployment profile
 	Storage *string `json:"storage,omitempty"`

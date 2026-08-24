@@ -461,9 +461,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			"compose component requiredResources",
 			"appId",
 			deploymentId,
+			"profileType",
+			appDeployment.Spec.DeploymentProfile.Type,
+			"profileRequiredResources",
+			appDeployment.Spec.DeploymentProfile.RequiredResources,
 			"componentName",
 			composeComp.Name,
-			"requiredResources",
+			"componentRequiredResources",
 			dm.extractComponentRequiredResources(component),
 		)
 
