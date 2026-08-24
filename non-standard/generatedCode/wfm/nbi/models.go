@@ -92,6 +92,19 @@ const (
 	String  ConfigurationSchemaDataType = "string"
 )
 
+// Defines values for CpuClass.
+const (
+	Efficiency  CpuClass = "efficiency"
+	LowPower    CpuClass = "low-power"
+	Performance CpuClass = "performance"
+)
+
+// Defines values for CpuType.
+const (
+	Isolated CpuType = "isolated"
+	Shared   CpuType = "shared"
+)
+
 // Defines values for DeploymentExecutionProfileType.
 const (
 	DeploymentExecutionProfileTypeCompose DeploymentExecutionProfileType = "compose"
@@ -478,6 +491,7 @@ type ComposeApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait" yaml:"wait"`
 	} `json:"properties" yaml:"properties"`
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
 // ComposeDeploymentProfileComponent Compose Application Deployment Profile Component
@@ -497,6 +511,7 @@ type ComposeDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
 // ConfigurationSchema defines model for ConfigurationSchema.
@@ -568,10 +583,35 @@ type ContextualInfo struct {
 	Message *string `json:"message,omitempty"`
 }
 
+// Cpu defines model for Cpu.
+type Cpu struct {
+	// Architectures Supported CPU architectures
+	Architectures *[]string `json:"architectures" yaml:"architectures"`
+
+	// Class Core class required by the workload
+	Class *CpuClass `json:"class" yaml:"class"`
+
+	// Cores Required CPU cores
+	Cores *float32 `json:"cores" yaml:"cores"`
+
+	// Name Name of the container this CPU requirement applies to
+	Name *string `json:"name" yaml:"name"`
+
+	// Type Whether requested cores must be isolated or can be shared
+	Type *CpuType `json:"type" yaml:"type"`
+}
+
+// CpuClass Core class required by the workload
+type CpuClass string
+
+// CpuType Whether requested cores must be isolated or can be shared
+type CpuType string
+
 // DeploymentExecutionProfile Application Deployment Profile
 type DeploymentExecutionProfile struct {
 	// Components Components of the deployment profile
-	Components []DeploymentExecutionProfile_Components_Item `json:"components"`
+	Components        []DeploymentExecutionProfile_Components_Item `json:"components"`
+	RequiredResources *RequiredResources                           `json:"requiredResources,omitempty"`
 
 	// Type Type of deployment profile
 	Type DeploymentExecutionProfileType `json:"type"`
@@ -706,6 +746,7 @@ type HelmApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait" yaml:"wait"`
 	} `json:"properties" yaml:"properties"`
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
 // HelmDeploymentProfileComponent Helm Application Deployment Profile Component
@@ -725,6 +766,7 @@ type HelmDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
 
 // Metadata defines model for Metadata.
@@ -791,13 +833,7 @@ type PaginationMetadata struct {
 
 // RequiredResources defines model for RequiredResources.
 type RequiredResources struct {
-	Cpu *struct {
-		// Architectures Supported CPU architectures
-		Architectures *[]string `json:"architectures" yaml:"architectures"`
-
-		// Cores Required CPU cores
-		Cores *float32 `json:"cores" yaml:"cores"`
-	} `json:"cpu" yaml:"cpu"`
+	Cpu        *[]Cpu `json:"cpu" yaml:"cpu"`
 	Interfaces *[]struct {
 		// Type Interface type (e.g., ethernet, bluetooth)
 		Type *string `json:"type" yaml:"type"`
