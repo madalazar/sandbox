@@ -6,6 +6,7 @@ generate_instance_yaml_from_oci() {
   local package_id="$2"
   local device_id="$3"
   local output_file="$4"
+  local supported_deployments_raw="$5"
 
   local harbor_url="${EXPOSED_HARBOR_HOST}:${EXPOSED_HARBOR_PORT}"
   local temp_dir=$(mktemp -d)
@@ -35,40 +36,69 @@ generate_instance_yaml_from_oci() {
   local app_identifier="${app_id:-$(echo "${app_name}" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -d '_.,' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')}"
   app_identifier=$(echo "$app_identifier" | cut -c1-40)
 
-  # Determine deployment type
-  local deployment_type=$(awk '/deploymentProfile:/,/^[^ ]/ {if (/^\s+type:/) print}' margo.yaml | sed 's/.*type:\s*//' | tr -d '"' | tr -d "'" | xargs | head -1)
-
-  if [ -z "$deployment_type" ]; then
-    deployment_type=$(awk '/^spec:/,/^[^ ]/ {if (/^\s+type:/) print}' margo.yaml | sed 's/.*type:\s*//' | tr -d '"' | tr -d "'" | xargs | head -1)
+  # Determine deployment type(s)
+  local deployment_types=()
+  local deployment_types_raw
+  if ! deployment_types_raw=$(yq eval -r '.deploymentProfiles[]?.type // "" | select(. != "")' margo.yaml 2>/dev/null); then
+    echo "❌ Failed to parse deploymentProfiles types from margo.yaml" >&2
+    cd - >/dev/null
+    rm -rf "$temp_dir"
+    return 1
   fi
+  if [ -n "$deployment_types_raw" ]; then
+    mapfile -t deployment_types < <(echo "$deployment_types_raw" | tr -d '"' | tr -d "'" | awk 'NF')
+  fi
+  local deployment_type=""
+  local supported_deployments=()
 
-  if [ -z "$deployment_type" ]; then
-    if [[ "$package_name" =~ compose ]]; then
-      deployment_type="compose"
-    elif [[ "$package_name" =~ helm ]]; then
-      deployment_type="helm"
+  if [ -n "$supported_deployments_raw" ]; then
+    local normalized_supported
+    normalized_supported=$(echo "$supported_deployments_raw" | tr -d '"' | tr -d "'" | tr ',' '\n' | xargs -n1)
+    if [ -n "$normalized_supported" ]; then
+      mapfile -t supported_deployments <<< "$normalized_supported"
     fi
   fi
 
-  local profile_type=""
-  case "$deployment_type" in
-    helm) profile_type="helm" ;;
-    compose|docker-compose) profile_type="compose" ;;
-    *)
-      if [[ "$package_name" =~ compose ]]; then
-        profile_type="compose"
-      else
-        profile_type="helm"
-      fi
-      ;;
-  esac
+  if [ ${#supported_deployments[@]} -gt 0 ] && [ ${#deployment_types[@]} -gt 0 ]; then
+    for supported_type in "${supported_deployments[@]}"; do
+      supported_type="${supported_type,,}"
+
+      for available_type in "${deployment_types[@]}"; do
+        if [ "${available_type,,}" = "$supported_type" ]; then
+          deployment_type="$available_type"
+          break 2
+        fi
+      done
+    done
+  fi
+
+  if [ -z "$deployment_type" ]; then
+    echo "❌ No strict profile-type match between device support [${supported_deployments[*]}] and app deploymentProfiles [${deployment_types[*]}]" >&2
+    cd - >/dev/null
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  deployment_type="${deployment_type,,}"
+
+  local profile_type="$deployment_type"
 
   local repository=$(get_oci_repository_path "$package_name" "$temp_dir/margo.yaml")
 
   if [ "$profile_type" = "helm" ]; then
-    generate_helm_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml"
+    if ! generate_helm_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml" "$profile_type"; then
+      echo "❌ Failed to generate helm deployment instance YAML" >&2
+      cd - >/dev/null
+      rm -rf "$temp_dir"
+      return 1
+    fi
   elif [ "$profile_type" = "compose" ]; then
-    generate_compose_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml"
+    if ! generate_compose_instance "$app_identifier" "$package_id" "$device_id" "$repository" "$output_file" "$temp_dir/margo.yaml" "$profile_type"; then
+      echo "❌ Failed to generate compose deployment instance YAML" >&2
+      cd - >/dev/null
+      rm -rf "$temp_dir"
+      return 1
+    fi
   else
     echo "❌ Unsupported deployment type: $profile_type" >&2
     cd - >/dev/null
@@ -81,6 +111,191 @@ generate_instance_yaml_from_oci() {
   return 0
 }
 
+append_component_parameters() {
+  local margo_file="$1"
+  local output_file="$2"
+  local components_csv="$3"
+
+  if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+    echo "❌ yq failed to parse margo.yaml" >&2
+    return 1
+  fi
+
+  local has_parameters
+  local yq_status
+  has_parameters=$(yq eval -r 'has("parameters") and (.parameters != null) and ((.parameters | type) == "!!map") and ((.parameters | length) > 0)' "$margo_file")
+  yq_status=$?
+
+  if [ $yq_status -ne 0 ]; then
+    echo "❌ Failed to detect parameters in margo.yaml with yq" >&2
+    return 1
+  fi
+
+  if [ "$has_parameters" != "true" ]; then
+    return 0
+  fi
+
+  local -A component_lookup=()
+  local parsed_component=""
+  IFS=',' read -r -a parsed_components <<< "$components_csv"
+  for parsed_component in "${parsed_components[@]}"; do
+    if [ -n "$parsed_component" ]; then
+      component_lookup["$parsed_component"]=1
+    fi
+  done
+
+  local parameter_names
+  if ! parameter_names=$(yq eval '(.parameters // {} | keys | .[])' "$margo_file"); then
+    echo "❌ Failed to read parameters from margo.yaml with yq (requires yq v4)" >&2
+    return 1
+  fi
+
+  local wrote_parameters=false
+  while IFS= read -r parameter_name; do
+    if [ -z "$parameter_name" ] || [ "$parameter_name" = "null" ]; then
+      continue
+    fi
+
+    local target_components
+    local target_components_status
+    target_components=$(PARAM_NAME="$parameter_name" yq eval -r '.parameters[env(PARAM_NAME)].targets[]?.components[]?' "$margo_file")
+    target_components_status=$?
+
+    if [ "$target_components_status" -ne 0 ]; then
+      echo "❌ Failed to read parameter targets for '$parameter_name'" >&2
+      return 1
+    fi
+
+    if [ -z "$target_components" ]; then
+      echo "❌ Parameter '$parameter_name' has no target components in margo.yaml" >&2
+      echo "   Add at least one component target or remove this parameter." >&2
+      return 1
+    fi
+
+    local include_parameter=false
+    while IFS= read -r target_component; do
+      if [ -n "$target_component" ] && [ "$target_component" != "null" ] && [ -n "${component_lookup[$target_component]:-}" ]; then
+        include_parameter=true
+        break
+      fi
+    done <<< "$target_components"
+
+    if [ "$include_parameter" != true ]; then
+      # Parameter is valid but scoped to other profile components (for example helm-only while generating compose).
+      # Skip it so mixed-profile application packages can still generate deployable instances.
+      continue
+    fi
+
+    if [ "$wrote_parameters" = false ]; then
+      echo "  parameters:" >> "$output_file"
+      wrote_parameters=true
+    fi
+
+    if ! (
+      set -o pipefail
+      PARAM_NAME="$parameter_name" COMPONENTS_CSV="$components_csv" yq eval '{
+        (env(PARAM_NAME)): (
+          .parameters[env(PARAM_NAME)]
+          | .targets |= map(
+              .components |= map(. as $c | select(((env(COMPONENTS_CSV) | split(",") | map(select(. == $c)) | length) > 0)))
+              | select((.components | length) > 0)
+            )
+        )
+      }' "$margo_file" | sed 's/^/    /' >> "$output_file"
+    ); then
+      echo "❌ Failed to render filtered parameter '$parameter_name'" >&2
+      return 1
+    fi
+  done <<< "$parameter_names"
+
+  return 0
+}
+
+append_profile_required_resources() {
+  local margo_file="$1"
+  local output_file="$2"
+  local target_profile_type="$3"
+
+  if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+    echo "❌ yq failed to parse margo.yaml" >&2
+    return 1
+  fi
+
+  local has_required_resources
+  local has_required_resources_status
+  has_required_resources=$(PROFILE_WANTED="$target_profile_type" yq eval -r '
+    (((.deploymentProfiles // [])
+      | map(select((.type // "") == strenv(PROFILE_WANTED)))
+      | .[0].requiredResources // {})
+      | ((type == "!!map") and (length > 0)))
+  ' "$margo_file")
+  has_required_resources_status=$?
+
+  if [ "$has_required_resources_status" -ne 0 ]; then
+    echo "❌ Failed to detect requiredResources for deployment profile '$target_profile_type'" >&2
+    return 1
+  fi
+
+  if [ "$has_required_resources" != "true" ]; then
+    return 0
+  fi
+
+  if ! (
+    set -o pipefail
+    PROFILE_WANTED="$target_profile_type" yq eval '
+      {
+        "requiredResources": (
+          ((.deploymentProfiles // [])
+            | map(select((.type // "") == strenv(PROFILE_WANTED)))
+            | .[0].requiredResources // {})
+        )
+      }
+    ' "$margo_file" | sed 's/^/    /' >> "$output_file"
+  ); then
+    echo "❌ Failed to render requiredResources for deployment profile '$target_profile_type'" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+extract_profile_component_kv() {
+  local margo_file="$1"
+  local target_profile_type="$2"
+  local profile_kind="$3"
+
+  if ! yq eval 'true' "$margo_file" >/dev/null 2>&1; then
+    echo "❌ yq failed to parse margo.yaml" >&2
+    return 1
+  fi
+
+  case "$profile_kind" in
+    helm)
+      PROFILE_WANTED="$target_profile_type" yq eval -r '
+        ((.deploymentProfiles // [])
+          | map(select((.type // "") == strenv(PROFILE_WANTED)))
+          | .[0].components // [])[] as $c
+        | "COMPONENT_NAME:" + ($c.name // "")
+          + "\nREPOSITORY:" + ($c.properties.repository // $c.repository // "")
+          + "\nREVISION:" + (($c.properties.revision // $c.revision // "0.1.0") | tostring)
+      ' "$margo_file"
+      ;;
+    compose)
+      PROFILE_WANTED="$target_profile_type" yq eval -r '
+        ((.deploymentProfiles // [])
+          | map(select((.type // "") == strenv(PROFILE_WANTED)))
+          | .[0].components // [])[] as $c
+        | "COMPONENT_NAME:" + ($c.name // "")
+          + "\nPACKAGE_LOCATION:" + ($c.properties.packageLocation // $c.packageLocation // "")
+      ' "$margo_file"
+      ;;
+    *)
+      echo "❌ Unsupported profile kind '$profile_kind' in extract_profile_component_kv (expected: helm or compose)" >&2
+      return 1
+      ;;
+  esac
+}
+
 generate_helm_instance() {
   local app_identifier="$1"
   local package_id="$2"
@@ -88,6 +303,8 @@ generate_helm_instance() {
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
+  local target_profile_type="${7:-helm}"
+  local -a selected_profile_components=()
 
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
 
@@ -110,45 +327,29 @@ spec:
 EOF
 
   if grep -q "components:" "$margo_file"; then
-    awk '/components:/,/^[^ ]/ {
-      if (/- name:/) {
-        name = $0
-        sub(/.*name:/, "", name)
-        gsub(/^[ \t]+|[ \t]+$/, "", name)
-        gsub(/"/, "", name)
-        print "COMPONENT_NAME:" name
-      }
-      if (/repository:/ && !/registryUrl/) {
-        repo = $0
-        sub(/.*repository:/, "", repo)
-        gsub(/^[ \t]+|[ \t]+$/, "", repo)
-        gsub(/"/, "", repo)
-        print "REPOSITORY:" repo
-      }
-      if (/revision:/) {
-        rev = $0
-        sub(/.*revision:/, "", rev)
-        gsub(/^[ \t]+|[ \t]+$/, "", rev)
-        gsub(/"/, "", rev)
-        print "REVISION:" rev
-      }
-    }' "$margo_file" | {
-      local current_name=""
-      local current_repo=""
-      local current_rev="0.1.0"
+    local current_name=""
+    local current_repo=""
+    local current_rev="0.1.0"
+    local profile_components_kv
 
-      while IFS=: read -r key value; do
-        case "$key" in
-          COMPONENT_NAME)
-            current_name="$value"
-            ;;
-          REPOSITORY)
-            current_repo="$value"
-            ;;
-          REVISION)
-            current_rev="$value"
-            if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
-              cat >> "$output_file" <<COMPONENT
+    if ! profile_components_kv=$(extract_profile_component_kv "$margo_file" "$target_profile_type" "helm"); then
+      echo "❌ Failed to extract helm profile components from margo.yaml" >&2
+      return 1
+    fi
+
+    while IFS=: read -r key value; do
+      case "$key" in
+        COMPONENT_NAME)
+          current_name="$value"
+          ;;
+        REPOSITORY)
+          current_repo="$value"
+          ;;
+        REVISION)
+          current_rev="$value"
+          if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
+            selected_profile_components+=("$current_name")
+            cat >> "$output_file" <<COMPONENT
       - name: ${current_name}
         properties:
           repository: ${current_repo}
@@ -156,18 +357,18 @@ EOF
           wait: true
           timeout: 5m
 COMPONENT
-              current_name=""
-              current_repo=""
-              current_rev="0.1.0"
-            fi
-            ;;
-        esac
-      done
-    }
+            current_name=""
+            current_repo=""
+            current_rev="0.1.0"
+          fi
+          ;;
+      esac
+    done <<< "$profile_components_kv"
   else
     local component_name=$(echo "$app_identifier" | cut -c1-40)
     local chart_version=$(grep -E "^\s*version:" "$margo_file" | head -1 | sed 's/.*version:\s*//' | tr -d '"' | tr -d "'" | xargs)
     chart_version="${chart_version:-0.1.0}"
+    selected_profile_components+=("$component_name")
 
     cat >> "$output_file" <<COMPONENT
       - name: ${component_name}
@@ -179,18 +380,17 @@ COMPONENT
 COMPONENT
   fi
 
-  if grep -q "parameters:" "$margo_file"; then
-    echo "  parameters:" >> "$output_file"
+  local helm_components_csv=""
+  if [ ${#selected_profile_components[@]} -gt 0 ]; then
+    helm_components_csv=$(IFS=,; echo "${selected_profile_components[*]}")
+  fi
 
-    if grep -qi "otel\|otlp" "$margo_file"; then
-      cat >> "$output_file" <<EOF
-    otlpEndpoint:
-      value: "http://otel-collector-opentelemetry-collector.observability:4318"
-      targets:
-      - pointer: env.OTEL_EXPORTER_OTLP_ENDPOINT
-        components: ["${component_name}"]
-EOF
-    fi
+  if ! append_profile_required_resources "$margo_file" "$output_file" "$target_profile_type"; then
+    return 1
+  fi
+
+  if ! append_component_parameters "$margo_file" "$output_file" "$helm_components_csv"; then
+    return 1
   fi
 }
 
@@ -201,9 +401,11 @@ generate_compose_instance() {
   local repository="$4"
   local output_file="$5"
   local margo_file="$6"
+  local target_profile_type="${7:-compose}"
 
   local instance_name=$(echo "${app_identifier}-instance" | cut -c1-53)
   local stack_name=$(echo "${app_identifier}-stack" | cut -c1-40)
+  local -a selected_profile_components=()
 
   cat > "$output_file" <<EOF
 # This is an input template allowing the WFM user to modify deployment instance specific parameters(currently read-only).
@@ -223,62 +425,54 @@ spec:
 EOF
 
   if grep -q "components:" "$margo_file"; then
-    awk '/components:/,/^[^ ]/ {
-      if (/- name:/) {
-        name = $0
-        sub(/.*name:/, "", name)
-        gsub(/^[ \t]+|[ \t]+$/, "", name)
-        gsub(/"/, "", name)
-        print "COMPONENT_NAME:" name
-      }
-      if (/packageLocation:/) {
-        location = $0
-        sub(/.*packageLocation:/, "", location)
-        gsub(/^[ \t]+|[ \t]+$/, "", location)
-        gsub(/"/, "", location)
-        print "PACKAGE_LOCATION:" location
-      }
-    }' "$margo_file" | {
-      local current_name=""
-      while IFS=: read -r key value; do
-        case "$key" in
-          COMPONENT_NAME)
-            current_name="$value"
-            ;;
-          PACKAGE_LOCATION)
-            if [ -n "$current_name" ]; then
-              cat >> "$output_file" <<COMPONENT
+    local current_name=""
+    local profile_components_kv
+
+    if ! profile_components_kv=$(extract_profile_component_kv "$margo_file" "$target_profile_type" "compose"); then
+      echo "❌ Failed to extract compose profile components from margo.yaml" >&2
+      return 1
+    fi
+
+    while IFS=: read -r key value; do
+      case "$key" in
+        COMPONENT_NAME)
+          current_name="$value"
+          if [ -n "$current_name" ]; then
+            selected_profile_components+=("$current_name")
+          fi
+          ;;
+        PACKAGE_LOCATION)
+          if [ -n "$current_name" ]; then
+            cat >> "$output_file" <<COMPONENT
       - name: ${current_name}
         properties:
           packageLocation: ${value}
 COMPONENT
-              current_name=""
-            fi
-            ;;
-        esac
-      done
-    }
+            current_name=""
+          fi
+          ;;
+      esac
+    done <<< "$profile_components_kv"
   else
     cat >> "$output_file" <<COMPONENT
       - name: ${stack_name}
         properties:
           packageLocation: ${repository}
 COMPONENT
+    selected_profile_components+=("$stack_name")
   fi
 
-  if grep -q "parameters:" "$margo_file"; then
-    echo "  parameters:" >> "$output_file"
+  local compose_components_csv=""
+  if [ ${#selected_profile_components[@]} -gt 0 ]; then
+    compose_components_csv=$(IFS=,; echo "${selected_profile_components[*]}")
+  fi
 
-    local default_port=$(grep -E "^\s*port:" "$margo_file" | head -1 | sed 's/.*port:\s*//' | tr -d '"' | tr -d "'" | xargs)
-    if [ -n "$default_port" ]; then
-      cat >> "$output_file" <<EOF
-    servicePort:
-      value: ${default_port}
-      targets:
-        - pointer: PORTS.80
-          components: ["${stack_name}"]
-EOF
-    fi
+  if ! append_profile_required_resources "$margo_file" "$output_file" "$target_profile_type"; then
+    return 1
+  fi
+
+  if ! append_component_parameters "$margo_file" "$output_file" "$compose_components_csv"; then
+    return 1
   fi
 }
 
