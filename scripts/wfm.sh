@@ -104,7 +104,61 @@ install_basic_utilities() {
     echo "⚡️ Basic utilities already installed"
   fi
 
+  install_yq
+
   install_helm
+}
+
+install_yq() {
+  local YQ_VERSION="${YQ_VERSION:-v4.44.3}"
+  local os arch yq_binary url
+
+  if command -v yq >/dev/null 2>&1; then
+    echo "⚡️ yq already installed: $(yq --version 2>/dev/null || true)"
+    if yq --help 2>&1 | grep -q 'github.com/mikefarah/yq'; then \
+      echo "✓ yq is the mikefarah/yq implementation"; \
+      return 0
+    else \
+      echo "✗ Wrong yq detected — this Makefile requires mikefarah/yq (GitHub release), not kislyuk/yq" >&2; \
+      exit 1; \
+    fi
+  fi
+
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+
+  case "$arch" in
+    x86_64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    armv7l) arch="arm" ;;
+    *)
+      echo "❌ Unsupported architecture for yq install: $arch"
+      return 1
+      ;;
+  esac
+
+  yq_binary="yq_${os}_${arch}"
+  url="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${yq_binary}"
+
+  echo "🔄 Installing yq ${YQ_VERSION} from GitHub releases..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL "$url" -o /tmp/yq
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO /tmp/yq "$url"
+  else
+    echo "❌ Neither curl nor wget is available to download yq"
+    return 1
+  fi
+
+  chmod +x /tmp/yq
+  sudo mv /tmp/yq /usr/local/bin/yq
+
+  if command -v yq >/dev/null 2>&1; then
+    echo "✅ yq installed successfully: $(yq --version 2>/dev/null || true)"
+  else
+    echo "❌ yq installation failed"
+    return 1
+  fi
 }
 
 enable_tls_in_symphony_api() {
