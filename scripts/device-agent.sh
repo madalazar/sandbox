@@ -147,7 +147,7 @@ validate_start_required_vars() {
 # ----------------------------
 install_basic_utilities() {
   sudo apt update -y
-  sudo apt install -y curl git dos2unix build-essential gcc libc6-dev
+  sudo apt install -y curl git dos2unix build-essential gcc libc6-dev jq hwloc
   echo "Installation complete: curl, git, and build tools installed."
 
   # Only install Helm for k3s device type
