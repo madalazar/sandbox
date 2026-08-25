@@ -2,8 +2,8 @@
 # modules/capabilities.sh - capabilities.json updater from persisted host topology
 #
 # README
-# This script updates capabilities.json properties.cpus.
-# CPU data is grouped by host topology.
+# This script updates capabilities.json properties.cpus and properties.cache.
+# CPU and cache data are grouped by host topology.
 #
 # properties.cpus contains one host CPU object with:
 # 1) top-level architecture
@@ -32,6 +32,8 @@
 SCRIPT_DIR_CAP="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091  # Runtime path is relative to this module.
 source "${SCRIPT_DIR_CAP}/cpu-topology.sh"
+# shellcheck disable=SC1091  # Runtime path is relative to this module.
+source "${SCRIPT_DIR_CAP}/cache-topology.sh"
 
 CAPABILITIES_FILE="${CAPABILITIES_FILE:-$HOME/sandbox/poc/device/agent/config/capabilities.json}"
 
@@ -193,27 +195,104 @@ update_cpu_capabilities() {
     return 1
   fi
 
-  if ! chmod --reference="$capabilities_file" "$tmp_file"; then
-    rm -f "$tmp_file"
-    echo "ERROR: Failed to preserve permissions for $capabilities_file" >&2
-    return 1
-  fi
-
-  if ! mv "$tmp_file" "$capabilities_file"; then
-    rm -f "$tmp_file"
-    echo "ERROR: Failed to persist updated capabilities file" >&2
-    return 1
-  fi
+  _persist_capabilities_update "$capabilities_file" "$tmp_file" || return 1
 
   echo "Updated CPU capabilities in $capabilities_file"
+  return 0
+}
+
+# Build the capabilities manifest cache array from a persisted cache topology file.
+# Prints compact JSON containing normalized L3 cache entries and returns non-zero
+# when the topology is unreadable, duplicated, unsupported, or empty.
+_build_cache_capabilities_json() {
+  local topology_file="$1"
+  local topology_json cache_entries_json
+  if ! topology_json="$(read_cache_topology_as_json "$topology_file")"; then
+    echo "ERROR: Failed to read cache topology from $topology_file" >&2
+    return 1
+  fi
+
+  if ! cache_entries_json="$(jq -c '
+    [.[] | select(.level == "L3")] as $entries
+    | if ($entries | group_by(.level, .id) | any(length > 1)) then
+        error("duplicate cache identity")
+      else
+        $entries
+        | map(
+            (.allocationTypes
+              | map(ascii_downcase)
+              | map(select(. == "exclusive" or . == "shared"))
+              | unique
+            ) as $types
+            | if ($types | length) == 0 then
+                error("cache entry has no supported allocation types")
+              else
+                {
+                  cacheId: (.id | sub("^L#"; "")),
+                  level,
+                  size: ((.sizeKiB | tostring) + "Ki"),
+                  allocationTypes: ($types | sort)
+                }
+              end
+          )
+        | sort_by(.level, (.cacheId | tonumber), .size)
+      end
+  ' <<< "$topology_json")"; then
+    echo "ERROR: Failed to finalize cache capabilities JSON" >&2
+    return 1
+  fi
+
+  if [[ "$cache_entries_json" == "[]" ]]; then
+    echo "ERROR: CPU cache topology contains no supported cache entries" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$cache_entries_json"
+}
+
+update_cache_capabilities() {
+  local capabilities_file="${1:-$CAPABILITIES_FILE}"
+  local topology_file="${2:-$CACHE_TOPOLOGY_CACHE_FILE}"
+
+  _validate_capabilities_update_inputs "$capabilities_file" || return 1
+
+  local cache_capabilities_json
+  if ! cache_capabilities_json="$(_build_cache_capabilities_json "$topology_file")"; then
+    return 1
+  fi
+
+  local tmp_file
+  if ! tmp_file="$(mktemp "${capabilities_file}.tmp.XXXXXX")"; then
+    echo "ERROR: Failed to create a temporary file beside $capabilities_file" >&2
+    return 1
+  fi
+
+  if ! jq --argjson cache "$cache_capabilities_json" '
+    if (.properties | type) == "object"
+       and ((.properties.cache | type) == "array" or (.properties.cache | type) == "null") then
+      .properties.cache = $cache
+    else
+      error("Refusing cache update: properties must be an object and properties.cache must be an array or absent")
+    end
+  ' "$capabilities_file" > "$tmp_file"; then
+    rm -f "$tmp_file"
+    echo "ERROR: Failed to update properties.cache in $capabilities_file" >&2
+    return 1
+  fi
+
+  _persist_capabilities_update "$capabilities_file" "$tmp_file" || return 1
+
+  echo "Updated cache capabilities in $capabilities_file"
   return 0
 }
 
 update_capabilities_resources_from_host() {
   local capabilities_file="${1:-$CAPABILITIES_FILE}"
   local cpu_topology_file="${2:-$CPU_TOPOLOGY_CACHE_FILE}"
+  local cache_topology_file="${3:-$CACHE_TOPOLOGY_CACHE_FILE}"
 
   update_cpu_capabilities "$capabilities_file" "$cpu_topology_file" || return 1
+  update_cache_capabilities "$capabilities_file" "$cache_topology_file" || return $?
 
   return 0
 }
