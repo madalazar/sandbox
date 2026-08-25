@@ -114,6 +114,7 @@ source "${SCRIPT_DIR}/modules/k3s.sh"
 source "${SCRIPT_DIR}/modules/harbor.sh"
 source "${SCRIPT_DIR}/modules/certificates.sh"
 source "${SCRIPT_DIR}/modules/agent.sh"
+source "${SCRIPT_DIR}/modules/rdt.sh"
 source "${SCRIPT_DIR}/modules/observability.sh"
 source "${SCRIPT_DIR}/modules/dns-host-config.sh"
 
@@ -174,6 +175,7 @@ install_prerequisites() {
   install_basic_utilities
   install_docker_and_compose
   clone_dev_repo
+  ensure_intel_rdt_ready
   # Only install k3s for k3s device type
   if [ "$DEVICE_TYPE" = "k3s" ]; then
     setup_k3s
