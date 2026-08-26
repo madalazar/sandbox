@@ -3,6 +3,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/capabilities.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/host-topology.sh"
 
 # ----------------------------
 # GHCR Image References
@@ -23,7 +24,7 @@ update_agent_sbi_url() {
 
 set_capabilities_roles() {
   local role="$1"
-  local file="$HOME/sandbox/poc/device/agent/config/capabilities.json"
+  local file="$CAPABILITIES_FILE"
 
   if [[ -f "$file" ]]; then
     # TODO: we can use jq here if we wanted
@@ -47,6 +48,13 @@ set_capabilities_deployment_type() {
   else
     echo "capabilities.json not found at $file, skipping deployment type update"
   fi
+}
+
+prepare_host_resources() {
+  build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
+  build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
+  update_capabilities_resources_from_host || return 1
+  generate_topology_artefact || return 1
 }
 
 enable_kubernetes_runtime() {
@@ -176,9 +184,7 @@ start_device_agent_docker_service() {
     return 1
   fi
 
-  build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
-  build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
-  update_capabilities_resources_from_host || return 1
+  prepare_host_resources || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
@@ -272,9 +278,7 @@ build_start_device_agent_k3s_service() {
 
     update_agent_sbi_url
 
-    build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
-    build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
-    update_capabilities_resources_from_host || return 1
+    prepare_host_resources || return 1
 
     echo "Copying configuration files..."
     mkdir -p config
