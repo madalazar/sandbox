@@ -177,6 +177,7 @@ start_device_agent_docker_service() {
   fi
 
   build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
+  build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
   update_capabilities_resources_from_host || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
@@ -272,6 +273,7 @@ build_start_device_agent_k3s_service() {
     update_agent_sbi_url
 
     build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
+    build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
     update_capabilities_resources_from_host || return 1
 
     echo "Copying configuration files..."
