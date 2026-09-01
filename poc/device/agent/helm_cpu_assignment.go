@@ -19,8 +19,9 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 
 	annotations := map[string]string{}
 	currentAssignments := map[string][]int{}
+	owner := NewOwnerRef(deploymentID, componentName)
 
-	componentCPUReqs := filterCPURequirementsForComponent(requiredResources, componentName)
+	componentCPUReqs := componentCPURequirements(requiredResources)
 	dm.log.Debugw("Resolved component CPU requirements from deployment profile for NRI processing",
 		"componentName", componentName,
 		"hasRequiredResources", requiredResources != nil,
@@ -75,26 +76,22 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		)
 	}
 
-	allocatedIsolated := map[int]string{}
-	allocated := dm.database.AllocatedCpus()
-	for idx, owner := range allocated {
+	allocatedIsolated := map[int]OwnerRef{}
+	for idx, holder := range allocatedCPUOwners(dm.database.AllocatedCpus()) {
 		if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
 			continue
 		}
-		allocatedIsolated[idx] = owner
+		allocatedIsolated[idx] = holder
 	}
 
 	for requirement, cpus := range inFlightAssignments {
-		owner := deploymentID
-		if strings.TrimSpace(requirement) != "" {
-			owner = deploymentID + "/" + strings.TrimSpace(requirement)
-		}
+		holder := NewOwnerRef(deploymentID, requirement)
 
 		for _, idx := range cpus {
 			if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
 				continue
 			}
-			allocatedIsolated[idx] = owner
+			allocatedIsolated[idx] = holder
 		}
 	}
 
@@ -113,13 +110,6 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		)
 	}
 
-	req := isolatedReqs[0]
-	requirementName := strings.TrimSpace(componentName)
-	if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
-		requirementName = strings.TrimSpace(*req.Name)
-	}
-	expectedOwner := deploymentID + "/" + requirementName
-
 	selectedBalloonName := ""
 	selectedBalloonCPUs := []int(nil)
 
@@ -135,11 +125,11 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 
 		hasAllocatedCPU := false
 		for _, idx := range refs {
-			owner, exists := allocatedIsolated[idx]
+			holder, exists := allocatedIsolated[idx]
 			if !exists {
 				continue
 			}
-			if owner != "" && owner != deploymentID && owner != expectedOwner {
+			if !owner.CanTake(holder) {
 				hasAllocatedCPU = true
 				break
 			}
@@ -161,12 +151,12 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		)
 	}
 
-	componentAssignments := map[string][]int{requirementName: selectedBalloonCPUs}
+	componentAssignments := map[string][]int{string(owner.Ref): selectedBalloonCPUs}
 	annotations["balloon.balloons.resource-policy.nri.io/pod"] = selectedBalloonName
 
 	dm.log.Infow("NRI isolated balloon selected",
 		"componentName", componentName,
-		"requirementName", requirementName,
+		"requirementName", string(owner.Ref),
 		"balloonName", selectedBalloonName,
 		"selectedCpuIndices", selectedBalloonCPUs,
 	)
@@ -197,22 +187,14 @@ func summarizeCpuRequirements(reqs []sbi.Cpu) []map[string]any {
 	return out
 }
 
-func filterCPURequirementsForComponent(requiredResources *sbi.RequiredResources, componentName string) []sbi.Cpu {
+// Membership is structural - requiredResources is nested inside the component - so
+// requiredResources[].name is neither read nor matched against the component name.
+func componentCPURequirements(requiredResources *sbi.RequiredResources) []sbi.Cpu {
 	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
 		return nil
 	}
 
-	matching := make([]sbi.Cpu, 0)
-	for _, req := range *requiredResources.Cpu {
-		if req.Name == nil {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(*req.Name), componentName) {
-			matching = append(matching, req)
-		}
-	}
-
-	return matching
+	return append([]sbi.Cpu(nil), *requiredResources.Cpu...)
 }
 
 func uniqueSortedCPURefs(paths []string) []int {

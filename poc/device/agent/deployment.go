@@ -573,7 +573,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
 			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
-			assignments, err = dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name, composeFilename,
+			assignments, err = dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name,
 				composeComp.RequiredResources, composeAssignments)
 
 			dm.log.Debugw("assignments for current component", "assignments", assignments)

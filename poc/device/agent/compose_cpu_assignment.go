@@ -19,7 +19,7 @@ type CpuAssignment struct {
 	Cpus        []int
 }
 
-func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string, componentName string, composeFilePath string,
+func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string, componentName string,
 	requiredResources *sbi.RequiredResources, existingAssignments map[string][]int) ([]CpuAssignment, error) {
 	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
 		return nil, nil
@@ -29,79 +29,42 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		return nil, nil
 	}
 
-	// Filter to only the CPU requirements that belong to this component.
-	componentCpuReqs := make([]sbi.Cpu, 0)
+	owner := NewOwnerRef(deploymentID, componentName)
+
+	// Membership is structural - requiredResources is nested inside the component - so
+	// requiredResources[].name is neither read nor matched against the component name.
+	reqs := make([]sbi.Cpu, 0, len(*requiredResources.Cpu))
 	for _, req := range *requiredResources.Cpu {
-		if req.Name != nil && strings.EqualFold(strings.TrimSpace(*req.Name), componentName) {
-			componentCpuReqs = append(componentCpuReqs, req)
-		}
-	}
-
-	isIsolatedRequest := false
-	for _, req := range componentCpuReqs {
 		if req.Type != nil && *req.Type == sbi.CpuTypeIsolated {
-			isIsolatedRequest = true
-			break
+			reqs = append(reqs, req)
 		}
-	}
-	if !isIsolatedRequest {
-		return nil, nil
-	}
-
-	serviceNames, err := composeServiceNames(composeFilePath)
-	if err != nil {
-		return nil, fmt.Errorf("read compose services for component %q: %w", componentName, err)
-	}
-
-	//TODO: I don't think we need to filter the reqs here by service name
-	// we know which component we're in, we've already filtering reqRes by component name
-	// here's we're jsut filtering for sbi.CpuTypeIsolated
-	reqs := make([]sbi.Cpu, 0, len(componentCpuReqs))
-	for _, req := range componentCpuReqs {
-		if req.Type == nil || *req.Type != sbi.CpuTypeIsolated {
-			continue
-		}
-		if req.Name == nil {
-			return nil, fmt.Errorf("isolated CPU requirement is missing name")
-		}
-
-		requirementName := strings.TrimSpace(*req.Name)
-		if requirementName == "" {
-			return nil, fmt.Errorf("isolated CPU requirement has empty name")
-		}
-		if _, exists := serviceNames[requirementName]; !exists {
-			dm.log.Debugw("Warning: isolated CPU requirement %q does not match a compose service in component %q", requirementName, componentName)
-			// return nil, fmt.Errorf("isolated CPU requirement %q does not match a compose service in component %q", requirementName, componentName)
-		}
-
-		reqs = append(reqs, req)
 	}
 
 	if len(reqs) == 0 {
 		return nil, nil
 	}
 
-	taken := dm.database.AllocatedCpus()
+	// One component deploys one unit with one cpuset, so a second isolated requirement
+	// has nowhere to go and would otherwise alias onto the first one's CPUs.
+	if len(reqs) > 1 {
+		return nil, fmt.Errorf("component %q declares %d isolated CPU requirements; only one is supported", componentName, len(reqs))
+	}
+
+	taken := allocatedCPUOwners(dm.database.AllocatedCpus())
 	for requirement, cpuIndices := range existingAssignments {
-		owner := deploymentID
-		if strings.TrimSpace(requirement) != "" {
-			owner = deploymentID + "/" + strings.TrimSpace(requirement)
-		}
+		holder := NewOwnerRef(deploymentID, requirement)
 
 		for _, cpuIndex := range cpuIndices {
 			if _, exists := dm.topologyLookup.IsolatedCPUSet[cpuIndex]; !exists {
 				continue
 			}
-			taken[cpuIndex] = owner
+			taken[cpuIndex] = holder
 		}
 	}
 
 	assignments := make([]CpuAssignment, 0, len(reqs))
 
 	for _, req := range reqs {
-		requirementName := strings.TrimSpace(*req.Name)
-		expectedOwner := deploymentID + "/" + requirementName
-
 		requiredCores := int64(1)
 		if req.Cores != nil && *req.Cores > 0 {
 			requiredCores = int64(math.Ceil(float64(*req.Cores)))
@@ -109,13 +72,12 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 
 		candidates := dm.topologyLookup.IsolatedCPUIndices
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("no isolated CPUs available for requirement %q", requirementName)
+			return nil, fmt.Errorf("no isolated CPUs available for requirement %q", owner.Ref)
 		}
 
 		selected := make([]int, 0, requiredCores)
 		for _, cpu := range candidates {
-			owner := taken[cpu]
-			if owner != "" && owner != deploymentID && owner != expectedOwner {
+			if !owner.CanTake(taken[cpu]) {
 				continue
 			}
 			selected = append(selected, cpu)
@@ -125,49 +87,20 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		}
 
 		if len(selected) < int(requiredCores) {
-			return nil, fmt.Errorf("no free isolated CPUs available for requirement %q (required=%d)", requirementName, requiredCores)
+			return nil, fmt.Errorf("no free isolated CPUs available for requirement %q (required=%d)", owner.Ref, requiredCores)
 		}
 
 		for _, cpu := range selected {
-			taken[cpu] = deploymentID + "/" + requirementName
+			taken[cpu] = owner
 		}
 
 		assignments = append(assignments, CpuAssignment{
-			Requirement: requirementName,
+			Requirement: string(owner.Ref),
 			Cpus:        selected,
 		})
 	}
 
 	return assignments, nil
-}
-
-func composeServiceNames(composePath string) (map[string]struct{}, error) {
-	content, err := os.ReadFile(composePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var root map[string]interface{}
-	if err := yamlv3.Unmarshal(content, &root); err != nil {
-		return nil, err
-	}
-
-	serviceNames := map[string]struct{}{}
-	rawServices, exists := root["services"]
-	if !exists {
-		return serviceNames, nil
-	}
-
-	services, ok := rawServices.(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("compose services is not a map")
-	}
-
-	for name := range services {
-		serviceNames[name] = struct{}{}
-	}
-
-	return serviceNames, nil
 }
 
 func rewriteComposeFile(sourcePath string, targetPath string, assignments []CpuAssignment) error {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -48,16 +46,9 @@ func TestResolveComponentCpuAssignments(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			composePath := filepath.Join(t.TempDir(), "compose.yaml")
-			content := []byte("services:\n  " + test.componentName + ":\n    image: example:latest\n")
-			if err := os.WriteFile(composePath, content, 0o600); err != nil {
-				t.Fatalf("write compose fixture: %v", err)
-			}
-
 			got, err := dm.resolveComponentCpuAssignments(
 				deploymentID,
 				test.componentName,
-				composePath,
 				test.requiredResources,
 				inFlightAssignments,
 			)
@@ -80,6 +71,44 @@ func TestResolveComponentCpuAssignments(t *testing.T) {
 	}
 	if !reflect.DeepEqual(inFlightAssignments, wantFinalAssignments) {
 		t.Fatalf("final assignments = %#v, want %#v", inFlightAssignments, wantFinalAssignments)
+	}
+}
+
+// A requirement named after the container rather than the component used to be dropped
+// silently, leaving the workload unpinned and no error reported.
+func TestResolveComponentCpuAssignmentsIgnoresRequirementName(t *testing.T) {
+	dm := newCPUAssignmentTestDeploymentManager(t)
+
+	got, err := dm.resolveComponentCpuAssignments(
+		"deployment-123",
+		"cyclictest_compose",
+		isolatedCPURequirement("rt-container"),
+		map[string][]int{},
+	)
+	if err != nil {
+		t.Fatalf("resolveComponentCpuAssignments() error = %v", err)
+	}
+
+	want := []CpuAssignment{{Requirement: "cyclictest_compose", Cpus: []int{1}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveComponentCpuAssignments() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveComponentCpuAssignmentsRejectsSecondIsolatedRequirement(t *testing.T) {
+	dm := newCPUAssignmentTestDeploymentManager(t)
+
+	required := isolatedCPURequirement("cyclictest_compose")
+	*required.Cpu = append(*required.Cpu, (*required.Cpu)[0])
+
+	got, err := dm.resolveComponentCpuAssignments(
+		"deployment-123",
+		"cyclictest_compose",
+		required,
+		map[string][]int{},
+	)
+	if err == nil {
+		t.Fatalf("resolveComponentCpuAssignments() = %#v, want an error", got)
 	}
 }
 
