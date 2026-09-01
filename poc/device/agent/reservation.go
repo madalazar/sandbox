@@ -1,7 +1,6 @@
 package main
 
 import (
-	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,7 +67,7 @@ func (s *databaseReservationStore) LoadReservation(owner OwnerRef) (Reservation,
 		return Reservation{}, false, err
 	}
 
-	key := string(owner.Ref)
+	key := string(owner.Component)
 	cpus, hasCPUs := allocations.CPUs[key]
 	cacheAssignments, hasCaches := allocations.Caches[key]
 	if !hasCPUs && !hasCaches {
@@ -94,7 +93,7 @@ func (s *databaseReservationStore) LoadReservation(owner OwnerRef) (Reservation,
 }
 
 func (s *databaseReservationStore) ClearComponent(owner OwnerRef) error {
-	return s.db.ClearComponentAllocations(owner.Deployment, string(owner.Ref))
+	return s.db.ClearComponentAllocations(owner.Deployment, string(owner.Component))
 }
 
 // toCacheAssignments maps domain cache reservations back to the persisted form the
@@ -121,30 +120,4 @@ func allocatedCPUOwners(allocated map[int]string) map[int]OwnerRef {
 		owners[cpuIndex] = ParseOwnerRef(owner)
 	}
 	return owners
-}
-
-// mergeExistingAssignments overlays this reconcile pass's assignments onto the persisted
-// owners, so a component cannot be planned onto a CPU a sibling took earlier in the pass.
-// Indices outside isolatedSet are ignored. The result is a new map; taken is not modified.
-func mergeExistingAssignments(
-	taken map[int]OwnerRef,
-	deploymentID string,
-	existing map[string][]int,
-	isolatedSet map[int]struct{},
-) map[int]OwnerRef {
-	merged := make(map[int]OwnerRef, len(taken)+len(existing))
-	maps.Copy(merged, taken)
-
-	for requirement, cpuIndices := range existing {
-		holder := NewOwnerRef(deploymentID, requirement)
-
-		for _, cpuIndex := range cpuIndices {
-			if _, isolated := isolatedSet[cpuIndex]; !isolated {
-				continue
-			}
-			merged[cpuIndex] = holder
-		}
-	}
-
-	return merged
 }

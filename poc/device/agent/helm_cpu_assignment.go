@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,86 +12,46 @@ import (
 	yaml "gopkg.in/yaml.v2"
 )
 
-func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID string, componentName string,
-	requiredResources *sbi.RequiredResources, inFlightAssignments map[string][]int,
-) (map[string]string, map[string][]int, bool, error) {
+// balloonPodAnnotationKey places a pod into an NRI balloon.
+const balloonPodAnnotationKey = "balloon.balloons.resource-policy.nri.io/pod"
 
-	annotations := map[string]string{}
-	currentAssignments := map[string][]int{}
-	owner := NewOwnerRef(deploymentID, componentName)
+func (dm *DeploymentManager) resolveComponentBalloonCPUPlan(
+	componentName string,
+	requiredResources *sbi.RequiredResources,
+	ledger *AllocationLedger,
+) (CpuPlan, error) {
+	ref := ComponentRef(componentName)
 
-	componentCPUReqs := componentCPURequirements(requiredResources)
+	requirements, err := NormalizeCPURequirements(ref, requiredResources)
+	if err != nil {
+		return CpuPlan{}, err
+	}
+
 	dm.log.Debugw("Resolved component CPU requirements from deployment profile for NRI processing",
 		"componentName", componentName,
 		"hasRequiredResources", requiredResources != nil,
-		"cpuRequirementCount", len(componentCPUReqs),
-		"cpuRequirements", summarizeCpuRequirements(componentCPUReqs),
+		"sharedRequirementCount", len(requirements.Shared),
+		"isolatedRequirementCount", len(requirements.Isolated),
 	)
 
-	if len(componentCPUReqs) == 0 {
-		dm.log.Infow("Skipping NRI processing: component has no matching deployment-profile CPU requirements",
-			"componentName", componentName,
-		)
-		return annotations, currentAssignments, false, nil
-	}
-
-	sharedReqs := make([]sbi.Cpu, 0, len(componentCPUReqs))
-	isolatedReqs := make([]sbi.Cpu, 0, len(componentCPUReqs))
-	for _, req := range componentCPUReqs {
-		if req.Type != nil && *req.Type == sbi.CpuTypeIsolated {
-			isolatedReqs = append(isolatedReqs, req)
-			continue
-		}
-		sharedReqs = append(sharedReqs, req)
-	}
-
-	if len(sharedReqs) > 0 && len(isolatedReqs) > 0 {
-		return annotations, currentAssignments, false, fmt.Errorf(
-			"component %q mixes shared and isolated CPU requirements; this combination is not supported",
-			componentName,
-		)
-	}
-
-	if len(isolatedReqs) == 0 {
+	if !requirements.HasIsolatedCores() || len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
 		dm.log.Infow(
 			"Component uses shared cores only; skipping NRI annotations and isolated CPU allocations",
 			"componentName", componentName,
 		)
-		return annotations, currentAssignments, false, nil
+		return CpuPlan{}, nil
 	}
 
-	requiredIsolatedCores := int64(0)
-	for _, req := range isolatedReqs {
-		cores := int64(1)
-		if req.Cores != nil && *req.Cores > 0 {
-			cores = int64(math.Ceil(float64(*req.Cores)))
-		}
-		requiredIsolatedCores += cores
-	}
+	requiredIsolatedCores := requirements.CountIsolatedCores()
 	if requiredIsolatedCores > 1 {
-		return annotations, currentAssignments, false, fmt.Errorf(
+		return CpuPlan{}, fmt.Errorf(
 			"component %q requests %d isolated cores; only workloads requiring 1 isolated core are supported",
 			componentName, requiredIsolatedCores,
 		)
 	}
 
-	allocatedIsolated := map[int]OwnerRef{}
-	for idx, holder := range allocatedCPUOwners(dm.database.AllocatedCpus()) {
-		if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
-			continue
-		}
-		allocatedIsolated[idx] = holder
-	}
-
-	allocatedIsolated = mergeExistingAssignments(
-		allocatedIsolated,
-		deploymentID,
-		inFlightAssignments,
-		dm.topologyLookup.IsolatedCPUSet,
-	)
-
 	if dm.policyReader == nil {
-		return annotations, currentAssignments, false, fmt.Errorf(
+		return CpuPlan{}, fmt.Errorf(
 			"cannot resolve isolated CPU assignment for component %q: policy reader not configured",
 			componentName,
 		)
@@ -100,7 +59,7 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 
 	policy := dm.policyReader.Parsed()
 	if policy == nil {
-		return annotations, currentAssignments, false, fmt.Errorf(
+		return CpuPlan{}, fmt.Errorf(
 			"cannot resolve isolated CPU assignment for component %q: no BalloonsPolicy snapshot available",
 			componentName,
 		)
@@ -115,22 +74,18 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		}
 
 		refs := uniqueSortedCPURefs(balloon.PreferCloseToDevices)
-		if len(refs) < int(requiredIsolatedCores) {
+		if len(refs) < requiredIsolatedCores {
 			continue
 		}
 
-		hasAllocatedCPU := false
+		occupied := false
 		for _, idx := range refs {
-			holder, exists := allocatedIsolated[idx]
-			if !exists {
-				continue
-			}
-			if !owner.CanTake(holder) {
-				hasAllocatedCPU = true
+			if !ledger.IsCpuAvailable(idx, ref) {
+				occupied = true
 				break
 			}
 		}
-		if hasAllocatedCPU {
+		if occupied {
 			continue
 		}
 
@@ -141,56 +96,27 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 	}
 
 	if selectedBalloonName == "" || len(selectedBalloonCPUs) == 0 {
-		return annotations, currentAssignments, false, fmt.Errorf(
+		return CpuPlan{}, fmt.Errorf(
 			"no free isolated balloon found for component %q (requiredIsolatedCores=%d)",
 			componentName, requiredIsolatedCores,
 		)
 	}
 
-	componentAssignments := map[string][]int{string(owner.Ref): selectedBalloonCPUs}
-	annotations["balloon.balloons.resource-policy.nri.io/pod"] = selectedBalloonName
+	if err := ledger.ReserveCPUs(ref, selectedBalloonCPUs); err != nil {
+		return CpuPlan{}, err
+	}
 
 	dm.log.Infow("NRI isolated balloon selected",
 		"componentName", componentName,
-		"requirementName", string(owner.Ref),
 		"balloonName", selectedBalloonName,
 		"selectedCpuIndices", selectedBalloonCPUs,
 	)
 
-	return annotations, componentAssignments, true, nil
-}
-
-func summarizeCpuRequirements(reqs []sbi.Cpu) []map[string]any {
-	out := make([]map[string]any, 0, len(reqs))
-	for _, req := range reqs {
-		entry := map[string]any{}
-		if req.Name != nil {
-			entry["containerName"] = strings.TrimSpace(*req.Name)
-		} else {
-			entry["containerName"] = ""
-		}
-		if req.Class != nil {
-			entry["class"] = string(*req.Class)
-		}
-		if req.Type != nil {
-			entry["type"] = string(*req.Type)
-		}
-		if req.Cores != nil {
-			entry["cores"] = *req.Cores
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
-// Membership is structural - requiredResources is nested inside the component - so
-// requiredResources[].name is neither read nor matched against the component name.
-func componentCPURequirements(requiredResources *sbi.RequiredResources) []sbi.Cpu {
-	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
-		return nil
-	}
-
-	return append([]sbi.Cpu(nil), *requiredResources.Cpu...)
+	return CpuPlan{Assignments: []CpuAssignment{{
+		Component: ref,
+		Cpus:      selectedBalloonCPUs,
+		Placement: CpuPlacement{Class: selectedBalloonName},
+	}}}, nil
 }
 
 func uniqueSortedCPURefs(paths []string) []int {

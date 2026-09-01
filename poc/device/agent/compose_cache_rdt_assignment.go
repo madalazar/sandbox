@@ -174,7 +174,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		return fmt.Errorf("component %q has no assigned CPUs for pqos association", componentName)
 	}
 
-	cpuset := formatCPUSet(assignedCPUs)
+	cpuset := formatCpuSet(assignedCPUs)
 	if strings.TrimSpace(cpuset) == "" {
 		return fmt.Errorf("component %q resolved empty cpuset for pqos association", componentName)
 	}
@@ -449,7 +449,7 @@ func resolveComponentCPUListFromDB(
 		return ""
 	}
 
-	return formatCPUSet(collected)
+	return formatCpuSet(collected)
 }
 
 func nextAvailablePQoSClassID(

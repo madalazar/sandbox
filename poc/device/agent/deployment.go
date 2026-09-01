@@ -343,6 +343,9 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	assignments := map[string][]int{}
 	cacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newHelmResourceCoordinator()
+	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
+	// later components see.
+	ledger := dm.newAllocationLedger(deploymentId)
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
@@ -376,11 +379,17 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		podAnnotations, componentAssignments, hasCPUAnnotations, err := dm.resolveComponentBalloonAnnotations(
-			deploymentId, helmComp.Name, helmComp.RequiredResources, assignments)
+		cpuPlan, err := dm.resolveComponentBalloonCPUPlan(helmComp.Name, helmComp.RequiredResources, ledger)
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
+
+		podAnnotations := map[string]string{}
+		if balloonName := cpuPlan.PlacementClass(); balloonName != "" {
+			podAnnotations[balloonPodAnnotationKey] = balloonName
+		}
+		componentAssignments := cpuPlan.AssignmentMap()
+		hasCPUAnnotations := len(podAnnotations) > 0
 
 		dm.log.Infow("calling resolveComponentCacheAnnotations", "appId", deploymentId)
 		cacheAnnotations, componentCacheAssignments, hasCacheAnnotations, err := dm.resolveComponentCacheAnnotations(
@@ -427,7 +436,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		if hasNriAnnotations {
-			componentCPUSet := formatCPUSet(componentAssignments[helmComp.Name])
+			componentCPUSet := cpuPlan.CpuSet()
 			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, podAnnotations, componentCPUSet)
 			if err != nil {
 				return fmt.Errorf("failed to generate NRI values override file for component %s: %w", helmComp.Name, err)
@@ -535,6 +544,9 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	composeAssignments := map[string][]int{}
 	composeCacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newComposeResourceCoordinator()
+	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
+	// later components see.
+	ledger := dm.newAllocationLedger(deploymentId)
 
 	if dm.pqosFactory == nil {
 		return fmt.Errorf("pqos command factory is not initialized")
@@ -587,28 +599,21 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("isolated cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
 
 		componentCPUAssignments := map[string][]int{}
-		var assignments []CpuAssignment
 
-		if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
-			dm.log.Debugw("looking for cpu indices", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
-			assignments, err = dm.resolveComponentCpuAssignments(deploymentId, composeComp.Name,
-				composeComp.RequiredResources, composeAssignments)
+		cpuPlan, err := dm.resolveComponentCpuAssignments(composeComp.Name, composeComp.RequiredResources, ledger)
+		if err != nil {
+			return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
+		}
+		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Assignments)
 
-			dm.log.Debugw("assignments for current component", "assignments", assignments)
-
-			if err != nil {
-				return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
-			}
-
-			// Merged before the cache write below, so no persisted state shows this
-			// component's ways without the cores they were planned against.
-			if len(assignments) > 0 {
-				componentCPUAssignments = toAssignmentMap(assignments)
-				for requirement, cpus := range componentCPUAssignments {
-					copied := make([]int, len(cpus))
-					copy(copied, cpus)
-					composeAssignments[requirement] = copied
-				}
+		// Merged before the cache write below, so no persisted state shows this
+		// component's ways without the cores they were planned against.
+		if cpuPlan.HasCpus() {
+			componentCPUAssignments = cpuPlan.AssignmentMap()
+			for requirement, cpus := range componentCPUAssignments {
+				copied := make([]int, len(cpus))
+				copy(copied, cpus)
+				composeAssignments[requirement] = copied
 			}
 		}
 		//TODO: we should understand here if we have multiple cache assignments for the same component
@@ -649,7 +654,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		if len(assignments) > 0 {
+		if cpuPlan.HasCpus() {
 			pinnedFile, err := os.CreateTemp(
 				"",
 				fmt.Sprintf(
@@ -670,7 +675,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 					dm.log.Warnw("Failed to remove temporary pinned compose file", "path", path, "err", removeErr)
 				}
 			}(pinnedPath)
-			if err := rewriteComposeFile(composeFilename, pinnedPath, assignments); err != nil {
+			if err := rewriteComposeFile(composeFilename, pinnedPath, cpuPlan); err != nil {
 				return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
 			}
 
@@ -1058,6 +1063,14 @@ func summarizeIsolatedCPUIndices(cpuIndices []int) []int {
 	return sorted
 }
 
+// newAllocationLedger takes the device-wide allocation snapshot once, before the
+// component loop, and returns the ledger that answers free-versus-taken for the rest
+// of this deployment's reconcile pass.
+func (dm *DeploymentManager) newAllocationLedger(deploymentID string) *AllocationLedger {
+	snapshot := NewAllocationSnapshot(dm.database.AllocatedCpus(), dm.topologyLookup.IsolatedCPUSet)
+	return NewAllocationLedger(snapshot, deploymentID)
+}
+
 // newComposeResourceCoordinator is the Compose runtime injection point. It provides
 // reservation rollback and PQoS release; topology planning will be added when the
 // Compose runtime bundle is migrated.
@@ -1087,7 +1100,7 @@ func (r composePQoSReleaser) ReleaseIsolation(ctx context.Context, reservation R
 		return fmt.Errorf("pqos command factory is not initialized")
 	}
 
-	componentName := string(reservation.Owner.Ref)
+	componentName := string(reservation.Owner.Component)
 	return r.dm.resetComposeComponentPQoSMask(
 		ctx,
 		componentName,
@@ -1104,7 +1117,7 @@ type helmRDTReleaser struct {
 }
 
 func (r helmRDTReleaser) ReleaseIsolation(ctx context.Context, reservation Reservation) error {
-	componentName := string(reservation.Owner.Ref)
+	componentName := string(reservation.Owner.Component)
 	r.dm.cleanupHelmComponentRDTOnRemoval(
 		ctx,
 		reservation.Owner.Deployment,

@@ -3,112 +3,77 @@ package main
 import (
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
-type CpuAssignment struct {
-	Requirement string
-	Cpus        []int
+func (dm *DeploymentManager) resolveComponentCpuAssignments(
+	componentName string,
+	requiredResources *sbi.RequiredResources,
+	ledger *AllocationLedger,
+) (CpuPlan, error) {
+	requirements, err := NormalizeCPURequirements(ComponentRef(componentName), requiredResources)
+	if err != nil {
+		return CpuPlan{}, err
+	}
+
+	if !requirements.HasIsolatedCores() || len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
+		return CpuPlan{}, nil
+	}
+
+	return selectIsolatedCPUs(dm.topologyLookup.IsolatedCPUIndices, ledger, requirements)
 }
 
-func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string, componentName string,
-	requiredResources *sbi.RequiredResources, existingAssignments map[string][]int) ([]CpuAssignment, error) {
-	if requiredResources == nil || requiredResources.Cpu == nil || len(*requiredResources.Cpu) == 0 {
-		return nil, nil
-	}
-
-	if len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
-		return nil, nil
-	}
-
-	owner := NewOwnerRef(deploymentID, componentName)
-
-	// Membership is structural - requiredResources is nested inside the component - so
-	// requiredResources[].name is neither read nor matched against the component name.
-	reqs := make([]sbi.Cpu, 0, len(*requiredResources.Cpu))
-	for _, req := range *requiredResources.Cpu {
-		if req.Type != nil && *req.Type == sbi.CpuTypeIsolated {
-			reqs = append(reqs, req)
-		}
-	}
-
-	if len(reqs) == 0 {
-		return nil, nil
-	}
-
-	// One component deploys one unit with one cpuset, so a second isolated requirement
-	// has nowhere to go and would otherwise alias onto the first one's CPUs.
-	if len(reqs) > 1 {
-		return nil, fmt.Errorf("component %q declares %d isolated CPU requirements; only one is supported", componentName, len(reqs))
-	}
-
-	taken := mergeExistingAssignments(
-		allocatedCPUOwners(dm.database.AllocatedCpus()),
-		deploymentID,
-		existingAssignments,
-		dm.topologyLookup.IsolatedCPUSet,
-	)
-
-	return selectIsolatedCPUs(dm.topologyLookup.IsolatedCPUIndices, taken, owner, reqs)
-}
-
-// selectIsolatedCPUs picks the isolated CPU indices each requirement gets. It mutates
-// taken so requirements planned in the same call cannot select the same index twice.
+// selectIsolatedCPUs picks the isolated CPU indices each requirement gets and reserves
+// them in the ledger, so requirements planned in the same pass cannot select the same
+// index twice.
 func selectIsolatedCPUs(
 	isolated []int,
-	taken map[int]OwnerRef,
-	owner OwnerRef,
-	reqs []sbi.Cpu,
-) ([]CpuAssignment, error) {
-	assignments := make([]CpuAssignment, 0, len(reqs))
+	ledger *AllocationLedger,
+	requirements NormalizedCPURequirements,
+) (CpuPlan, error) {
+	plan := CpuPlan{Assignments: make([]CpuAssignment, 0, len(requirements.Isolated))}
 
-	for _, req := range reqs {
-		requiredCores := int64(1)
-		if req.Cores != nil && *req.Cores > 0 {
-			requiredCores = int64(math.Ceil(float64(*req.Cores)))
-		}
-
+	for _, requirement := range requirements.Isolated {
 		if len(isolated) == 0 {
-			return nil, fmt.Errorf("no isolated CPUs available for requirement %q", owner.Ref)
+			return CpuPlan{}, fmt.Errorf("no isolated CPUs available for component %q", requirements.Component)
 		}
 
-		selected := make([]int, 0, requiredCores)
+		selected := make([]int, 0, requirement.Cores)
 		for _, cpu := range isolated {
-			if !owner.CanTake(taken[cpu]) {
+			if !ledger.IsCpuAvailable(cpu, requirements.Component) {
 				continue
 			}
 			selected = append(selected, cpu)
-			if len(selected) == int(requiredCores) {
+			if len(selected) == requirement.Cores {
 				break
 			}
 		}
 
-		if len(selected) < int(requiredCores) {
-			return nil, fmt.Errorf("no free isolated CPUs available for requirement %q (required=%d)", owner.Ref, requiredCores)
+		if len(selected) < requirement.Cores {
+			return CpuPlan{}, fmt.Errorf(
+				"no free isolated CPUs available for component %q (required=%d)",
+				requirements.Component, requirement.Cores,
+			)
 		}
 
-		for _, cpu := range selected {
-			taken[cpu] = owner
+		if err := ledger.ReserveCPUs(requirements.Component, selected); err != nil {
+			return CpuPlan{}, err
 		}
 
-		assignments = append(assignments, CpuAssignment{
-			Requirement: string(owner.Ref),
-			Cpus:        selected,
+		plan.Assignments = append(plan.Assignments, CpuAssignment{
+			Component: requirements.Component,
+			Cpus:      selected,
 		})
 	}
 
-	return assignments, nil
+	return plan, nil
 }
 
-func rewriteComposeFile(sourcePath string, targetPath string, assignments []CpuAssignment) error {
+func rewriteComposeFile(sourcePath string, targetPath string, plan CpuPlan) error {
 	in, err := os.Open(filepath.Clean(sourcePath))
 	if err != nil {
 		return err
@@ -120,7 +85,7 @@ func rewriteComposeFile(sourcePath string, targetPath string, assignments []CpuA
 		return err
 	}
 
-	rewriteErr := RewriteComposeYAML(in, out, assignments)
+	rewriteErr := RewriteComposeYAML(in, out, plan)
 	closeErr := out.Close()
 	if rewriteErr != nil {
 		return rewriteErr
@@ -132,8 +97,8 @@ func rewriteComposeFile(sourcePath string, targetPath string, assignments []CpuA
 	return nil
 }
 
-func RewriteComposeYAML(in io.Reader, out io.Writer, assignments []CpuAssignment) error {
-	if len(assignments) == 0 {
+func RewriteComposeYAML(in io.Reader, out io.Writer, plan CpuPlan) error {
+	if !plan.HasCpus() {
 		_, err := io.Copy(out, in)
 		return err
 	}
@@ -153,16 +118,15 @@ func RewriteComposeYAML(in io.Reader, out io.Writer, assignments []CpuAssignment
 		return err
 	}
 
-	// TODO: this should be renamed as assignmentsByRequirementName
-	// the name is currently misleading
-	assignmentByService := toAssignmentMap(assignments)
-	for serviceName, cpus := range assignmentByService {
+	// Keyed by requirement name; composeServicesNode spells services to match until the
+	// single-service binding lands.
+	for serviceName, cpus := range plan.AssignmentMap() {
 		serviceNode, exists := serviceMap[serviceName]
 		if !exists {
 			return fmt.Errorf("assignment references unknown compose service %q", serviceName)
 		}
 
-		cpuset := formatCPUSet(cpus)
+		cpuset := formatCpuSet(cpus)
 		if err := setServiceCPuset(serviceNode, cpuset); err != nil {
 			return fmt.Errorf("set cpuset for service %q: %w", serviceName, err)
 		}
@@ -292,50 +256,4 @@ func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, var
 		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varValue},
 	)
 	return nil
-}
-
-func toAssignmentMap(assignments []CpuAssignment) map[string][]int {
-	result := make(map[string][]int, len(assignments))
-	for _, assignment := range assignments {
-		copied := make([]int, len(assignment.Cpus))
-		copy(copied, assignment.Cpus)
-		result[assignment.Requirement] = copied
-	}
-	return result
-}
-
-func formatCPUSet(cpus []int) string {
-	if len(cpus) == 0 {
-		return ""
-	}
-
-	sorted := make([]int, len(cpus))
-	copy(sorted, cpus)
-	sort.Ints(sorted)
-
-	compact := make([]string, 0, len(sorted))
-	start := sorted[0]
-	prev := sorted[0]
-
-	flush := func(s int, e int) {
-		if s == e {
-			compact = append(compact, strconv.Itoa(s))
-			return
-		}
-		compact = append(compact, fmt.Sprintf("%d-%d", s, e))
-	}
-
-	for i := 1; i < len(sorted); i++ {
-		current := sorted[i]
-		if current == prev+1 {
-			prev = current
-			continue
-		}
-		flush(start, prev)
-		start = current
-		prev = current
-	}
-	flush(start, prev)
-
-	return strings.Join(compact, ",")
 }

@@ -63,7 +63,7 @@ func releaseOnFailure(
 	if err := coordinator.Release(releaseCtx, owner); err != nil {
 		log.Errorw("Failed to release resources during deployment rollback",
 			"deploymentId", owner.Deployment,
-			"componentName", owner.Ref,
+			"componentName", owner.Component,
 			"error", err)
 	}
 }

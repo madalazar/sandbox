@@ -3016,3 +3016,28 @@ step 8, before the second runtime is migrated.
   retry-on-next-reconcile that read-back release would otherwise make possible, since the input
   disappears with the record. That trade was decided in R1.44 and is not reopened here; it is noted
   because read-back is what would make the alternative cheap if it is ever revisited.
+
+---
+
+# 01/09/2026 feedback/changes
+
+Decisions taken while implementing, recorded here rather than folded back into the sections above.
+
+## `RequirementRef` renamed to `ComponentRef`
+
+Renamed in code while applying §13 step 2. `RequirementRef` reads as though it refers to an entry in
+`requiredResources[]`, which is exactly what §4.1 decision 3 says it is **not** - membership is
+structural and `requiredResources[].name` is never read or matched against. The name invited the
+one misreading the identity model exists to prevent, and it did so on every map key and signature
+that carries it.
+
+`ComponentRef` states what §4.1 decision 2 already decided: the component name is the whole
+identity. Nothing about the model changes - it is still a defined string, still the sole persisted
+key, and still widens to a struct only if `requiredResources[].name` ever becomes authoritative
+(R1.6), which remains a persisted-key change.
+
+Applied to `OwnerRef.Ref` → `OwnerRef.Component` and `CPUAssignment.Requirement` →
+`CPUAssignment.Component` for the same reason. `CPURequirement` and `NormalizedCPURequirements` keep
+the word, because those genuinely are the requirement entries.
+
+The sections above still say `RequirementRef`; read them as `ComponentRef`.

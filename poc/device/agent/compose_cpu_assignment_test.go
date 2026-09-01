@@ -12,8 +12,7 @@ import (
 
 func TestResolveComponentCpuAssignments(t *testing.T) {
 	dm := newCPUAssignmentTestDeploymentManager(t)
-	deploymentID := "deployment-123"
-	inFlightAssignments := map[string][]int{}
+	ledger := dm.newAllocationLedger("deployment-123")
 
 	tests := []struct {
 		name              string
@@ -26,7 +25,7 @@ func TestResolveComponentCpuAssignments(t *testing.T) {
 			componentName:     "cyclictest_compose",
 			requiredResources: isolatedCPURequirement("cyclictest_compose"),
 			want: []CpuAssignment{
-				{Requirement: "cyclictest_compose", Cpus: []int{1}},
+				{Component: "cyclictest_compose", Cpus: []int{1}},
 			},
 		},
 		{
@@ -39,7 +38,7 @@ func TestResolveComponentCpuAssignments(t *testing.T) {
 			componentName:     "caterpillar_compose",
 			requiredResources: isolatedCPURequirement("caterpillar_compose"),
 			want: []CpuAssignment{
-				{Requirement: "caterpillar_compose", Cpus: []int{3}},
+				{Component: "caterpillar_compose", Cpus: []int{3}},
 			},
 		},
 	}
@@ -47,30 +46,17 @@ func TestResolveComponentCpuAssignments(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := dm.resolveComponentCpuAssignments(
-				deploymentID,
 				test.componentName,
 				test.requiredResources,
-				inFlightAssignments,
+				ledger,
 			)
 			if err != nil {
 				t.Fatalf("resolveComponentCpuAssignments() error = %v", err)
 			}
-			if !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("resolveComponentCpuAssignments() = %#v, want %#v", got, test.want)
-			}
-
-			for requirement, cpus := range toAssignmentMap(got) {
-				inFlightAssignments[requirement] = cpus
+			if !reflect.DeepEqual(got.Assignments, test.want) {
+				t.Fatalf("resolveComponentCpuAssignments() = %#v, want %#v", got.Assignments, test.want)
 			}
 		})
-	}
-
-	wantFinalAssignments := map[string][]int{
-		"cyclictest_compose":  {1},
-		"caterpillar_compose": {3},
-	}
-	if !reflect.DeepEqual(inFlightAssignments, wantFinalAssignments) {
-		t.Fatalf("final assignments = %#v, want %#v", inFlightAssignments, wantFinalAssignments)
 	}
 }
 
@@ -80,18 +66,17 @@ func TestResolveComponentCpuAssignmentsIgnoresRequirementName(t *testing.T) {
 	dm := newCPUAssignmentTestDeploymentManager(t)
 
 	got, err := dm.resolveComponentCpuAssignments(
-		"deployment-123",
 		"cyclictest_compose",
 		isolatedCPURequirement("rt-container"),
-		map[string][]int{},
+		dm.newAllocationLedger("deployment-123"),
 	)
 	if err != nil {
 		t.Fatalf("resolveComponentCpuAssignments() error = %v", err)
 	}
 
-	want := []CpuAssignment{{Requirement: "cyclictest_compose", Cpus: []int{1}}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("resolveComponentCpuAssignments() = %#v, want %#v", got, want)
+	want := []CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{1}}}
+	if !reflect.DeepEqual(got.Assignments, want) {
+		t.Fatalf("resolveComponentCpuAssignments() = %#v, want %#v", got.Assignments, want)
 	}
 }
 
@@ -102,10 +87,9 @@ func TestResolveComponentCpuAssignmentsRejectsSecondIsolatedRequirement(t *testi
 	*required.Cpu = append(*required.Cpu, (*required.Cpu)[0])
 
 	got, err := dm.resolveComponentCpuAssignments(
-		"deployment-123",
 		"cyclictest_compose",
 		required,
-		map[string][]int{},
+		dm.newAllocationLedger("deployment-123"),
 	)
 	if err == nil {
 		t.Fatalf("resolveComponentCpuAssignments() = %#v, want an error", got)
