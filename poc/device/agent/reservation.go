@@ -1,6 +1,7 @@
 package main
 
 import (
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,4 +121,30 @@ func allocatedCPUOwners(allocated map[int]string) map[int]OwnerRef {
 		owners[cpuIndex] = ParseOwnerRef(owner)
 	}
 	return owners
+}
+
+// mergeExistingAssignments overlays this reconcile pass's assignments onto the persisted
+// owners, so a component cannot be planned onto a CPU a sibling took earlier in the pass.
+// Indices outside isolatedSet are ignored. The result is a new map; taken is not modified.
+func mergeExistingAssignments(
+	taken map[int]OwnerRef,
+	deploymentID string,
+	existing map[string][]int,
+	isolatedSet map[int]struct{},
+) map[int]OwnerRef {
+	merged := make(map[int]OwnerRef, len(taken)+len(existing))
+	maps.Copy(merged, taken)
+
+	for requirement, cpuIndices := range existing {
+		holder := NewOwnerRef(deploymentID, requirement)
+
+		for _, cpuIndex := range cpuIndices {
+			if _, isolated := isolatedSet[cpuIndex]; !isolated {
+				continue
+			}
+			merged[cpuIndex] = holder
+		}
+	}
+
+	return merged
 }
