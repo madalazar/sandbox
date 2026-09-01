@@ -50,18 +50,24 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 		return nil, fmt.Errorf("component %q declares %d isolated CPU requirements; only one is supported", componentName, len(reqs))
 	}
 
-	taken := allocatedCPUOwners(dm.database.AllocatedCpus())
-	for requirement, cpuIndices := range existingAssignments {
-		holder := NewOwnerRef(deploymentID, requirement)
+	taken := mergeExistingAssignments(
+		allocatedCPUOwners(dm.database.AllocatedCpus()),
+		deploymentID,
+		existingAssignments,
+		dm.topologyLookup.IsolatedCPUSet,
+	)
 
-		for _, cpuIndex := range cpuIndices {
-			if _, exists := dm.topologyLookup.IsolatedCPUSet[cpuIndex]; !exists {
-				continue
-			}
-			taken[cpuIndex] = holder
-		}
-	}
+	return selectIsolatedCPUs(dm.topologyLookup.IsolatedCPUIndices, taken, owner, reqs)
+}
 
+// selectIsolatedCPUs picks the isolated CPU indices each requirement gets. It mutates
+// taken so requirements planned in the same call cannot select the same index twice.
+func selectIsolatedCPUs(
+	isolated []int,
+	taken map[int]OwnerRef,
+	owner OwnerRef,
+	reqs []sbi.Cpu,
+) ([]CpuAssignment, error) {
 	assignments := make([]CpuAssignment, 0, len(reqs))
 
 	for _, req := range reqs {
@@ -70,13 +76,12 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(deploymentID string,
 			requiredCores = int64(math.Ceil(float64(*req.Cores)))
 		}
 
-		candidates := dm.topologyLookup.IsolatedCPUIndices
-		if len(candidates) == 0 {
+		if len(isolated) == 0 {
 			return nil, fmt.Errorf("no isolated CPUs available for requirement %q", owner.Ref)
 		}
 
 		selected := make([]int, 0, requiredCores)
-		for _, cpu := range candidates {
+		for _, cpu := range isolated {
 			if !owner.CanTake(taken[cpu]) {
 				continue
 			}

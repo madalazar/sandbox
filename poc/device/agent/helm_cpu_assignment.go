@@ -84,16 +84,12 @@ func (dm *DeploymentManager) resolveComponentBalloonAnnotations(deploymentID str
 		allocatedIsolated[idx] = holder
 	}
 
-	for requirement, cpus := range inFlightAssignments {
-		holder := NewOwnerRef(deploymentID, requirement)
-
-		for _, idx := range cpus {
-			if _, exists := dm.topologyLookup.IsolatedCPUSet[idx]; !exists {
-				continue
-			}
-			allocatedIsolated[idx] = holder
-		}
-	}
+	allocatedIsolated = mergeExistingAssignments(
+		allocatedIsolated,
+		deploymentID,
+		inFlightAssignments,
+		dm.topologyLookup.IsolatedCPUSet,
+	)
 
 	if dm.policyReader == nil {
 		return annotations, currentAssignments, false, fmt.Errorf(
