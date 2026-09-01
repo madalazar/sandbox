@@ -339,15 +339,17 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
+) (err error) {
 	assignments := map[string][]int{}
 	cacheAssignments := map[string][]database.CacheAssignment{}
+	coordinator := dm.newHelmResourceCoordinator()
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
 			return fmt.Errorf("invalid helm component: %v", err)
 		}
+		owner := NewOwnerRef(deploymentId, helmComp.Name)
 		dm.log.Infow(
 			"deploying app component",
 			"appId",
@@ -407,6 +409,21 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		for requirementName, componentAssignmentList := range componentCacheAssignments {
 			cacheAssignments[requirementName] = append(cacheAssignments[requirementName], componentAssignmentList...)
+		}
+
+		// TODO: I don't line the resourceRollback field, need to rethink it a bit more
+		// I think we dont need to pass a logger to the ReesouceRollback, just printing might suffice. needs testing
+		var rollback *ResourceRollback
+		if len(componentAssignments) > 0 || len(componentCacheAssignments) > 0 {
+			if err := dm.database.SetAllocations(deploymentId, database.Allocations{
+				CPUs:   assignments,
+				Caches: cacheAssignments,
+			}); err != nil {
+				return fmt.Errorf("failed to persist allocations for helm component %s: %w", helmComp.Name, err)
+			}
+
+			rollback = NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
 		}
 
 		if hasNriAnnotations {
@@ -475,6 +492,9 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			// either we don't support multiple components per deployment
 			// or we support one update/deployment component
 			// had to comment it allow for core accumulation of cpu assignmetns
+			if rollback != nil {
+				rollback.Complete()
+			}
 			continue
 		}
 
@@ -499,13 +519,9 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
-	}
-
-	if err := dm.database.SetCpuAssignments(deploymentId, assignments); err != nil {
-		return fmt.Errorf("failed to persist cpu assignments for helm deployment: %w", err)
-	}
-	if err := dm.database.SetCacheAssignments(deploymentId, cacheAssignments); err != nil {
-		return fmt.Errorf("failed to persist cache assignments for helm deployment: %w", err)
+		if rollback != nil {
+			rollback.Complete()
+		}
 	}
 
 	return nil
@@ -515,9 +531,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
+) (err error) {
 	composeAssignments := map[string][]int{}
 	composeCacheAssignments := map[string][]database.CacheAssignment{}
+	coordinator := dm.newComposeResourceCoordinator()
 
 	if dm.pqosFactory == nil {
 		return fmt.Errorf("pqos command factory is not initialized")
@@ -528,6 +545,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if err != nil {
 			return fmt.Errorf("invalid compose component %v", err)
 		}
+		owner := NewOwnerRef(deploymentId, composeComp.Name)
 		dm.log.Infow(
 			"deploying app component",
 			"appId",
@@ -582,8 +600,15 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
 			}
 
+			// Merged before the cache write below, so no persisted state shows this
+			// component's ways without the cores they were planned against.
 			if len(assignments) > 0 {
 				componentCPUAssignments = toAssignmentMap(assignments)
+				for requirement, cpus := range componentCPUAssignments {
+					copied := make([]int, len(cpus))
+					copy(copied, cpus)
+					composeAssignments[requirement] = copied
+				}
 			}
 		}
 		//TODO: we should understand here if we have multiple cache assignments for the same component
@@ -603,10 +628,24 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			for requirementName, assignmentList := range componentCacheAssignments {
 				composeCacheAssignments[requirementName] = append(composeCacheAssignments[requirementName], assignmentList...)
 			}
+		}
 
-			// Persist class IDs as soon as they are reserved so retries stay deterministic.
-			if err := dm.database.SetCacheAssignments(deploymentId, composeCacheAssignments); err != nil {
-				return fmt.Errorf("failed to persist cache assignments for compose deployment: %w", err)
+		var rollback *ResourceRollback
+		if len(componentCPUAssignments) > 0 || len(componentCacheAssignments) > 0 {
+			if err := dm.database.SetAllocations(deploymentId, database.Allocations{
+				CPUs:   composeAssignments,
+				Caches: composeCacheAssignments,
+			}); err != nil {
+				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
+			}
+
+			rollback = NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
+
+			if len(componentCacheAssignments) > 0 {
+				if err := dm.applyComposeComponentPQoS(ctx, composeComp.Name, componentCacheAssignments[composeComp.Name], componentCPUAssignments, dm.pqosFactory); err != nil {
+					return fmt.Errorf("failed to apply compose pqos assignment for component %s: %w", composeComp.Name, err)
+				}
 			}
 		}
 
@@ -633,18 +672,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}(pinnedPath)
 			if err := rewriteComposeFile(composeFilename, pinnedPath, assignments); err != nil {
 				return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
-			}
-
-			for requirement, cpus := range componentCPUAssignments {
-				copied := make([]int, len(cpus))
-				copy(copied, cpus)
-				composeAssignments[requirement] = copied
-			}
-
-			// Persist before compose up/update so failed deploy attempts remain deterministic.
-			dm.log.Debugw("persist before update")
-			if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
-				return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
 			}
 
 			composeFilename = pinnedPath
@@ -698,23 +725,9 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			"projectName",
 			projectName,
 		)
-
-		if hasCacheAssignments {
-			if err := dm.applyComposeComponentPQoS(ctx, composeComp.Name, composeCacheAssignments[composeComp.Name], componentCPUAssignments, dm.pqosFactory); err != nil {
-				return fmt.Errorf("failed to apply compose pqos assignment for component %s: %w", composeComp.Name, err)
-			}
+		if rollback != nil {
+			rollback.Complete()
 		}
-	}
-
-	if len(dm.topologyLookup.IsolatedCPUIndices) > 0 {
-		dm.log.Infow("**about to set cpu assignement", "cpu indices", summarizeIsolatedCPUIndices(dm.topologyLookup.IsolatedCPUIndices))
-		if err := dm.database.SetCpuAssignments(deploymentId, composeAssignments); err != nil {
-			return fmt.Errorf("failed to persist compose cpu assignments: %w", err)
-		}
-	}
-
-	if err := dm.database.SetCacheAssignments(deploymentId, composeCacheAssignments); err != nil {
-		return fmt.Errorf("failed to persist cache assignments for compose deployment: %w", err)
 	}
 
 	dm.log.Infow("composed finished")
@@ -735,12 +748,8 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			deploymentId,
 		)
 
-		if err := dm.database.ClearCpuAssignments(deploymentId); err != nil {
-			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
-		}
-
-		if err := dm.database.ClearCacheAssignments(deploymentId); err != nil {
-			dm.log.Warnw("Failed to clear cache assignments during removal", "deploymentId", deploymentId, "err", err)
+		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
+			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
 		}
 
 		// Update desired state to REMOVED before deleting
@@ -851,12 +860,9 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			fmt.Sprintf("Removal completed with errors: %v", removeErr),
 		)
 	} else {
-		if err := dm.database.ClearCpuAssignments(deploymentId); err != nil {
-			dm.log.Warnw("Failed to clear CPU assignments during removal", "deploymentId", deploymentId, "err", err)
-		}
 		// TODO: check if we need to remove the clos partition + class here as well
-		if err := dm.database.ClearCacheAssignments(deploymentId); err != nil {
-			dm.log.Warnw("Failed to clear cache assignments during removal", "deploymentId", deploymentId, "err", err)
+		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
+			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
 		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
@@ -1050,6 +1056,64 @@ func summarizeIsolatedCPUIndices(cpuIndices []int) []int {
 	sort.Ints(sorted)
 
 	return sorted
+}
+
+// newComposeResourceCoordinator is the Compose runtime injection point. It provides
+// reservation rollback and PQoS release; topology planning will be added when the
+// Compose runtime bundle is migrated.
+func (dm *DeploymentManager) newComposeResourceCoordinator() *ResourceCoordinator {
+	return NewResourceCoordinator(
+		newDatabaseReservationStore(dm.database),
+		composePQoSReleaser{dm: dm},
+	)
+}
+
+// newHelmResourceCoordinator is the Kubernetes runtime injection point. It provides
+// reservation rollback and RDT release; balloon planning will be added when the
+// Kubernetes runtime bundle is migrated.
+func (dm *DeploymentManager) newHelmResourceCoordinator() *ResourceCoordinator {
+	return NewResourceCoordinator(
+		newDatabaseReservationStore(dm.database),
+		helmRDTReleaser{dm: dm},
+	)
+}
+
+type composePQoSReleaser struct {
+	dm *DeploymentManager
+}
+
+func (r composePQoSReleaser) ReleaseIsolation(ctx context.Context, reservation Reservation) error {
+	if r.dm.pqosFactory == nil {
+		return fmt.Errorf("pqos command factory is not initialized")
+	}
+
+	componentName := string(reservation.Owner.Ref)
+	return r.dm.resetComposeComponentPQoSMask(
+		ctx,
+		componentName,
+		map[string][]database.CacheAssignment{
+			componentName: toCacheAssignments(componentName, reservation.Caches),
+		},
+		map[string][]int{componentName: reservation.CPUs},
+		r.dm.pqosFactory,
+	)
+}
+
+type helmRDTReleaser struct {
+	dm *DeploymentManager
+}
+
+func (r helmRDTReleaser) ReleaseIsolation(ctx context.Context, reservation Reservation) error {
+	componentName := string(reservation.Owner.Ref)
+	r.dm.cleanupHelmComponentRDTOnRemoval(
+		ctx,
+		reservation.Owner.Deployment,
+		componentName,
+		map[string][]database.CacheAssignment{
+			componentName: toCacheAssignments(componentName, reservation.Caches),
+		},
+	)
+	return nil
 }
 
 // Helper function to convert parameters to environment variables

@@ -56,6 +56,31 @@ type OwnedCacheAssignment struct {
 	Assignment      CacheAssignment
 }
 
+// Allocations is one deployment's complete holdings, keyed by component name.
+// It is written as a whole: SetAllocations replaces, it does not merge.
+type Allocations struct {
+	CPUs   map[string][]int
+	Caches map[string][]CacheAssignment
+}
+
+func (a Allocations) clone() Allocations {
+	cloned := Allocations{
+		CPUs:   make(map[string][]int, len(a.CPUs)),
+		Caches: make(map[string][]CacheAssignment, len(a.Caches)),
+	}
+	for requirement, cpus := range a.CPUs {
+		copied := make([]int, len(cpus))
+		copy(copied, cpus)
+		cloned.CPUs[requirement] = copied
+	}
+	for requirement, assignmentList := range a.Caches {
+		copied := make([]CacheAssignment, len(assignmentList))
+		copy(copied, assignmentList)
+		cloned.Caches[requirement] = copied
+	}
+	return cloned
+}
+
 type DeploymentBundleRecord struct {
 	DeviceClientId string
 	Manifest       sbi.UnsignedAppStateManifest
@@ -66,13 +91,12 @@ type DeploymentBundleRecord struct {
 type DeploymentRecordChangeType string
 
 const (
-	DeploymentChangeTypeRecordAdded             DeploymentRecordChangeType = "RECORD-ADDED"
-	DeploymentChangeTypeRecordDeleted           DeploymentRecordChangeType = "RECORD-DELETED"
-	DeploymentChangeTypeComponentPhaseChanged   DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
-	DeploymentChangeTypeDesiredStateAdded       DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
-	DeploymentChangeTypeCurrentStateAdded       DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
-	DeploymentChangeTypeCpuAssignmentsChanged   DeploymentRecordChangeType = "CPU-ASSIGNMENTS-CHANGED"
-	DeploymentChangeTypeCacheAssignmentsChanged DeploymentRecordChangeType = "CACHE-ASSIGNMENTS-CHANGED"
+	DeploymentChangeTypeRecordAdded           DeploymentRecordChangeType = "RECORD-ADDED"
+	DeploymentChangeTypeRecordDeleted         DeploymentRecordChangeType = "RECORD-DELETED"
+	DeploymentChangeTypeComponentPhaseChanged DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
+	DeploymentChangeTypeDesiredStateAdded     DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
+	DeploymentChangeTypeCurrentStateAdded     DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
+	DeploymentChangeTypeAllocationsChanged    DeploymentRecordChangeType = "ALLOCATIONS-CHANGED"
 )
 
 type DeviceSettingsRecord struct {
@@ -105,11 +129,10 @@ type DatabaseIfc interface {
 	SetCurrentState(deploymentId string, state AppDeploymentState)
 	SetPhase(deploymentId, phase, message string)
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
-	SetCpuAssignments(deploymentId string, assignments map[string][]int) error
-	ClearCpuAssignments(deploymentId string) error
+	SetAllocations(deploymentId string, allocations Allocations) error
+	ClearComponentAllocations(deploymentId, componentName string) error
+	GetAllocations(deploymentId string) (Allocations, error)
 	AllocatedCpus() map[int]string
-	SetCacheAssignments(deploymentId string, assignments map[string][]CacheAssignment) error
-	ClearCacheAssignments(deploymentId string) error
 	AllocatedCaches() []OwnedCacheAssignment
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
@@ -500,7 +523,9 @@ func (db *Database) SetComponentStatus(
 	db.notify(deploymentId, record, DeploymentChangeTypeComponentPhaseChanged)
 }
 
-func (db *Database) SetCpuAssignments(deploymentId string, assignments map[string][]int) error {
+// SetAllocations replaces a deployment's CPU and cache holdings in a single write, so
+// there is no window in which the record shows cores without the ways planned against them.
+func (db *Database) SetAllocations(deploymentId string, allocations Allocations) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -509,25 +534,19 @@ func (db *Database) SetCpuAssignments(deploymentId string, assignments map[strin
 		return fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	if record.CpuAssignments == nil {
-		record.CpuAssignments = make(map[string][]int)
-	}
-
-	next := make(map[string][]int, len(assignments))
-	for requirement, cpus := range assignments {
-		copied := make([]int, len(cpus))
-		copy(copied, cpus)
-		next[requirement] = copied
-	}
-	record.CpuAssignments = next
+	next := allocations.clone()
+	record.CpuAssignments = next.CPUs
+	record.CacheAssignments = next.Caches
 	record.LastUpdated = time.Now()
-	db.notify(deploymentId, record, DeploymentChangeTypeCpuAssignmentsChanged)
+	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
 	db.TriggerDataPersist()
 
 	return nil
 }
 
-func (db *Database) SetCacheAssignments(deploymentId string, assignments map[string][]CacheAssignment) error {
+// ClearComponentAllocations drops one component's CPU and cache holdings under the same
+// lock that reads them, so a concurrent release of a sibling cannot reinstate it.
+func (db *Database) ClearComponentAllocations(deploymentId, componentName string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -536,56 +555,28 @@ func (db *Database) SetCacheAssignments(deploymentId string, assignments map[str
 		return fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	if record.CacheAssignments == nil {
-		record.CacheAssignments = make(map[string][]CacheAssignment)
-	}
-
-	next := make(map[string][]CacheAssignment, len(assignments))
-	for requirement, assignmentList := range assignments {
-		copied := make([]CacheAssignment, len(assignmentList))
-		copy(copied, assignmentList)
-		next[requirement] = copied
-	}
-	record.CacheAssignments = next
+	delete(record.CpuAssignments, componentName)
+	delete(record.CacheAssignments, componentName)
 	record.LastUpdated = time.Now()
-	db.notify(deploymentId, record, DeploymentChangeTypeCacheAssignmentsChanged)
+	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
 	db.TriggerDataPersist()
 
 	return nil
 }
 
-func (db *Database) ClearCpuAssignments(deploymentId string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+func (db *Database) GetAllocations(deploymentId string) (Allocations, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	record, exists := db.deployments[deploymentId]
 	if !exists {
-		return fmt.Errorf("deployment %s not found", deploymentId)
+		return Allocations{}, fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	record.CpuAssignments = make(map[string][]int)
-	record.LastUpdated = time.Now()
-	db.notify(deploymentId, record, DeploymentChangeTypeCpuAssignmentsChanged)
-	db.TriggerDataPersist()
-
-	return nil
-}
-
-func (db *Database) ClearCacheAssignments(deploymentId string) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	record, exists := db.deployments[deploymentId]
-	if !exists {
-		return fmt.Errorf("deployment %s not found", deploymentId)
-	}
-
-	record.CacheAssignments = make(map[string][]CacheAssignment)
-	record.LastUpdated = time.Now()
-	db.notify(deploymentId, record, DeploymentChangeTypeCacheAssignmentsChanged)
-	db.TriggerDataPersist()
-
-	return nil
+	return Allocations{
+		CPUs:   record.CpuAssignments,
+		Caches: record.CacheAssignments,
+	}.clone(), nil
 }
 
 func (db *Database) AllocatedCpus() map[int]string {
