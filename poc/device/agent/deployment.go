@@ -3,8 +3,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -645,18 +647,32 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, cleanup, err := configurator.Apply(cpuPlan, owner, composeFilename)
+		preparedComposeFilename, err := configurator.Apply(cpuPlan, owner, composeFilename)
 		if err != nil {
 			return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, err)
 		}
-		defer cleanup()
+		removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
+			strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
+			strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
+		defer func() {
+			if removeSourceComposeFile {
+				if removeErr := os.Remove(composeFilename); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					dm.log.Warnw("Failed to remove compose file", "path", composeFilename, "error", removeErr)
+				}
+			}
+			if preparedComposeFilename != composeFilename {
+				if removeErr := os.Remove(preparedComposeFilename); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					dm.log.Warnw("Failed to remove compose file", "path", preparedComposeFilename, "error", removeErr)
+				}
+			}
+		}()
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 		dm.log.Debugw("converted parameters to env vars", "envVars", envVars, "componentName", composeComp.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
+		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
@@ -669,9 +685,9 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				"deploymentId",
 				deploymentId,
 				"composeFilename",
-				composeFilename,
+				preparedComposeFilename,
 			)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
 		} else {
 			// New deployment
 			dm.log.Infow(
@@ -681,9 +697,9 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				"deploymentId",
 				deploymentId,
 				"composeFilename",
-				composeFilename,
+				preparedComposeFilename,
 			)
-			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
+			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
 		}
 
 		if err != nil {

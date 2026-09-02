@@ -19,15 +19,14 @@ func NewComposeConfigurator() *ComposeConfigurator {
 }
 
 // Apply writes the plan's cpuset into the source file's single service and returns the
-// prepared path. cleanup is non-nil whenever err is nil, including the no-rewrite case,
-// so callers can defer it without a nil check.
+// prepared path.
 func (c *ComposeConfigurator) Apply(
 	plan CpuPlan,
 	owner OwnerRef,
 	sourcePath string,
-) (preparedPath string, cleanup func(), err error) {
+) (preparedPath string, err error) {
 	if !plan.HasCpus() {
-		return sourcePath, func() {}, nil
+		return sourcePath, nil
 	}
 
 	file, err := os.CreateTemp("", fmt.Sprintf(
@@ -36,27 +35,28 @@ func (c *ComposeConfigurator) Apply(
 		sanitizeFileToken(owner.Deployment),
 	))
 	if err != nil {
-		return "", nil, fmt.Errorf("create pinned compose file: %w", err)
+		return "", fmt.Errorf("create pinned compose file: %w", err)
 	}
 
 	preparedPath = filepath.Clean(file.Name())
-	cleanup = func() {
-		if removeErr := os.Remove(preparedPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			fmt.Println("Failed to remove temporary pinned compose file:", preparedPath, removeErr)
-		}
-	}
 
 	if err := file.Close(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("close pinned compose file: %w", err)
+		removePreparedComposeFile(preparedPath)
+		return "", fmt.Errorf("close pinned compose file: %w", err)
 	}
 
 	if err := rewriteComposeFile(sourcePath, preparedPath, plan); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("rewrite compose yaml: %w", err)
+		removePreparedComposeFile(preparedPath)
+		return "", fmt.Errorf("rewrite compose yaml: %w", err)
 	}
 
-	return preparedPath, cleanup, nil
+	return preparedPath, nil
+}
+
+func removePreparedComposeFile(path string) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Println("Failed to remove temporary pinned compose file:", path, err)
+	}
 }
 
 func rewriteComposeFile(sourcePath string, targetPath string, plan CpuPlan) error {
