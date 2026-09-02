@@ -27,30 +27,35 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(
 	return selectIsolatedCPUs(dm.topologyLookup.IsolatedCPUIndices, ledger, requirements)
 }
 
-// selectIsolatedCPUs picks the isolated CPU indices each requirement gets and reserves
-// them in the ledger, so requirements planned in the same pass cannot select the same
-// index twice.
+// selectIsolatedCPUs picks the isolated CPU indices each requirement gets, then reserves
+// them all in one ledger call so a failure part-way through leaves nothing reserved.
 func selectIsolatedCPUs(
 	isolated []int,
 	ledger *AllocationLedger,
 	requirements NormalizedCPURequirements,
 ) (CpuPlan, error) {
+	if len(isolated) == 0 {
+		return CpuPlan{}, fmt.Errorf("no isolated CPUs available for component %q", requirements.Component)
+	}
+
 	plan := CpuPlan{Assignments: make([]CpuAssignment, 0, len(requirements.Isolated))}
+	claimed := map[int]bool{}
+	all := []int(nil)
 
 	for _, requirement := range requirements.Isolated {
-		if len(isolated) == 0 {
-			return CpuPlan{}, fmt.Errorf("no isolated CPUs available for component %q", requirements.Component)
-		}
-
 		selected := make([]int, 0, requirement.Cores)
-		for _, cpu := range isolated {
+		for i := 0; i < len(isolated) && len(selected) < requirement.Cores; i++ {
+			cpu := isolated[i]
+			// Nothing is reserved until the end, so the ledger cannot exclude what an
+			// earlier requirement in this call already took.
+			if claimed[cpu] {
+				continue
+			}
 			if !ledger.IsCpuAvailable(cpu, requirements.Component) {
 				continue
 			}
 			selected = append(selected, cpu)
-			if len(selected) == requirement.Cores {
-				break
-			}
+			claimed[cpu] = true
 		}
 
 		if len(selected) < requirement.Cores {
@@ -60,14 +65,15 @@ func selectIsolatedCPUs(
 			)
 		}
 
-		if err := ledger.ReserveCPUs(requirements.Component, selected); err != nil {
-			return CpuPlan{}, err
-		}
-
+		all = append(all, selected...)
 		plan.Assignments = append(plan.Assignments, CpuAssignment{
 			Component: requirements.Component,
 			Cpus:      selected,
 		})
+	}
+
+	if err := ledger.ReserveCPUs(requirements.Component, all); err != nil {
+		return CpuPlan{}, err
 	}
 
 	return plan, nil

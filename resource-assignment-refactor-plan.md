@@ -3041,3 +3041,116 @@ Applied to `OwnerRef.Ref` → `OwnerRef.Component` and `CPUAssignment.Requiremen
 the word, because those genuinely are the requirement entries.
 
 The sections above still say `RequirementRef`; read them as `ComponentRef`.
+
+## `AllocationSnapshot` discards non-isolated CPU owners - POSSIBLE BUG, LOW RISK TODAY
+
+Raised while reviewing the ledger commit. `NewAllocationSnapshot` takes
+`dm.database.AllocatedCpus()` and `dm.topologyLookup.IsolatedCPUSet` and keeps only the entries whose
+index is in the isolated set:
+
+```go
+if _, isolated := isolatedCPUs[cpuIndex]; !isolated {
+    continue
+}
+```
+
+This preserves today's behaviour exactly - the `mergeExistingAssignments` characterization in §13
+step 0 pins the same filter - so it is correct as a step 2 move. Two things about it are worth
+revisiting rather than absorbing.
+
+**1. The filter is in the wrong layer.** "Only isolated indices are allocatable" is a *planner*
+policy: it comes from the topology planner selecting from `IsolatedCPUIndices`, and the balloon
+planner already applies its own version of it through `PreferIsolCpus`. Putting it in the snapshot
+makes it a property of the device-wide *record* instead, so `AllocationSnapshot` no longer answers
+"what is persisted" but "what is persisted and allocatable under one planner's rules". The name says
+the first thing.
+
+This matters most when cache ways join the snapshot (§3.1): `Caches []CacheReservation` will be
+built by the same constructor, and the isolated-CPU filter sitting beside it reads as though it
+applies to ways too. The fix is to move the filter to the caller - the planner iterates
+`IsolatedCPUIndices` and asks `IsCpuAvailable` per candidate, so it never needs the snapshot to have
+pre-filtered anything.
+
+**2. Dropping an owner is not the same as it being free.** A dropped entry does not become
+"unknown", it becomes `OwnerRef{}` on lookup, and `CanTake` returns true for an empty holder. So a
+persisted non-isolated CPU reads as free rather than as taken. Today that is harmless for the reason
+noted when this was raised: every CPU the agent writes into `CpuAssignments` came from an isolated
+selection, so a persisted index that is *not* in `IsolatedCPUSet` should not exist. But that is an
+invariant nothing enforces, and there is one realistic way to break it - the isolated set is read
+from the topology artifact, so a kernel `isolcpus=` change or a regenerated artifact can shrink it
+while records written under the old set survive. In that case the ledger silently forgets those
+claims and can hand a running workload's core to a new deployment.
+
+If the filter stays, the honest form is to keep the owner and let the planner skip the index:
+
+```go
+owners[cpuIndex] = ParseOwnerRef(owner)   // no isolated-set test here
+```
+
+and treat an out-of-set persisted claim as blocked, not absent. Cheap either way; the point is that
+"free" and "not eligible" should not be the same value.
+
+## `selectIsolatedCPUs` can leave a partial reservation on the ledger - FIXED FOR CPU; OPEN FOR THE CACHE PLANNER
+
+**Status.** Raised and fixed 02/09/2026 for the CPU path by option 1 below. Option 2 is recorded
+because the cache planner will need it and option 1 does not reach that far.
+
+`AllocationLedger.ReserveCPUs` is deliberately all-or-nothing: it checks every index first and only
+then writes, so a failed call reserves nothing. `selectIsolatedCPUs` sat one level up and looped over
+`requirements.Isolated`, calling `ReserveCPUs` **inside** the loop and returning `CpuPlan{}` on any
+later failure:
+
+```go
+for _, requirement := range requirements.Isolated {
+    // ... select `requirement.Cores` free indices ...
+    if err := ledger.ReserveCPUs(requirements.Component, selected); err != nil {
+        return CpuPlan{}, err   // earlier iterations' reservations stay on the ledger
+    }
+    plan.Assignments = append(...)
+}
+```
+
+The caller discards the returned plan on error, but the **ledger is not discarded** - it is threaded
+through the rest of the component loop (§3.1). So with two isolated requirements where the first
+succeeds and the second fails on capacity, the first requirement's CPUs stay marked reserved in
+`ledger.reservedCPUs` for the remainder of the reconcile, held by a component that produced no plan
+and will not be committed. The next component in the same deployment then sees fewer free cores than
+actually exist and can fail spuriously; the cores come back on the following reconcile only because
+the ledger is rebuilt from scratch.
+
+Two reasons it could not fire, which is why it was latent rather than live:
+
+- `NormalizeCPURequirements` rejects more than one isolated requirement per component (§4.1), so the
+  loop never runs twice. There was exactly one `ReserveCPUs` call, and the all-or-nothing guarantee
+  inside it was the whole story.
+- The reservation is per component, and the same component is not planned twice in one pass.
+
+It becomes live the moment the one-isolated-requirement cap is relaxed (R1.14's open "multiple CLOS
+per component?" sits next to it), or if any planner makes more than one `Reserve*` call per
+component - which the cache planner will, since §6 reserves ways *and* a class slot for the same
+component. That is the more likely trigger: `PlanCache` reserving an interval and then failing at
+`ReserveClass` leaves the ways held with no plan.
+
+**Option 1 - select first, reserve once. Taken 02/09/2026.** `selectIsolatedCPUs` now gathers every
+index for every requirement and makes a single `ReserveCPUs` call after the loop, so the
+all-or-nothing guarantee stays where it already exists and no new ledger API is needed. Two smaller
+changes went with it:
+
+- The `len(isolated) == 0` guard moved above the loop; the candidate list does not change while the
+  loop runs, so testing it per requirement said the check depended on loop state when it does not.
+- The `len(selected) == requirement.Cores` break became the inner loop's own condition, so the loop
+  states its own stopping rule rather than breaking out of the middle.
+- Deferring the reservation means the ledger can no longer exclude what an earlier requirement in
+  the *same call* took, so the function keeps a local `claimed` set for that. It is the price of
+  option 1 and is inert while §4.1 caps isolated requirements at one.
+
+**Option 2 - give the ledger a per-component savepoint. Not taken; still needed.** `ledger.Rollback(ref)`,
+or a scope handle whose `Commit` is the only thing that keeps the pass's reservations, so any planner
+that fails part-way undoes its own claims. This is the general answer and the one the cache planner
+needs, because option 1 only works when every claim comes from one pool through one call - and
+`PlanCache` draws from two (ways and the class pool). It is also the point at which "the ledger is
+in-memory and discardable" stops being a sufficient excuse, because it is discardable per
+*deployment*, not per component.
+
+Decide option 2 before §13 step 3 extracts the cache algorithms, since that is where the second
+`Reserve*` call per component appears.
