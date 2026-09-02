@@ -15,6 +15,9 @@ type TopologyLookup struct {
 	IsolatedCPUSet     map[int]struct{}
 	L3Caches           []TopologyCacheInfo
 	PQoSInterface      string
+	// MaxClos is the most classes of service the device can hold. Zero means the
+	// artifact predates the field or resctrl exposed none.
+	MaxClos int
 }
 
 type TopologyCoreInfo struct {
@@ -36,6 +39,7 @@ type topologyArtifact struct {
 	SchemaVersion string              `json:"schemaVersion"`
 	GeneratedAt   string              `json:"generatedAt"`
 	PQoSInterface string              `json:"pqos_interface"`
+	MaxClos       int                 `json:"max_closids"`
 	Cores         []TopologyCoreInfo  `json:"cores"`
 	Caches        []TopologyCacheInfo `json:"caches"`
 }
@@ -161,6 +165,27 @@ func ReadPQoSInterfaceFromAgentArtifact(path string) (string, error) {
 	}
 }
 
+// ReadMaxClosFromAgentArtifact returns the most classes of service the device can hold.
+// A missing field yields 0, which callers must treat as "cache allocation is unavailable"
+// rather than substituting a guessed ceiling.
+func ReadMaxClosFromAgentArtifact(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read topology artifact %s: %w", path, err)
+	}
+
+	var artifact topologyArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return 0, fmt.Errorf("parse topology artifact %s: %w", path, err)
+	}
+
+	if artifact.MaxClos < 0 {
+		return 0, fmt.Errorf("parse topology artifact %s: invalid max_closids %d", path, artifact.MaxClos)
+	}
+
+	return artifact.MaxClos, nil
+}
+
 func LoadCPUIndicesFromTopologyArtifact(path string) (TopologyLookup, error) {
 	cores, err := ReadCoreInfoFromAgentArtifact(path)
 	if err != nil {
@@ -178,6 +203,12 @@ func LoadCPUIndicesFromTopologyArtifact(path string) (TopologyLookup, error) {
 		return TopologyLookup{}, err
 	}
 	lookup.PQoSInterface = pqosInterface
+
+	maxClos, err := ReadMaxClosFromAgentArtifact(path)
+	if err != nil {
+		return TopologyLookup{}, err
+	}
+	lookup.MaxClos = maxClos
 
 	return lookup, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -12,9 +11,8 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
-const (
-	maxPQoSClassID = 63
-)
+// pqosReservedClos is COS 0, the shared default class the agent does not allocate.
+const pqosReservedClos = 1
 
 func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 	deploymentID string,
@@ -125,7 +123,7 @@ func (dm *DeploymentManager) resolveComposeComponentCacheAssignments(
 	// 		"wayMask", wayMask)
 	// }
 
-	classID, err := nextAvailablePQoSClassID(persisted, inFlightAssignments)
+	classID, err := nextAvailablePQoSClassID(persisted, inFlightAssignments, dm.topologyLookup.MaxClos)
 	if err != nil {
 		return componentAssignments, false, fmt.Errorf("component %q class selection failed: %w", componentName, err)
 	}
@@ -452,10 +450,18 @@ func resolveComponentCPUListFromDB(
 	return formatCpuSet(collected)
 }
 
+// nextAvailablePQoSClassID picks the lowest free class of service. maxCLOS is the
+// device-wide pool from the topology artifact; resctrl groups draw from the same pool,
+// so persisted and in-flight holdings are counted together.
 func nextAvailablePQoSClassID(
 	persisted []database.OwnedCacheAssignment,
 	inFlight map[string][]database.CacheAssignment,
+	maxClos int,
 ) (int, error) {
+	if maxClos <= pqosReservedClos {
+		return 0, fmt.Errorf("topology artifact reports %d classes of service; cache allocation requires at least %d", maxClos, pqosReservedClos+1)
+	}
+
 	used := map[int]struct{}{}
 
 	for _, owned := range persisted {
@@ -472,18 +478,13 @@ func nextAvailablePQoSClassID(
 		}
 	}
 
-	candidateIDs := make([]int, 0, len(used))
-	for id := range used {
-		candidateIDs = append(candidateIDs, id)
-	}
-	sort.Ints(candidateIDs)
-
-	for classID := 1; classID <= maxPQoSClassID; classID++ {
+	maxClassID := maxClos - 1
+	for classID := pqosReservedClos; classID <= maxClassID; classID++ {
 		if _, exists := used[classID]; exists {
 			continue
 		}
 		return classID, nil
 	}
 
-	return 0, fmt.Errorf("no free pqos class id available in range 1-%d", maxPQoSClassID)
+	return 0, fmt.Errorf("no free pqos class id available in range %d-%d", pqosReservedClos, maxClassID)
 }

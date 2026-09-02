@@ -165,17 +165,24 @@ export_cpu_topology_agent_json() {
 	local ts
 	ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 	local base_json='{}'
-	local existing_cores='' existing_caches=''
+	local existing_cores='' existing_caches='' existing_closids=''
 	
 	local caches_json
 	caches_json="$(_build_caches_json)" || return 1
-	
+
+	local max_closids
+	max_closids="$(get_device_max_closids)" || max_closids=0
+	if (( max_closids == 0 )); then
+		echo "[WARN] resctrl exposes no num_closids; cache allocation will be rejected by the agent" >&2
+	fi
+
 	if [[ -s "$out_file" ]] && jq empty "$out_file" >/dev/null 2>&1; then
 		base_json="$(cat "$out_file")"
 		existing_cores="$(jq -c '.cores // []' <<<"$base_json")"
 		existing_caches="$(jq -c '.caches // []' <<<"$base_json")"
-		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" ]]; then
-			echo "[INFO] CPU topology cores and caches unchanged; skipping artifact update: $out_file"
+		existing_closids="$(jq -r '.max_closids // 0' <<<"$base_json")"
+		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" && "$existing_closids" == "$max_closids" ]]; then
+			echo "[INFO] CPU topology cores, caches and max_closids unchanged; skipping artifact update: $out_file"
 			return 0
 		fi
 	fi
@@ -184,7 +191,8 @@ export_cpu_topology_agent_json() {
 		--arg ts "$ts" \
 		--argjson cores "$cores_json" \
 		--argjson caches "$caches_json" \
-		'.schemaVersion //= "v1" | .generatedAt = $ts | .cores = $cores | .caches = $caches' \
+		--argjson max_closids "$max_closids" \
+		'.schemaVersion //= "v1" | .generatedAt = $ts | .cores = $cores | .caches = $caches | .max_closids = $max_closids' \
 		<<<"$base_json" > "$out_file"
 }
 
