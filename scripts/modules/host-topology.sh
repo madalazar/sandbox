@@ -54,8 +54,9 @@ _write_host_topology_json() {
 	local output_file="${1:-}"
 	local cores_json="${2:-}"
 	local caches_json="${3:-}"
-	if [[ -z "$output_file" || -z "$cores_json" || -z "$caches_json" ]]; then
-		echo "[ERROR] Host topology output path and JSON arrays are required" >&2
+	local max_clos="${4:-}"
+	if [[ -z "$output_file" || -z "$cores_json" || -z "$caches_json" || -z "$max_clos" ]]; then
+		echo "[ERROR] Host topology output path, JSON arrays and max_clos are required" >&2
 		return 1
 	fi
 
@@ -67,13 +68,14 @@ _write_host_topology_json() {
 	fi
 
 	local base_json='{}'
-	local existing_cores existing_caches
+	local existing_cores existing_caches existing_clos
 	if [[ -s "$output_file" ]] && jq empty "$output_file" >/dev/null 2>&1; then
 		base_json="$(<"$output_file")"
 		# generatedAt and other existing fields remain unchanged when topology matches.
 		existing_cores="$(jq -c '.cores // []' <<<"$base_json")" || return 1
 		existing_caches="$(jq -c '.caches // []' <<<"$base_json")" || return 1
-		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" ]]; then
+		existing_clos="$(jq -r '.max_clos // 0' <<<"$base_json")" || return 1
+		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" && "$existing_clos" == "$max_clos" ]]; then
 			echo "[INFO] Host topology unchanged; skipping artifact update: $output_file"
 			return 0
 		fi
@@ -92,7 +94,8 @@ _write_host_topology_json() {
 		--arg generated_at "$generated_at" \
 		--argjson cores "$cores_json" \
 		--argjson caches "$caches_json" \
-		'.schemaVersion //= "v1" | .generatedAt = $generated_at | .cores = $cores | .caches = $caches' \
+		--argjson max_clos "$max_clos" \
+		'.schemaVersion //= "v1" | .generatedAt = $generated_at | .cores = $cores | .caches = $caches | .max_clos = $max_clos' \
 		<<<"$base_json" > "$tmp_file"; then
 		rm -f "$tmp_file"
 		echo "[ERROR] Failed to serialize host topology JSON" >&2
@@ -116,6 +119,8 @@ generate_topology_artefact() {
 	local output_path="${1:-$HOST_TOPOLOGY_FILE}"
 	local cpu_tsv_file="${2:-$CPU_TOPOLOGY_CACHE_FILE}"
 	local cache_tsv_file="${3:-$CACHE_TOPOLOGY_CACHE_FILE}"
+	local max_clos
+	max_clos="$(get_device_max_closids)"
 
 	if ! command -v jq >/dev/null 2>&1; then
 		echo "[ERROR] jq is required to generate host topology JSON" >&2
@@ -125,7 +130,7 @@ generate_topology_artefact() {
 	local cores_json caches_json
 	if ! cores_json="$(_build_cpu_topology_json "$cpu_tsv_file")" ||
 		! caches_json="$(_build_cache_topology_json "$cache_tsv_file")" ||
-		! _write_host_topology_json "$output_path" "$cores_json" "$caches_json"; then
+		! _write_host_topology_json "$output_path" "$cores_json" "$caches_json" "$max_clos"; then
 		echo "[ERROR] Failed to generate host topology artifact: $output_path" >&2
 		return 1
 	fi
