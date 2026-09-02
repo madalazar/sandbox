@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -343,6 +341,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	assignments := map[string][]int{}
 	cacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newHelmResourceCoordinator()
+	configurator := NewHelmConfigurator()
+	planner := NewBalloonCPUPlanner(dm.policyReader, dm.topologyLookup.IsolatedCPUIndices)
 	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
 	// later components see.
 	ledger := dm.newAllocationLedger(deploymentId)
@@ -379,17 +379,17 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		cpuPlan, err := dm.resolveComponentBalloonCPUPlan(helmComp.Name, helmComp.RequiredResources, ledger)
+		cpuRequirements, err := NormalizeCPURequirements(ComponentRef(helmComp.Name), helmComp.RequiredResources)
+		if err != nil {
+			return fmt.Errorf("invalid CPU requirements for component %s: %w", helmComp.Name, err)
+		}
+
+		cpuPlan, err := planner.PlanCPU(CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
 
-		podAnnotations := map[string]string{}
-		if balloonName := cpuPlan.PlacementClass(); balloonName != "" {
-			podAnnotations[balloonPodAnnotationKey] = balloonName
-		}
 		componentAssignments := cpuPlan.AssignmentMap()
-		hasCPUAnnotations := len(podAnnotations) > 0
 
 		dm.log.Infow("calling resolveComponentCacheAnnotations", "appId", deploymentId)
 		cacheAnnotations, componentCacheAssignments, hasCacheAnnotations, err := dm.resolveComponentCacheAnnotations(
@@ -405,10 +405,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		dm.log.Infow("found the following cache annotations: ", "appId", deploymentId, "componentName", helmComp.Name, "cacheAnnotations", cacheAnnotations)
-		for key, value := range cacheAnnotations {
-			podAnnotations[key] = value
-		}
-		hasNriAnnotations := hasCPUAnnotations || hasCacheAnnotations
 
 		for requirementName, cpus := range componentAssignments {
 			copied := make([]int, len(cpus))
@@ -435,31 +431,19 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			defer rollback.ReleaseOnFailure(&err)
 		}
 
-		if hasNriAnnotations {
-			componentCPUSet := cpuPlan.CpuSet()
-			overrideFile, err := dm.generateNriValuesOverrideFile(deploymentId, helmComp.Name, podAnnotations, componentCPUSet)
-			if err != nil {
-				return fmt.Errorf("failed to generate NRI values override file for component %s: %w", helmComp.Name, err)
-			}
-			defer func() {
-				if removeErr := os.Remove(overrideFile); removeErr != nil {
-					dm.log.Warnw("Failed to remove temporary NRI values override file", "path", overrideFile, "err", removeErr)
-				}
-			}()
-
-			dm.logNriAnnotationPlan(helmComp.Name, releaseName, podAnnotations)
-			podAnnotationsValues := dm.mergePodAnnotations(values["podAnnotations"], podAnnotations)
-			values["podAnnotations"] = podAnnotationsValues
-			if strings.TrimSpace(componentCPUSet) != "" {
-				values[helmComp.Name] = dm.mergeComponentCPUSet(values[helmComp.Name], componentCPUSet)
-			}
-			dm.log.Infow("Applied NRI balloon annotations to Helm values", "componentName", helmComp.Name,
-				"releaseName", releaseName, "overrideFile", overrideFile, "podAnnotations", podAnnotationsValues,
-				"componentCPUSet", componentCPUSet)
-		} else {
-			dm.log.Infow("No NRI balloon annotations resolved for component", "componentName", helmComp.Name,
-				"releaseName", releaseName)
+		values, err = configurator.Apply(cpuPlan, owner, values)
+		if err != nil {
+			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", helmComp.Name, err)
 		}
+
+		// Cache annotations are merged here until the cache half moves behind the configurator.
+		if hasCacheAnnotations {
+			values["podAnnotations"] = configurator.MergePodAnnotations(values["podAnnotations"], cacheAnnotations)
+		}
+
+		dm.log.Infow("Applied resource annotations to Helm values", "componentName", helmComp.Name,
+			"releaseName", releaseName, "podAnnotations", values["podAnnotations"],
+			"componentCPUSet", cpuPlan.CpuSet())
 
 		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
@@ -544,6 +528,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	composeAssignments := map[string][]int{}
 	composeCacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newComposeResourceCoordinator()
+	configurator := NewComposeConfigurator()
+	planner := NewTopologyCPUPlanner(dm.topologyLookup.IsolatedCPUIndices)
 	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
 	// later components see.
 	ledger := dm.newAllocationLedger(deploymentId)
@@ -600,7 +586,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		componentCPUAssignments := map[string][]int{}
 
-		cpuPlan, err := dm.resolveComponentCpuAssignments(composeComp.Name, composeComp.RequiredResources, ledger)
+		cpuRequirements, err := NormalizeCPURequirements(ComponentRef(composeComp.Name), composeComp.RequiredResources)
+		if err != nil {
+			return fmt.Errorf("invalid CPU requirements for component %s: %w", composeComp.Name, err)
+		}
+
+		cpuPlan, err := planner.PlanCPU(CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
 		if err != nil {
 			return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
 		}
@@ -654,33 +645,11 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		if cpuPlan.HasCpus() {
-			pinnedFile, err := os.CreateTemp(
-				"",
-				fmt.Sprintf(
-					"compose-pinned-%s-%s-*.yaml",
-					sanitizeFileToken(composeComp.Name),
-					sanitizeFileToken(deploymentId),
-				),
-			)
-			if err != nil {
-				return fmt.Errorf("failed to create temporary pinned compose file for component %s: %w", composeComp.Name, err)
-			}
-			pinnedPath := filepath.Clean(pinnedFile.Name())
-			if closeErr := pinnedFile.Close(); closeErr != nil {
-				return fmt.Errorf("failed to close temporary pinned compose file for component %s: %w", composeComp.Name, closeErr)
-			}
-			defer func(path string) {
-				if removeErr := os.Remove(path); removeErr != nil {
-					dm.log.Warnw("Failed to remove temporary pinned compose file", "path", path, "err", removeErr)
-				}
-			}(pinnedPath)
-			if err := rewriteComposeFile(composeFilename, pinnedPath, cpuPlan); err != nil {
-				return fmt.Errorf("compose yaml rewrite failed for component %s: %w", composeComp.Name, err)
-			}
-
-			composeFilename = pinnedPath
+		composeFilename, cleanup, err := configurator.Apply(cpuPlan, owner, composeFilename)
+		if err != nil {
+			return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, err)
 		}
+		defer cleanup()
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
