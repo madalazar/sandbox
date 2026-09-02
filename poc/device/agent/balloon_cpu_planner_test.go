@@ -15,10 +15,10 @@ func (reader staticBalloonPolicyReader) Parsed() *ParsedBalloonPolicy {
 	return reader.policy
 }
 
-func TestResolveComponentBalloonCPUPlan(t *testing.T) {
-	dm := newCPUAssignmentTestDeploymentManager(t)
+func newTestBalloonCPUPlanner() BalloonCPUPlanner {
 	preferIsolated := true
-	dm.policyReader = staticBalloonPolicyReader{
+
+	return NewBalloonCPUPlanner(staticBalloonPolicyReader{
 		policy: &ParsedBalloonPolicy{
 			Name:      "default",
 			Namespace: "kube-system",
@@ -35,9 +35,13 @@ func TestResolveComponentBalloonCPUPlan(t *testing.T) {
 				},
 			},
 		},
-	}
+	}, testIsolatedCPUIndices)
+}
 
-	ledger := dm.newAllocationLedger("deployment-123")
+func TestBalloonCPUPlannerPlanCPU(t *testing.T) {
+	planner := newTestBalloonCPUPlanner()
+	ledger := newCPUPlanningTestLedger("deployment-123")
+
 	tests := []struct {
 		name              string
 		componentName     string
@@ -69,17 +73,49 @@ func TestResolveComponentBalloonCPUPlan(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			plan, err := dm.resolveComponentBalloonCPUPlan(
-				test.componentName,
-				test.requiredResources,
-				ledger,
+			plan, err := planner.PlanCPU(
+				newCPUPlanningRequest(t, test.componentName, test.requiredResources, ledger),
 			)
 			if err != nil {
-				t.Fatalf("resolveComponentBalloonCPUPlan() error = %v", err)
+				t.Fatalf("PlanCPU() error = %v", err)
 			}
 			if !reflect.DeepEqual(plan.Assignments, test.want) {
 				t.Errorf("assignments = %#v, want %#v", plan.Assignments, test.want)
 			}
 		})
+	}
+}
+
+func TestBalloonCPUPlannerFailsWhenEveryBalloonIsOccupied(t *testing.T) {
+	planner := newTestBalloonCPUPlanner()
+	ledger := newCPUPlanningTestLedger("deployment-123")
+
+	for _, component := range []string{"component-a", "component-b"} {
+		if _, err := planner.PlanCPU(
+			newCPUPlanningRequest(t, component, isolatedCPURequirement(component), ledger),
+		); err != nil {
+			t.Fatalf("PlanCPU(%s) error = %v", component, err)
+		}
+	}
+
+	plan, err := planner.PlanCPU(
+		newCPUPlanningRequest(t, "component-c", isolatedCPURequirement("component-c"), ledger),
+	)
+	if err == nil {
+		t.Fatalf("PlanCPU() = %#v, want an error", plan)
+	}
+}
+
+func TestBalloonCPUPlannerRequiresAPolicySnapshot(t *testing.T) {
+	planner := NewBalloonCPUPlanner(staticBalloonPolicyReader{}, testIsolatedCPUIndices)
+
+	plan, err := planner.PlanCPU(newCPUPlanningRequest(
+		t,
+		"cyclictest",
+		isolatedCPURequirement("cyclictest"),
+		newCPUPlanningTestLedger("deployment-123"),
+	))
+	if err == nil {
+		t.Fatalf("PlanCPU() = %#v, want an error", plan)
 	}
 }

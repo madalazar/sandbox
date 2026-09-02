@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
@@ -20,132 +19,16 @@ func (dm *DeploymentManager) resolveComponentBalloonCPUPlan(
 	requiredResources *sbi.RequiredResources,
 	ledger *AllocationLedger,
 ) (CpuPlan, error) {
-	ref := ComponentRef(componentName)
-
-	requirements, err := NormalizeCPURequirements(ref, requiredResources)
+	requirements, err := NormalizeCPURequirements(ComponentRef(componentName), requiredResources)
 	if err != nil {
 		return CpuPlan{}, err
 	}
 
-	dm.log.Debugw("Resolved component CPU requirements from deployment profile for NRI processing",
-		"componentName", componentName,
-		"hasRequiredResources", requiredResources != nil,
-		"sharedRequirementCount", len(requirements.Shared),
-		"isolatedRequirementCount", len(requirements.Isolated),
-	)
-
-	if !requirements.HasIsolatedCores() || len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
-		dm.log.Infow(
-			"Component uses shared cores only; skipping NRI annotations and isolated CPU allocations",
-			"componentName", componentName,
-		)
-		return CpuPlan{}, nil
-	}
-
-	requiredIsolatedCores := requirements.CountIsolatedCores()
-	if requiredIsolatedCores > 1 {
-		return CpuPlan{}, fmt.Errorf(
-			"component %q requests %d isolated cores; only workloads requiring 1 isolated core are supported",
-			componentName, requiredIsolatedCores,
-		)
-	}
-
-	if dm.policyReader == nil {
-		return CpuPlan{}, fmt.Errorf(
-			"cannot resolve isolated CPU assignment for component %q: policy reader not configured",
-			componentName,
-		)
-	}
-
-	policy := dm.policyReader.Parsed()
-	if policy == nil {
-		return CpuPlan{}, fmt.Errorf(
-			"cannot resolve isolated CPU assignment for component %q: no BalloonsPolicy snapshot available",
-			componentName,
-		)
-	}
-
-	selectedBalloonName := ""
-	selectedBalloonCPUs := []int(nil)
-
-	for _, balloon := range policy.BalloonTypes {
-		if balloon.PreferIsolCpus != nil && !*balloon.PreferIsolCpus {
-			continue
-		}
-
-		refs := uniqueSortedCPURefs(balloon.PreferCloseToDevices)
-		if len(refs) < requiredIsolatedCores {
-			continue
-		}
-
-		occupied := false
-		for _, idx := range refs {
-			if !ledger.IsCpuAvailable(idx, ref) {
-				occupied = true
-				break
-			}
-		}
-		if occupied {
-			continue
-		}
-
-		if len(selectedBalloonCPUs) == 0 || len(refs) < len(selectedBalloonCPUs) {
-			selectedBalloonName = balloon.Name
-			selectedBalloonCPUs = refs
-		}
-	}
-
-	if selectedBalloonName == "" || len(selectedBalloonCPUs) == 0 {
-		return CpuPlan{}, fmt.Errorf(
-			"no free isolated balloon found for component %q (requiredIsolatedCores=%d)",
-			componentName, requiredIsolatedCores,
-		)
-	}
-
-	if err := ledger.ReserveCPUs(ref, selectedBalloonCPUs); err != nil {
-		return CpuPlan{}, err
-	}
-
-	dm.log.Infow("NRI isolated balloon selected",
-		"componentName", componentName,
-		"balloonName", selectedBalloonName,
-		"selectedCpuIndices", selectedBalloonCPUs,
-	)
-
-	return CpuPlan{Assignments: []CpuAssignment{{
-		Component: ref,
-		Cpus:      selectedBalloonCPUs,
-		Placement: CpuPlacement{Class: selectedBalloonName},
-	}}}, nil
-}
-
-func uniqueSortedCPURefs(paths []string) []int {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	seen := map[int]struct{}{}
-	for _, path := range paths {
-		matches := cpuIndexRegex.FindAllStringSubmatch(path, -1)
-		for _, m := range matches {
-			if len(m) != 2 {
-				continue
-			}
-			idx, err := strconv.Atoi(m[1])
-			if err != nil {
-				continue
-			}
-			seen[idx] = struct{}{}
-		}
-	}
-
-	refs := make([]int, 0, len(seen))
-	for idx := range seen {
-		refs = append(refs, idx)
-	}
-	sort.Ints(refs)
-
-	return refs
+	planner := NewBalloonCPUPlanner(dm.policyReader, dm.topologyLookup.IsolatedCPUIndices)
+	return planner.PlanCPU(CPUPlanningRequest{
+		Requirements: requirements,
+		Ledger:       ledger,
+	})
 }
 
 func (dm *DeploymentManager) mergePodAnnotations(existing any, annotations map[string]string) map[string]any {

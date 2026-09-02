@@ -20,63 +20,10 @@ func (dm *DeploymentManager) resolveComponentCpuAssignments(
 		return CpuPlan{}, err
 	}
 
-	if !requirements.HasIsolatedCores() || len(dm.topologyLookup.IsolatedCPUIndices) == 0 {
-		return CpuPlan{}, nil
-	}
-
-	return selectIsolatedCPUs(dm.topologyLookup.IsolatedCPUIndices, ledger, requirements)
-}
-
-// selectIsolatedCPUs picks the isolated CPU indices each requirement gets, then reserves
-// them all in one ledger call so a failure part-way through leaves nothing reserved.
-func selectIsolatedCPUs(
-	isolated []int,
-	ledger *AllocationLedger,
-	requirements NormalizedCPURequirements,
-) (CpuPlan, error) {
-	if len(isolated) == 0 {
-		return CpuPlan{}, fmt.Errorf("no isolated CPUs available for component %q", requirements.Component)
-	}
-
-	plan := CpuPlan{Assignments: make([]CpuAssignment, 0, len(requirements.Isolated))}
-	claimed := map[int]bool{}
-	all := []int(nil)
-
-	for _, requirement := range requirements.Isolated {
-		selected := make([]int, 0, requirement.Cores)
-		for i := 0; i < len(isolated) && len(selected) < requirement.Cores; i++ {
-			cpu := isolated[i]
-			// Nothing is reserved until the end, so the ledger cannot exclude what an
-			// earlier requirement in this call already took.
-			if claimed[cpu] {
-				continue
-			}
-			if !ledger.IsCpuAvailable(cpu, requirements.Component) {
-				continue
-			}
-			selected = append(selected, cpu)
-			claimed[cpu] = true
-		}
-
-		if len(selected) < requirement.Cores {
-			return CpuPlan{}, fmt.Errorf(
-				"no free isolated CPUs available for component %q (required=%d)",
-				requirements.Component, requirement.Cores,
-			)
-		}
-
-		all = append(all, selected...)
-		plan.Assignments = append(plan.Assignments, CpuAssignment{
-			Component: requirements.Component,
-			Cpus:      selected,
-		})
-	}
-
-	if err := ledger.ReserveCPUs(requirements.Component, all); err != nil {
-		return CpuPlan{}, err
-	}
-
-	return plan, nil
+	return NewTopologyCPUPlanner(dm.topologyLookup.IsolatedCPUIndices).PlanCPU(CPUPlanningRequest{
+		Requirements: requirements,
+		Ledger:       ledger,
+	})
 }
 
 func rewriteComposeFile(sourcePath string, targetPath string, plan CpuPlan) error {
