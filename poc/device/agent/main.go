@@ -287,7 +287,15 @@ func (a *Agent) Start() error {
 		time.Sleep(5 * time.Second)
 	}
 
-	// 3. Start all components
+	// 3. Load host topology artifact
+	topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
+	topologyLookup, topologyErr := types.LoadHostTopology(topologyArtifactPath)
+	if topologyErr != nil {
+		a.log.Errorw("unable to load host topology artifact", topologyArtifactPath, topologyErr)
+	}
+	a.log.Infow("host topology loaded, ", "path", topologyArtifactPath, "isolatedCoreCount", topologyLookup)
+
+	// 4. Start all components
 	a.statusReporter.Start()
 	a.deployer.Start()
 	a.monitor.Start()
