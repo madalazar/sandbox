@@ -1,10 +1,6 @@
-package main
+package resource
 
 import (
-	"sort"
-	"strconv"
-	"strings"
-
 	"github.com/margo/sandbox/poc/device/agent/database"
 )
 
@@ -30,16 +26,7 @@ func (r Reservation) HasCache() bool {
 }
 
 func (r Reservation) CPUSet() string {
-	if len(r.CPUs) == 0 {
-		return ""
-	}
-	cpus := append([]int(nil), r.CPUs...)
-	sort.Ints(cpus)
-	parts := make([]string, 0, len(cpus))
-	for _, cpu := range cpus {
-		parts = append(parts, strconv.Itoa(cpu))
-	}
-	return strings.Join(parts, ",")
+	return FormatCpuSet(r.CPUs)
 }
 
 // ReservationStore is the persistence boundary used by ResourceCoordinator to
@@ -49,19 +36,19 @@ type ReservationStore interface {
 	ClearComponent(owner OwnerRef) error
 }
 
-// databaseReservationStore adapts database.DatabaseIfc to ReservationStore. It
+// DatabaseReservationStore adapts database.DatabaseIfc to ReservationStore. It
 // maps deployment allocation records into domain Reservation values and clears a
 // component's CPU and cache holdings through one atomic SetAllocations write while
 // preserving successful sibling components.
-type databaseReservationStore struct {
+type DatabaseReservationStore struct {
 	db database.DatabaseIfc
 }
 
-func newDatabaseReservationStore(db database.DatabaseIfc) ReservationStore {
-	return &databaseReservationStore{db: db}
+func NewDatabaseReservationStore(db database.DatabaseIfc) ReservationStore {
+	return &DatabaseReservationStore{db: db}
 }
 
-func (s *databaseReservationStore) LoadReservation(owner OwnerRef) (Reservation, bool, error) {
+func (s *DatabaseReservationStore) LoadReservation(owner OwnerRef) (Reservation, bool, error) {
 	allocations, err := s.db.GetAllocations(owner.Deployment)
 	if err != nil {
 		return Reservation{}, false, err
@@ -92,13 +79,13 @@ func (s *databaseReservationStore) LoadReservation(owner OwnerRef) (Reservation,
 	return reservation, true, nil
 }
 
-func (s *databaseReservationStore) ClearComponent(owner OwnerRef) error {
+func (s *DatabaseReservationStore) ClearComponent(owner OwnerRef) error {
 	return s.db.ClearComponentAllocations(owner.Deployment, string(owner.Component))
 }
 
-// toCacheAssignments maps domain cache reservations back to the persisted form the
+// ToCacheAssignments maps domain cache reservations back to the persisted form the
 // PQoS and RDT helpers still consume.
-func toCacheAssignments(componentName string, reservations []CacheReservation) []database.CacheAssignment {
+func ToCacheAssignments(componentName string, reservations []CacheReservation) []database.CacheAssignment {
 	assignments := make([]database.CacheAssignment, 0, len(reservations))
 	for _, reservation := range reservations {
 		assignments = append(assignments, database.CacheAssignment{
@@ -113,8 +100,8 @@ func toCacheAssignments(componentName string, reservations []CacheReservation) [
 	return assignments
 }
 
-// allocatedCPUOwners converts database.AllocatedCpus()'s owner strings into domain OwnerRef values.
-func allocatedCPUOwners(allocated map[int]string) map[int]OwnerRef {
+// AllocatedCPUOwners converts database.AllocatedCpus()'s owner strings into domain OwnerRef values.
+func AllocatedCPUOwners(allocated map[int]string) map[int]OwnerRef {
 	owners := make(map[int]OwnerRef, len(allocated))
 	for cpuIndex, owner := range allocated {
 		owners[cpuIndex] = ParseOwnerRef(owner)

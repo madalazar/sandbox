@@ -1,9 +1,10 @@
-package main
+package planner
 
 import (
 	"reflect"
 	"testing"
 
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
@@ -15,13 +16,13 @@ func TestTopologyCPUPlannerPlanCPU(t *testing.T) {
 		name              string
 		componentName     string
 		requiredResources *sbi.RequiredResources
-		want              []CpuAssignment
+		want              []resource.CpuAssignment
 	}{
 		{
 			name:              "cyclictest gets first isolated CPU",
 			componentName:     "cyclictest_compose",
 			requiredResources: isolatedCPURequirement("cyclictest_compose"),
-			want: []CpuAssignment{
+			want: []resource.CpuAssignment{
 				{Component: "cyclictest_compose", Cpus: []int{1}},
 			},
 		},
@@ -34,7 +35,7 @@ func TestTopologyCPUPlannerPlanCPU(t *testing.T) {
 			name:              "caterpillar gets remaining isolated CPU",
 			componentName:     "caterpillar_compose",
 			requiredResources: isolatedCPURequirement("caterpillar_compose"),
-			want: []CpuAssignment{
+			want: []resource.CpuAssignment{
 				{Component: "caterpillar_compose", Cpus: []int{3}},
 			},
 		},
@@ -70,7 +71,7 @@ func TestTopologyCPUPlannerIgnoresRequirementName(t *testing.T) {
 		t.Fatalf("PlanCPU() error = %v", err)
 	}
 
-	want := []CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{1}}}
+	want := []resource.CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{1}}}
 	if !reflect.DeepEqual(got.Assignments, want) {
 		t.Fatalf("PlanCPU() = %#v, want %#v", got.Assignments, want)
 	}
@@ -99,7 +100,7 @@ func TestTopologyCPUPlannerFailsWhenIsolatedCPUsAreExhausted(t *testing.T) {
 // A component keeps the CPUs it already holds when it is planned again.
 func TestTopologyCPUPlannerReusesOwnPersistedCPUs(t *testing.T) {
 	planner := NewTopologyCPUPlanner(testIsolatedCPUIndices)
-	snapshot := NewAllocationSnapshot(
+	snapshot := resource.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/cyclictest_compose"},
 		map[int]struct{}{1: {}, 3: {}},
 	)
@@ -108,13 +109,13 @@ func TestTopologyCPUPlannerReusesOwnPersistedCPUs(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCPURequirement("cyclictest_compose"),
-		NewAllocationLedger(snapshot, "deployment-123"),
+		resource.NewAllocationLedger(snapshot, "deployment-123"),
 	))
 	if err != nil {
 		t.Fatalf("PlanCPU() error = %v", err)
 	}
 
-	want := []CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{1}}}
+	want := []resource.CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{1}}}
 	if !reflect.DeepEqual(got.Assignments, want) {
 		t.Fatalf("PlanCPU() = %#v, want %#v", got.Assignments, want)
 	}
@@ -123,7 +124,7 @@ func TestTopologyCPUPlannerReusesOwnPersistedCPUs(t *testing.T) {
 // A sibling's persisted claim blocks, unlike the component's own.
 func TestTopologyCPUPlannerSkipsSiblingPersistedCPUs(t *testing.T) {
 	planner := NewTopologyCPUPlanner(testIsolatedCPUIndices)
-	snapshot := NewAllocationSnapshot(
+	snapshot := resource.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/caterpillar_compose"},
 		map[int]struct{}{1: {}, 3: {}},
 	)
@@ -132,13 +133,13 @@ func TestTopologyCPUPlannerSkipsSiblingPersistedCPUs(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCPURequirement("cyclictest_compose"),
-		NewAllocationLedger(snapshot, "deployment-123"),
+		resource.NewAllocationLedger(snapshot, "deployment-123"),
 	))
 	if err != nil {
 		t.Fatalf("PlanCPU() error = %v", err)
 	}
 
-	want := []CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{3}}}
+	want := []resource.CpuAssignment{{Component: "cyclictest_compose", Cpus: []int{3}}}
 	if !reflect.DeepEqual(got.Assignments, want) {
 		t.Fatalf("PlanCPU() = %#v, want %#v", got.Assignments, want)
 	}

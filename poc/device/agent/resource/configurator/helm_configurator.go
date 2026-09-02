@@ -1,12 +1,14 @@
-package main
+package configurator
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/margo/sandbox/poc/device/agent/resource"
 )
 
-// balloonPodAnnotationKey places a pod into an NRI balloon.
-const balloonPodAnnotationKey = "balloon.balloons.resource-policy.nri.io/pod"
+// BalloonPodAnnotationKey places a pod into an NRI balloon.
+const BalloonPodAnnotationKey = "balloon.balloons.resource-policy.nri.io/pod"
 
 // HelmConfigurator applies a CPU plan to a chart's values map. It produces no artifact,
 // so it has no cleanup counterpart to the Compose path.
@@ -19,8 +21,8 @@ func NewHelmConfigurator() *HelmConfigurator {
 // Apply merges the plan's balloon placement and cpuset into values, preserving unrelated
 // user-supplied entries.
 func (c *HelmConfigurator) Apply(
-	plan CpuPlan,
-	owner OwnerRef,
+	plan resource.CpuPlan,
+	owner resource.OwnerRef,
 	values map[string]any,
 ) (map[string]any, error) {
 	if values == nil {
@@ -30,7 +32,7 @@ func (c *HelmConfigurator) Apply(
 	if balloon := plan.PlacementClass(); balloon != "" {
 		values["podAnnotations"] = c.MergePodAnnotations(
 			values["podAnnotations"],
-			map[string]string{balloonPodAnnotationKey: balloon},
+			map[string]string{BalloonPodAnnotationKey: balloon},
 		)
 	}
 

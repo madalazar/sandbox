@@ -1,4 +1,4 @@
-package main
+package resource
 
 import (
 	"context"
@@ -8,21 +8,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// cacheIsolationReleaser resets the runtime cache isolation held by a committed
+// CacheIsolationReleaser resets the runtime cache isolation held by a committed
 // reservation. It stands in for CacheIsolationController.Release until the PQoS and
 // RDT controllers move into the coordinator.
-type cacheIsolationReleaser interface {
+type CacheIsolationReleaser interface {
 	ReleaseIsolation(ctx context.Context, reservation Reservation) error
 }
 
 type ResourceCoordinator struct {
 	store     ReservationStore
-	isolation cacheIsolationReleaser
+	isolation CacheIsolationReleaser
 }
 
 func NewResourceCoordinator(
 	store ReservationStore,
-	isolation cacheIsolationReleaser,
+	isolation CacheIsolationReleaser,
 ) *ResourceCoordinator {
 	return &ResourceCoordinator{store: store, isolation: isolation}
 }
@@ -51,7 +51,7 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner OwnerRef) error
 	return errors.Join(errs...)
 }
 
-func releaseOnFailure(
+func ReleaseOnFailure(
 	ctx context.Context,
 	coordinator *ResourceCoordinator,
 	owner OwnerRef,
@@ -93,7 +93,7 @@ func NewResourceRollback(
 
 func (r *ResourceRollback) ReleaseOnFailure(err *error) {
 	if r.active && err != nil && *err != nil {
-		releaseOnFailure(r.ctx, r.coordinator, r.owner, r.log)
+		ReleaseOnFailure(r.ctx, r.coordinator, r.owner, r.log)
 	}
 }
 

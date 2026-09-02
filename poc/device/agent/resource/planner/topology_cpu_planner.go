@@ -1,9 +1,11 @@
-package main
+package planner
 
-import "fmt"
+import (
+	"fmt"
 
-// Nothing consumes CPUPlanner yet; remove once the runtime factory assigns this into
-// Runtime.CPUPlanner and the compiler checks it there.
+	"github.com/margo/sandbox/poc/device/agent/resource"
+)
+
 var _ CPUPlanner = TopologyCPUPlanner{}
 
 // TopologyCPUPlanner pins a component directly onto isolated CPU indices taken from
@@ -18,14 +20,14 @@ func NewTopologyCPUPlanner(isolated []int) TopologyCPUPlanner {
 
 // PlanCPU picks the isolated CPU indices each requirement gets, then reserves them all
 // in one ledger call so a failure part-way through leaves nothing reserved.
-func (p TopologyCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) {
+func (p TopologyCPUPlanner) PlanCPU(request CPUPlanningRequest) (resource.CpuPlan, error) {
 	requirements := request.Requirements
 
 	if !requirements.HasIsolatedCores() || len(p.isolated) == 0 {
-		return CpuPlan{}, nil
+		return resource.CpuPlan{}, nil
 	}
 
-	plan := CpuPlan{Assignments: make([]CpuAssignment, 0, len(requirements.Isolated))}
+	plan := resource.CpuPlan{Assignments: make([]resource.CpuAssignment, 0, len(requirements.Isolated))}
 	claimed := map[int]bool{}
 	all := []int(nil)
 
@@ -46,21 +48,21 @@ func (p TopologyCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error)
 		}
 
 		if len(selected) < requirement.Cores {
-			return CpuPlan{}, fmt.Errorf(
+			return resource.CpuPlan{}, fmt.Errorf(
 				"no free isolated CPUs available for component %q (required=%d)",
 				requirements.Component, requirement.Cores,
 			)
 		}
 
 		all = append(all, selected...)
-		plan.Assignments = append(plan.Assignments, CpuAssignment{
+		plan.Assignments = append(plan.Assignments, resource.CpuAssignment{
 			Component: requirements.Component,
 			Cpus:      selected,
 		})
 	}
 
 	if err := request.Ledger.ReserveCPUs(requirements.Component, all); err != nil {
-		return CpuPlan{}, err
+		return resource.CpuPlan{}, err
 	}
 
 	return plan, nil

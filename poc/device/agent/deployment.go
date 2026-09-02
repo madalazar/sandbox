@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,13 +16,14 @@ import (
 	"github.com/kr/pretty"
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/device"
+	"github.com/margo/sandbox/poc/device/agent/resource"
+	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
+	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/shared-lib/workloads"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
 	"go.uber.org/zap"
 )
-
-var cpuIndexRegex = regexp.MustCompile(`cpu(\d+)`)
 
 type NriAnnotations struct {
 	PodLevel       map[string]string
@@ -40,7 +40,7 @@ type DeploymentManager struct {
 	helmClient     *workloads.HelmClient
 	composeClient  *workloads.DockerComposeCliClient
 	pqosFactory    pqosCommandFactory
-	policyReader   BalloonPolicyReader
+	policyReader   resource.BalloonPolicyReader
 	topologyLookup device.TopologyLookup
 	log            *zap.SugaredLogger
 	stopChan       chan struct{}
@@ -53,7 +53,7 @@ func NewDeploymentManager(
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
 	pqosFactory pqosCommandFactory,
-	policyReader BalloonPolicyReader,
+	policyReader resource.BalloonPolicyReader,
 	topologyLookup device.TopologyLookup,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
@@ -343,8 +343,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	assignments := map[string][]int{}
 	cacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newHelmResourceCoordinator()
-	configurator := NewHelmConfigurator()
-	planner := NewBalloonCPUPlanner(dm.policyReader, dm.topologyLookup.IsolatedCPUIndices)
+	deploymentConfigurator := configurator.NewHelmConfigurator()
+	cpuPlanner := planner.NewBalloonCPUPlanner(dm.policyReader, dm.topologyLookup.IsolatedCPUIndices)
 	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
 	// later components see.
 	ledger := dm.newAllocationLedger(deploymentId)
@@ -354,7 +354,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		if err != nil {
 			return fmt.Errorf("invalid helm component: %v", err)
 		}
-		owner := NewOwnerRef(deploymentId, helmComp.Name)
+		owner := resource.NewOwnerRef(deploymentId, helmComp.Name)
 		dm.log.Infow(
 			"deploying app component",
 			"appId",
@@ -381,12 +381,12 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		cpuRequirements, err := NormalizeCPURequirements(ComponentRef(helmComp.Name), helmComp.RequiredResources)
+		cpuRequirements, err := resource.NormalizeCPURequirements(resource.ComponentRef(helmComp.Name), helmComp.RequiredResources)
 		if err != nil {
 			return fmt.Errorf("invalid CPU requirements for component %s: %w", helmComp.Name, err)
 		}
 
-		cpuPlan, err := planner.PlanCPU(CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
+		cpuPlan, err := cpuPlanner.PlanCPU(planner.CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
 		if err != nil {
 			return fmt.Errorf("failed to resolve NRI balloon annotations for component %s: %w", helmComp.Name, err)
 		}
@@ -420,7 +420,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		// TODO: I don't line the resourceRollback field, need to rethink it a bit more
 		// I think we dont need to pass a logger to the ReesouceRollback, just printing might suffice. needs testing
-		var rollback *ResourceRollback
+		var rollback *resource.ResourceRollback
 		if len(componentAssignments) > 0 || len(componentCacheAssignments) > 0 {
 			if err := dm.database.SetAllocations(deploymentId, database.Allocations{
 				CPUs:   assignments,
@@ -429,18 +429,18 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to persist allocations for helm component %s: %w", helmComp.Name, err)
 			}
 
-			rollback = NewResourceRollback(ctx, coordinator, owner, dm.log)
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 		}
 
-		values, err = configurator.Apply(cpuPlan, owner, values)
+		values, err = deploymentConfigurator.Apply(cpuPlan, owner, values)
 		if err != nil {
 			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", helmComp.Name, err)
 		}
 
 		// Cache annotations are merged here until the cache half moves behind the configurator.
 		if hasCacheAnnotations {
-			values["podAnnotations"] = configurator.MergePodAnnotations(values["podAnnotations"], cacheAnnotations)
+			values["podAnnotations"] = deploymentConfigurator.MergePodAnnotations(values["podAnnotations"], cacheAnnotations)
 		}
 
 		dm.log.Infow("Applied resource annotations to Helm values", "componentName", helmComp.Name,
@@ -530,8 +530,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	composeAssignments := map[string][]int{}
 	composeCacheAssignments := map[string][]database.CacheAssignment{}
 	coordinator := dm.newComposeResourceCoordinator()
-	configurator := NewComposeConfigurator()
-	planner := NewTopologyCPUPlanner(dm.topologyLookup.IsolatedCPUIndices)
+	deploymentConfigurator := configurator.NewComposeConfigurator()
+	cpuPlanner := planner.NewTopologyCPUPlanner(dm.topologyLookup.IsolatedCPUIndices)
 	// One snapshot per reconcile of this deployment; the ledger, not a re-read, is what
 	// later components see.
 	ledger := dm.newAllocationLedger(deploymentId)
@@ -545,7 +545,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if err != nil {
 			return fmt.Errorf("invalid compose component %v", err)
 		}
-		owner := NewOwnerRef(deploymentId, composeComp.Name)
+		owner := resource.NewOwnerRef(deploymentId, composeComp.Name)
 		dm.log.Infow(
 			"deploying app component",
 			"appId",
@@ -588,12 +588,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		componentCPUAssignments := map[string][]int{}
 
-		cpuRequirements, err := NormalizeCPURequirements(ComponentRef(composeComp.Name), composeComp.RequiredResources)
+		cpuRequirements, err := resource.NormalizeCPURequirements(resource.ComponentRef(composeComp.Name), composeComp.RequiredResources)
 		if err != nil {
 			return fmt.Errorf("invalid CPU requirements for component %s: %w", composeComp.Name, err)
 		}
 
-		cpuPlan, err := planner.PlanCPU(CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
+		cpuPlan, err := cpuPlanner.PlanCPU(planner.CPUPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
 		if err != nil {
 			return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
 		}
@@ -628,7 +628,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		var rollback *ResourceRollback
+		var rollback *resource.ResourceRollback
 		if len(componentCPUAssignments) > 0 || len(componentCacheAssignments) > 0 {
 			if err := dm.database.SetAllocations(deploymentId, database.Allocations{
 				CPUs:   composeAssignments,
@@ -637,7 +637,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
 			}
 
-			rollback = NewResourceRollback(ctx, coordinator, owner, dm.log)
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
 			if len(componentCacheAssignments) > 0 {
@@ -647,7 +647,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		preparedComposeFilename, err := configurator.Apply(cpuPlan, owner, composeFilename)
+		preparedComposeFilename, err := deploymentConfigurator.Apply(cpuPlan, owner, composeFilename)
 		if err != nil {
 			return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, err)
 		}
@@ -1023,20 +1023,6 @@ func hasCacheAssignmentForComponent(
 	return false
 }
 
-func sanitizeFileToken(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-	replacer := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-	cleaned := replacer.ReplaceAllString(value, "-")
-	cleaned = strings.Trim(cleaned, "-")
-	if cleaned == "" {
-		return "unknown"
-	}
-	return cleaned
-}
-
 func summarizeIsolatedCPUIndices(cpuIndices []int) []int {
 	if len(cpuIndices) == 0 {
 		return nil
@@ -1051,17 +1037,17 @@ func summarizeIsolatedCPUIndices(cpuIndices []int) []int {
 // newAllocationLedger takes the device-wide allocation snapshot once, before the
 // component loop, and returns the ledger that answers free-versus-taken for the rest
 // of this deployment's reconcile pass.
-func (dm *DeploymentManager) newAllocationLedger(deploymentID string) *AllocationLedger {
-	snapshot := NewAllocationSnapshot(dm.database.AllocatedCpus(), dm.topologyLookup.IsolatedCPUSet)
-	return NewAllocationLedger(snapshot, deploymentID)
+func (dm *DeploymentManager) newAllocationLedger(deploymentID string) *resource.AllocationLedger {
+	snapshot := resource.NewAllocationSnapshot(dm.database.AllocatedCpus(), dm.topologyLookup.IsolatedCPUSet)
+	return resource.NewAllocationLedger(snapshot, deploymentID)
 }
 
 // newComposeResourceCoordinator is the Compose runtime injection point. It provides
 // reservation rollback and PQoS release; topology planning will be added when the
 // Compose runtime bundle is migrated.
-func (dm *DeploymentManager) newComposeResourceCoordinator() *ResourceCoordinator {
-	return NewResourceCoordinator(
-		newDatabaseReservationStore(dm.database),
+func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database),
 		composePQoSReleaser{dm: dm},
 	)
 }
@@ -1069,9 +1055,9 @@ func (dm *DeploymentManager) newComposeResourceCoordinator() *ResourceCoordinato
 // newHelmResourceCoordinator is the Kubernetes runtime injection point. It provides
 // reservation rollback and RDT release; balloon planning will be added when the
 // Kubernetes runtime bundle is migrated.
-func (dm *DeploymentManager) newHelmResourceCoordinator() *ResourceCoordinator {
-	return NewResourceCoordinator(
-		newDatabaseReservationStore(dm.database),
+func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database),
 		helmRDTReleaser{dm: dm},
 	)
 }
@@ -1080,7 +1066,7 @@ type composePQoSReleaser struct {
 	dm *DeploymentManager
 }
 
-func (r composePQoSReleaser) ReleaseIsolation(ctx context.Context, reservation Reservation) error {
+func (r composePQoSReleaser) ReleaseIsolation(ctx context.Context, reservation resource.Reservation) error {
 	if r.dm.pqosFactory == nil {
 		return fmt.Errorf("pqos command factory is not initialized")
 	}
@@ -1090,7 +1076,7 @@ func (r composePQoSReleaser) ReleaseIsolation(ctx context.Context, reservation R
 		ctx,
 		componentName,
 		map[string][]database.CacheAssignment{
-			componentName: toCacheAssignments(componentName, reservation.Caches),
+			componentName: resource.ToCacheAssignments(componentName, reservation.Caches),
 		},
 		map[string][]int{componentName: reservation.CPUs},
 		r.dm.pqosFactory,
@@ -1101,14 +1087,14 @@ type helmRDTReleaser struct {
 	dm *DeploymentManager
 }
 
-func (r helmRDTReleaser) ReleaseIsolation(ctx context.Context, reservation Reservation) error {
+func (r helmRDTReleaser) ReleaseIsolation(ctx context.Context, reservation resource.Reservation) error {
 	componentName := string(reservation.Owner.Component)
 	r.dm.cleanupHelmComponentRDTOnRemoval(
 		ctx,
 		reservation.Owner.Deployment,
 		componentName,
 		map[string][]database.CacheAssignment{
-			componentName: toCacheAssignments(componentName, reservation.Caches),
+			componentName: resource.ToCacheAssignments(componentName, reservation.Caches),
 		},
 	)
 	return nil

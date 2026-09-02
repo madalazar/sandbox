@@ -15,6 +15,7 @@ import (
 
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/device"
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
@@ -425,7 +426,7 @@ func (dm *DeploymentManager) updateBalloonPolicyRDTWithYQ(
 		return fmt.Errorf("cannot update RDT policy for component %q: no BalloonsPolicy snapshot available", componentName)
 	}
 
-	tmp, err := os.CreateTemp("", fmt.Sprintf("balloon-policy-%s-%s-*.yaml", sanitizeFileToken(componentName), sanitizeFileToken(deploymentID)))
+	tmp, err := os.CreateTemp("", fmt.Sprintf("balloon-policy-%s-%s-*.yaml", resource.SanitizeFileToken(componentName), resource.SanitizeFileToken(deploymentID)))
 	if err != nil {
 		return fmt.Errorf("failed to create temporary policy file: %w", err)
 	}
@@ -576,7 +577,7 @@ func (dm *DeploymentManager) removeBalloonPolicyRDTWithYQ(
 		return fmt.Errorf("cannot remove RDT policy for component %q: no BalloonsPolicy snapshot available", componentName)
 	}
 
-	tmp, err := os.CreateTemp("", fmt.Sprintf("balloon-policy-%s-%s-*.yaml", sanitizeFileToken(componentName), sanitizeFileToken(deploymentID)))
+	tmp, err := os.CreateTemp("", fmt.Sprintf("balloon-policy-%s-%s-*.yaml", resource.SanitizeFileToken(componentName), resource.SanitizeFileToken(deploymentID)))
 	if err != nil {
 		return fmt.Errorf("failed to create temporary policy file: %w", err)
 	}
@@ -745,7 +746,7 @@ func (dm *DeploymentManager) waitForRDTPolicyUpdate(ctx context.Context, compone
 		componentName,
 		className,
 		"update",
-		func(policy *ParsedBalloonPolicy) bool {
+		func(policy *resource.ParsedBalloonPolicy) bool {
 			return policy != nil && policy.HasRDTPartition(componentName) && policy.HasRDTClass(className)
 		},
 		"balloon policy cache did not reflect RDT updates for component %q and class %q",
@@ -758,7 +759,7 @@ func (dm *DeploymentManager) waitForRDTPolicyRemoval(ctx context.Context, compon
 		componentName,
 		className,
 		"removal",
-		func(policy *ParsedBalloonPolicy) bool {
+		func(policy *resource.ParsedBalloonPolicy) bool {
 			return policy != nil && !policy.HasRDTPartition(componentName) && !policy.HasRDTClass(className)
 		},
 		"balloon policy cache did not reflect RDT removals for component %q and class %q",
@@ -770,7 +771,7 @@ func (dm *DeploymentManager) waitForRDTPolicyCondition(
 	componentName string,
 	className string,
 	action string,
-	condition func(policy *ParsedBalloonPolicy) bool,
+	condition func(policy *resource.ParsedBalloonPolicy) bool,
 	failureFormat string,
 ) error {
 	if dm.policyReader == nil {

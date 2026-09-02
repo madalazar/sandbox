@@ -1,8 +1,9 @@
-package main
+package planner
 
 import (
 	"testing"
 
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
@@ -12,11 +13,11 @@ func newCPUPlanningRequest(
 	t *testing.T,
 	componentName string,
 	requiredResources *sbi.RequiredResources,
-	ledger *AllocationLedger,
+	ledger *resource.AllocationLedger,
 ) CPUPlanningRequest {
 	t.Helper()
 
-	requirements, err := NormalizeCPURequirements(ComponentRef(componentName), requiredResources)
+	requirements, err := resource.NormalizeCPURequirements(resource.ComponentRef(componentName), requiredResources)
 	if err != nil {
 		t.Fatalf("NormalizeCPURequirements() error = %v", err)
 	}
@@ -24,13 +25,13 @@ func newCPUPlanningRequest(
 	return CPUPlanningRequest{Requirements: requirements, Ledger: ledger}
 }
 
-func newCPUPlanningTestLedger(deploymentID string) *AllocationLedger {
+func newCPUPlanningTestLedger(deploymentID string) *resource.AllocationLedger {
 	isolated := make(map[int]struct{}, len(testIsolatedCPUIndices))
 	for _, idx := range testIsolatedCPUIndices {
 		isolated[idx] = struct{}{}
 	}
 
-	return NewAllocationLedger(NewAllocationSnapshot(nil, isolated), deploymentID)
+	return resource.NewAllocationLedger(resource.NewAllocationSnapshot(nil, isolated), deploymentID)
 }
 
 func isolatedCPURequirement(name string) *sbi.RequiredResources {

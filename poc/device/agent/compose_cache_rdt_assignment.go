@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
@@ -172,7 +173,7 @@ func (dm *DeploymentManager) applyComposeComponentPQoS(
 		return fmt.Errorf("component %q has no assigned CPUs for pqos association", componentName)
 	}
 
-	cpuset := formatCpuSet(assignedCPUs)
+	cpuset := resource.FormatCpuSet(assignedCPUs)
 	if strings.TrimSpace(cpuset) == "" {
 		return fmt.Errorf("component %q resolved empty cpuset for pqos association", componentName)
 	}
@@ -447,7 +448,7 @@ func resolveComponentCPUListFromDB(
 		return ""
 	}
 
-	return formatCpuSet(collected)
+	return resource.FormatCpuSet(collected)
 }
 
 // nextAvailablePQoSClassID picks the lowest free class of service. maxCLOS is the

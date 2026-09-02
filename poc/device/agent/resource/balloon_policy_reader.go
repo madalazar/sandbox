@@ -1,4 +1,4 @@
-package main
+package resource
 
 import (
 	"context"
@@ -27,51 +27,7 @@ var balloonsPolicyGVR = schema.GroupVersionResource{
 	Resource: "balloonspolicies",
 }
 
-// BalloonPolicyReader exposes non-blocking reads of the latest parsed policy snapshot.
-type BalloonPolicyReader interface {
-	Parsed() *ParsedBalloonPolicy
-}
-
-// ParsedBalloonType contains the balloon fields needed by later scheduling logic.
-type ParsedBalloonType struct {
-	Name                 string
-	PreferCoreType       string
-	PreferIsolCpus       *bool
-	MinCPUs              *int64
-	MaxCPUs              *int64
-	PreferCloseToDevices []string
-}
-
-// ParsedBalloonPolicy is the in-memory snapshot used by the deployment reconciler.
-type ParsedBalloonPolicy struct {
-	Name         string
-	Namespace    string
-	BalloonTypes []ParsedBalloonType
-	RDT          ParsedRDTPolicy
-}
-
-type ParsedRDTPolicy struct {
-	Partitions map[string]struct{}
-	Classes    map[string]struct{}
-}
-
-func (p *ParsedBalloonPolicy) HasRDTPartition(name string) bool {
-	if p == nil {
-		return false
-	}
-	_, ok := p.RDT.Partitions[name]
-	return ok
-}
-
-func (p *ParsedBalloonPolicy) HasRDTClass(name string) bool {
-	if p == nil {
-		return false
-	}
-	_, ok := p.RDT.Classes[name]
-	return ok
-}
-
-type balloonPolicyInformer struct {
+type BalloonPolicyInformer struct {
 	log      *zap.SugaredLogger
 	factory  dynamicinformer.DynamicSharedInformerFactory
 	informer cache.SharedIndexInformer
@@ -82,7 +38,7 @@ type balloonPolicyInformer struct {
 	cache     atomic.Pointer[ParsedBalloonPolicy]
 }
 
-func newBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*balloonPolicyInformer, error) {
+func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*BalloonPolicyInformer, error) {
 	restConfig, err := buildKubeRESTConfig(kubeconfigPath)
 	if err != nil {
 		return nil, err
@@ -101,7 +57,7 @@ func newBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*b
 	)
 	informer := factory.ForResource(balloonsPolicyGVR).Informer()
 
-	b := &balloonPolicyInformer{
+	b := &BalloonPolicyInformer{
 		log:      log,
 		factory:  factory,
 		informer: informer,
@@ -124,7 +80,7 @@ func newBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*b
 	return b, nil
 }
 
-func (b *balloonPolicyInformer) Start(ctx context.Context) error {
+func (b *BalloonPolicyInformer) Start(ctx context.Context) error {
 	b.startOnce.Do(func() {
 		b.factory.Start(b.stopCh)
 	})
@@ -137,17 +93,17 @@ func (b *balloonPolicyInformer) Start(ctx context.Context) error {
 	return nil
 }
 
-func (b *balloonPolicyInformer) Stop() {
+func (b *BalloonPolicyInformer) Stop() {
 	b.stopOnce.Do(func() {
 		close(b.stopCh)
 	})
 }
 
-func (b *balloonPolicyInformer) Parsed() *ParsedBalloonPolicy {
+func (b *BalloonPolicyInformer) Parsed() *ParsedBalloonPolicy {
 	return b.cache.Load()
 }
 
-func (b *balloonPolicyInformer) selectAndParse() {
+func (b *BalloonPolicyInformer) selectAndParse() {
 	items := b.informer.GetStore().List()
 	if len(items) == 0 {
 		b.cache.Store(nil)

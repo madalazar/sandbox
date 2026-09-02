@@ -1,7 +1,9 @@
-package main
+package configurator
 
 import (
 	"testing"
+
+	"github.com/margo/sandbox/poc/device/agent/resource"
 )
 
 func newTestHelmConfigurator() *HelmConfigurator {
@@ -10,13 +12,13 @@ func newTestHelmConfigurator() *HelmConfigurator {
 
 func TestHelmConfiguratorApplyMergesPlacementAndCpuset(t *testing.T) {
 	configurator := newTestHelmConfigurator()
-	plan := CpuPlan{Assignments: []CpuAssignment{{
+	plan := resource.CpuPlan{Assignments: []resource.CpuAssignment{{
 		Component: "worker",
 		Cpus:      []int{8, 9},
-		Placement: CpuPlacement{Class: "rt-balloon"},
+		Placement: resource.CpuPlacement{Class: "rt-balloon"},
 	}}}
 
-	values, err := configurator.Apply(plan, NewOwnerRef("deployment-1", "worker"), map[string]any{
+	values, err := configurator.Apply(plan, resource.NewOwnerRef("deployment-1", "worker"), map[string]any{
 		"replicaCount":   1,
 		"podAnnotations": map[string]any{"existing": "keep"},
 		"worker":         map[string]any{"image": "worker:latest"},
@@ -32,7 +34,7 @@ func TestHelmConfiguratorApplyMergesPlacementAndCpuset(t *testing.T) {
 	if annotations["existing"] != "keep" {
 		t.Errorf("existing annotation lost: %v", annotations)
 	}
-	if annotations[balloonPodAnnotationKey] != "rt-balloon" {
+	if annotations[BalloonPodAnnotationKey] != "rt-balloon" {
 		t.Errorf("balloon annotation missing: %v", annotations)
 	}
 
@@ -54,7 +56,7 @@ func TestHelmConfiguratorApplyMergesPlacementAndCpuset(t *testing.T) {
 func TestHelmConfiguratorApplyLeavesValuesAloneWithoutAPlan(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 
-	values, err := configurator.Apply(CpuPlan{}, NewOwnerRef("deployment-1", "worker"), map[string]any{
+	values, err := configurator.Apply(resource.CpuPlan{}, resource.NewOwnerRef("deployment-1", "worker"), map[string]any{
 		"replicaCount": 1,
 	})
 	if err != nil {
@@ -75,7 +77,7 @@ func TestHelmConfiguratorApplyWithoutPlacementClass(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 	plan := cpuPlanFor("worker", 3)
 
-	values, err := configurator.Apply(plan, NewOwnerRef("deployment-1", "worker"), nil)
+	values, err := configurator.Apply(plan, resource.NewOwnerRef("deployment-1", "worker"), nil)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

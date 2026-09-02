@@ -1,14 +1,16 @@
-package main
+package configurator
 
 import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/margo/sandbox/poc/device/agent/resource"
 )
 
-func cpuPlanFor(component string, cpus ...int) CpuPlan {
-	return CpuPlan{Assignments: []CpuAssignment{{
-		Component: ComponentRef(component),
+func cpuPlanFor(component string, cpus ...int) resource.CpuPlan {
+	return resource.CpuPlan{Assignments: []resource.CpuAssignment{{
+		Component: resource.ComponentRef(component),
 		Cpus:      cpus,
 	}}}
 }
@@ -17,7 +19,7 @@ func TestRewriteComposeYAMLBindsToSingleService(t *testing.T) {
 	testCases := []struct {
 		name     string
 		source   string
-		plan     CpuPlan
+		plan     resource.CpuPlan
 		contains []string
 	}{
 		{
@@ -128,7 +130,7 @@ func TestRewriteComposeYAMLCopiesSourceWhenPlanHasNoCpus(t *testing.T) {
     image: second:latest
 `
 	var out bytes.Buffer
-	if err := RewriteComposeYAML(strings.NewReader(source), &out, CpuPlan{}); err != nil {
+	if err := RewriteComposeYAML(strings.NewReader(source), &out, resource.CpuPlan{}); err != nil {
 		t.Fatalf("RewriteComposeYAML: %v", err)
 	}
 	if out.String() != source {

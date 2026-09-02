@@ -1,4 +1,4 @@
-package main
+package resource
 
 import (
 	"context"
@@ -139,7 +139,7 @@ func TestDatabaseReservationStoreLoadReservationIncludesCPUsAndCaches(t *testing
 	}
 
 	owner := NewOwnerRef(deploymentID, componentName)
-	reservation, found, err := newDatabaseReservationStore(db).LoadReservation(owner)
+	reservation, found, err := NewDatabaseReservationStore(db).LoadReservation(owner)
 	if err != nil {
 		t.Fatalf("LoadReservation() error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
 		t.Fatalf("SetAllocations() error = %v", err)
 	}
 
-	store := newDatabaseReservationStore(db)
+	store := NewDatabaseReservationStore(db)
 	if err := store.ClearComponent(NewOwnerRef(deploymentID, componentName)); err != nil {
 		t.Fatalf("ClearComponent() error = %v", err)
 	}

@@ -1,17 +1,18 @@
-package main
+package planner
 
 import (
 	"reflect"
 	"testing"
 
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
 type staticBalloonPolicyReader struct {
-	policy *ParsedBalloonPolicy
+	policy *resource.ParsedBalloonPolicy
 }
 
-func (reader staticBalloonPolicyReader) Parsed() *ParsedBalloonPolicy {
+func (reader staticBalloonPolicyReader) Parsed() *resource.ParsedBalloonPolicy {
 	return reader.policy
 }
 
@@ -19,10 +20,10 @@ func newTestBalloonCPUPlanner() BalloonCPUPlanner {
 	preferIsolated := true
 
 	return NewBalloonCPUPlanner(staticBalloonPolicyReader{
-		policy: &ParsedBalloonPolicy{
+		policy: &resource.ParsedBalloonPolicy{
 			Name:      "default",
 			Namespace: "kube-system",
-			BalloonTypes: []ParsedBalloonType{
+			BalloonTypes: []resource.ParsedBalloonType{
 				{
 					Name:                 "ipc1",
 					PreferIsolCpus:       &preferIsolated,
@@ -46,22 +47,22 @@ func TestBalloonCPUPlannerPlanCPU(t *testing.T) {
 		name              string
 		componentName     string
 		requiredResources *sbi.RequiredResources
-		want              []CpuAssignment
+		want              []resource.CpuAssignment
 	}{
 		{
 			name:              "caterpillar gets cpu1 balloon",
 			componentName:     "caterpillar",
 			requiredResources: isolatedCPURequirement("caterpillar"),
-			want: []CpuAssignment{
-				{Component: "caterpillar", Cpus: []int{1}, Placement: CpuPlacement{Class: "ipc1"}},
+			want: []resource.CpuAssignment{
+				{Component: "caterpillar", Cpus: []int{1}, Placement: resource.CpuPlacement{Class: "ipc1"}},
 			},
 		},
 		{
 			name:              "cyclictest gets cpu3 balloon",
 			componentName:     "cyclictest",
 			requiredResources: isolatedCPURequirement("cyclictest"),
-			want: []CpuAssignment{
-				{Component: "cyclictest", Cpus: []int{3}, Placement: CpuPlacement{Class: "ipc3"}},
+			want: []resource.CpuAssignment{
+				{Component: "cyclictest", Cpus: []int{3}, Placement: resource.CpuPlacement{Class: "ipc3"}},
 			},
 		},
 		{

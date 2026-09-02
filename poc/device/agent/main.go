@@ -20,6 +20,7 @@ import (
 
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/device"
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	wfm "github.com/margo/sandbox/poc/wfm/cli"
 	"github.com/margo/sandbox/shared-lib/crypto"
@@ -37,8 +38,8 @@ type Agent struct {
 	auth           *DeviceClientSettings
 	config         types.Config
 	database       database.DatabaseIfc
-	balloonPolicy  *balloonPolicyInformer
-	policyReader   BalloonPolicyReader
+	balloonPolicy  *resource.BalloonPolicyInformer
+	policyReader   resource.BalloonPolicyReader
 	syncer         StateSyncerIfc
 	deployer       DeploymentManagerIfc
 	monitor        DeploymentMonitorIfc
@@ -115,7 +116,7 @@ func NewAgent(configPath string) (*Agent, error) {
 	opts := []Option{}
 	var helmClient *workloads.HelmClient
 	var composeClient *workloads.DockerComposeCliClient
-	var balloonPolicy *balloonPolicyInformer
+	var balloonPolicy *resource.BalloonPolicyInformer
 	for _, runtime := range cfg.Runtimes {
 		if runtime.Kubernetes != nil {
 			// Create Helm client
@@ -125,7 +126,7 @@ func NewAgent(configPath string) (*Agent, error) {
 			}
 
 			if balloonPolicy == nil {
-				balloonPolicy, err = newBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
+				balloonPolicy, err = resource.NewBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
 				if err != nil {
 					return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
 				}

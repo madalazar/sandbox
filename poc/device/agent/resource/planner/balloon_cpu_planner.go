@@ -1,28 +1,31 @@
-package main
+package planner
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
+
+	"github.com/margo/sandbox/poc/device/agent/resource"
 )
 
-// Nothing consumes CPUPlanner yet; remove once the runtime factory assigns this into
-// Runtime.CPUPlanner and the compiler checks it there.
 var _ CPUPlanner = BalloonCPUPlanner{}
+
+var cpuIndexRegex = regexp.MustCompile(`cpu(\d+)`)
 
 // BalloonCPUPlanner places a component into an NRI balloon whose CPUs are isolated.
 // It is the Kubernetes runtime's CPU planner: it returns the balloon's CPUs and the
 // balloon name, and constructs no Kubernetes annotations.
 type BalloonCPUPlanner struct {
-	policies BalloonPolicyReader
+	policies resource.BalloonPolicyReader
 	isolated []int
 }
 
-func NewBalloonCPUPlanner(policies BalloonPolicyReader, isolated []int) BalloonCPUPlanner {
+func NewBalloonCPUPlanner(policies resource.BalloonPolicyReader, isolated []int) BalloonCPUPlanner {
 	return BalloonCPUPlanner{policies: policies, isolated: isolated}
 }
 
-func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) {
+func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (resource.CpuPlan, error) {
 	requirements := request.Requirements
 	ref := requirements.Component
 
@@ -37,19 +40,19 @@ func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) 
 			"balloon planner: component uses shared cores only; skipping isolated CPU allocation",
 			"component:", ref,
 		)
-		return CpuPlan{}, nil
+		return resource.CpuPlan{}, nil
 	}
 
 	requiredIsolatedCores := requirements.CountIsolatedCores()
 	if requiredIsolatedCores > 1 {
-		return CpuPlan{}, fmt.Errorf(
+		return resource.CpuPlan{}, fmt.Errorf(
 			"component %q requests %d isolated cores; only workloads requiring 1 isolated core are supported",
 			ref, requiredIsolatedCores,
 		)
 	}
 
 	if p.policies == nil {
-		return CpuPlan{}, fmt.Errorf(
+		return resource.CpuPlan{}, fmt.Errorf(
 			"cannot resolve isolated CPU assignment for component %q: policy reader not configured",
 			ref,
 		)
@@ -57,7 +60,7 @@ func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) 
 
 	policy := p.policies.Parsed()
 	if policy == nil {
-		return CpuPlan{}, fmt.Errorf(
+		return resource.CpuPlan{}, fmt.Errorf(
 			"cannot resolve isolated CPU assignment for component %q: no BalloonsPolicy snapshot available",
 			ref,
 		)
@@ -94,14 +97,14 @@ func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) 
 	}
 
 	if selectedBalloonName == "" || len(selectedBalloonCPUs) == 0 {
-		return CpuPlan{}, fmt.Errorf(
+		return resource.CpuPlan{}, fmt.Errorf(
 			"no free isolated balloon found for component %q (requiredIsolatedCores=%d)",
 			ref, requiredIsolatedCores,
 		)
 	}
 
 	if err := request.Ledger.ReserveCPUs(ref, selectedBalloonCPUs); err != nil {
-		return CpuPlan{}, err
+		return resource.CpuPlan{}, err
 	}
 
 	fmt.Println("balloon planner: isolated balloon selected",
@@ -110,10 +113,10 @@ func (p BalloonCPUPlanner) PlanCPU(request CPUPlanningRequest) (CpuPlan, error) 
 		"cpus:", selectedBalloonCPUs,
 	)
 
-	return CpuPlan{Assignments: []CpuAssignment{{
+	return resource.CpuPlan{Assignments: []resource.CpuAssignment{{
 		Component: ref,
 		Cpus:      selectedBalloonCPUs,
-		Placement: CpuPlacement{Class: selectedBalloonName},
+		Placement: resource.CpuPlacement{Class: selectedBalloonName},
 	}}}, nil
 }
 

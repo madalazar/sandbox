@@ -1,4 +1,4 @@
-package main
+package configurator
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/margo/sandbox/poc/device/agent/resource"
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
@@ -21,8 +22,8 @@ func NewComposeConfigurator() *ComposeConfigurator {
 // Apply writes the plan's cpuset into the source file's single service and returns the
 // prepared path.
 func (c *ComposeConfigurator) Apply(
-	plan CpuPlan,
-	owner OwnerRef,
+	plan resource.CpuPlan,
+	owner resource.OwnerRef,
 	sourcePath string,
 ) (preparedPath string, err error) {
 	if !plan.HasCpus() {
@@ -31,8 +32,8 @@ func (c *ComposeConfigurator) Apply(
 
 	file, err := os.CreateTemp("", fmt.Sprintf(
 		"compose-pinned-%s-%s-*.yaml",
-		sanitizeFileToken(string(owner.Component)),
-		sanitizeFileToken(owner.Deployment),
+		resource.SanitizeFileToken(string(owner.Component)),
+		resource.SanitizeFileToken(owner.Deployment),
 	))
 	if err != nil {
 		return "", fmt.Errorf("create pinned compose file: %w", err)
@@ -59,7 +60,7 @@ func removePreparedComposeFile(path string) {
 	}
 }
 
-func rewriteComposeFile(sourcePath string, targetPath string, plan CpuPlan) error {
+func rewriteComposeFile(sourcePath string, targetPath string, plan resource.CpuPlan) error {
 	in, err := os.Open(filepath.Clean(sourcePath))
 	if err != nil {
 		return err
@@ -80,7 +81,7 @@ func rewriteComposeFile(sourcePath string, targetPath string, plan CpuPlan) erro
 	return closeErr
 }
 
-func RewriteComposeYAML(in io.Reader, out io.Writer, plan CpuPlan) error {
+func RewriteComposeYAML(in io.Reader, out io.Writer, plan resource.CpuPlan) error {
 	if !plan.HasCpus() {
 		_, err := io.Copy(out, in)
 		return err
