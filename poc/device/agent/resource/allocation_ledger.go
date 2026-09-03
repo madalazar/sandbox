@@ -1,11 +1,15 @@
 package resource
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
+)
 
 // device-wide read of persisted allocations, taken once per
 // reconcile of one deployment, never mutated after construction
 type AllocationSnapshot struct {
-	CpuOwners map[int]OwnerRef
+	CpuOwners map[int]model.OwnerRef
 }
 
 // decodes the persisted owner strings into domain owners,
@@ -14,12 +18,12 @@ func NewAllocationSnapshot(
 	allocatedCpus map[int]string,
 	isolatedCpus map[int]struct{},
 ) AllocationSnapshot {
-	owners := make(map[int]OwnerRef, len(allocatedCpus))
+	owners := make(map[int]model.OwnerRef, len(allocatedCpus))
 	for cpuIndex, owner := range allocatedCpus {
 		if _, isolated := isolatedCpus[cpuIndex]; !isolated {
 			continue
 		}
-		owners[cpuIndex] = ParseOwnerRef(owner)
+		owners[cpuIndex] = model.ParseOwnerRef(owner)
 	}
 	return AllocationSnapshot{CpuOwners: owners}
 }
@@ -30,30 +34,30 @@ func NewAllocationSnapshot(
 type AllocationLedger struct {
 	snapshot     AllocationSnapshot
 	deploymentId string
-	reservedCpus map[int]ComponentRef
+	reservedCpus map[int]model.ComponentRef
 }
 
 func NewAllocationLedger(snapshot AllocationSnapshot, deploymentId string) *AllocationLedger {
 	return &AllocationLedger{
 		snapshot:     snapshot,
 		deploymentId: deploymentId,
-		reservedCpus: map[int]ComponentRef{},
+		reservedCpus: map[int]model.ComponentRef{},
 	}
 }
 
 // reports whether ref may take cpuIndex: unheld, or already persisted to
 // ref itself. A sibling component's claim blocks, whether persisted or made earlier in
 // this pass
-func (l *AllocationLedger) IsCpuAvailable(cpuIndex int, ref ComponentRef) bool {
+func (l *AllocationLedger) IsCpuAvailable(cpuIndex int, ref model.ComponentRef) bool {
 	if holder, reserved := l.reservedCpus[cpuIndex]; reserved {
 		return holder == ref
 	}
-	return NewOwnerRef(l.deploymentId, string(ref)).CanTake(l.snapshot.CpuOwners[cpuIndex])
+	return model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(l.snapshot.CpuOwners[cpuIndex])
 }
 
 // records an exclusive claim for this pass. It reserves nothing when any
 // index is unavailable.
-func (l *AllocationLedger) ReserveCpus(ref ComponentRef, cpus []int) error {
+func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error {
 	for _, cpuIndex := range cpus {
 		if !l.IsCpuAvailable(cpuIndex, ref) {
 			return fmt.Errorf("cpu %d is not available to component %q", cpuIndex, ref)
