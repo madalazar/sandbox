@@ -182,9 +182,16 @@ func NewAgent(configPath string) (*Agent, error) {
 		"supportedRuntimes", deviceSettings.supportedRuntimes,
 	)
 
+	topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
+	hostTopology, err := types.LoadHostTopology(topologyArtifactPath)
+	if err != nil {
+		log.Errorw("unable to load host topology artifact", "path", topologyArtifactPath, "error", err)
+	}
+
 	// Create components
-	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, log)
+	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, hostTopology, log)
 	monitor := NewDeploymentMonitor(db, capabilities, helmClient, composeClient, log)
+
 	syncer := NewStateSyncer(
 		db,
 		wfmClient,
@@ -287,15 +294,7 @@ func (a *Agent) Start() error {
 		time.Sleep(5 * time.Second)
 	}
 
-	// 3. Load host topology artifact
-	topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
-	topologyLookup, topologyErr := types.LoadHostTopology(topologyArtifactPath)
-	if topologyErr != nil {
-		a.log.Errorw("unable to load host topology artifact", topologyArtifactPath, topologyErr)
-	}
-	a.log.Infow("host topology loaded, ", "path", topologyArtifactPath, "isolatedCoreCount", topologyLookup)
-
-	// 4. Start all components
+	// 3. Start all components
 	a.statusReporter.Start()
 	a.deployer.Start()
 	a.monitor.Start()
