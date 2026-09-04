@@ -1,10 +1,14 @@
 package resource
 
 import (
+	"errors"
+
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
+
+var errNotImplemented = errors.New("not implemented")
 
 // one component's recorded (for now only cpu) allocation
 type Reservation struct {
