@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"errors"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -9,6 +10,9 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"go.uber.org/zap"
 )
+
+// marks a contract whose body lands in a later commit
+var errNotImplemented = errors.New("not implemented")
 
 // one component's ask, as it arrives from the manifest. The generated sbi shape is
 // unwrapped by normalization inside Plan, so no later stage sees a generated pointer
