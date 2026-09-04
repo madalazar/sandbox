@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -53,20 +54,49 @@ func NewResourceCoordinator(store ReservationStore, cpuPlanner planner.CpuPlanne
 // takes the device-wide snapshot once, for one reconcile of one deployment. The caller
 // threads the result through every component of that deployment, so a component cannot
 // be planned onto cpus a sibling took earlier in the same pass
+func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.AllocationLedger, error) {
+	snapshot, err := c.store.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return ledger.NewAllocationLedger(snapshot, deploymentId), nil
+}
+
 func (c *ResourceCoordinator) newLedger(deploymentId string) (*ledger.AllocationLedger, error) {
-	return nil, errNotImplemented
+	return c.NewLedger(deploymentId)
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
 // No i/o and no context: planning must stay reproducible from its inputs alone
 func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
-	return ResourcePlan{}, errNotImplemented
+	requirements, err := model.NormalizeCpuRequirements(request.Owner.Component, request.Requirements)
+	if err != nil {
+		return ResourcePlan{}, err
+	}
+
+	cpuPlan, err := c.planner.PlanCpu(planner.CpuPlanningRequest{
+		Requirements: requirements,
+		Ledger:       ledger,
+	})
+	if err != nil {
+		return ResourcePlan{}, err
+	}
+
+	return ResourcePlan{
+		Owner: request.Owner,
+		Cpu:   cpuPlan,
+	}, nil
 }
 
 // records the plan before the workload starts, so nothing is ever applied to the device
 // that is not already recoverable from storage
 func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) error {
-	return errNotImplemented
+	if !plan.Cpu.HasCpus() {
+		return nil
+	}
+	return c.store.SaveAllocations(plan.Owner.Deployment, map[string][]int{
+		string(plan.Owner.Component): plan.Cpu.Cpus,
+	})
 }
 
 // verifies, after the workload is running, that the device still matches what was
@@ -80,7 +110,15 @@ func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef
 // error. The context is the release deadline, and the seam the deferred cache
 // isolation reset hooks into
 func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef) error {
-	return errNotImplemented
+	reservation, found, err := c.store.LoadReservation(owner)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+
+	return c.store.ClearComponent(reservation.Owner)
 }
 
 // detaches from the caller's context, because a deploy that failed precisely because
@@ -92,6 +130,17 @@ func releaseOnFailure(
 	owner model.OwnerRef,
 	log *zap.SugaredLogger,
 ) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	if err := coordinator.Release(releaseCtx, owner); err != nil {
+		if log != nil {
+			log.Errorw("Failed to release resources during deployment rollback",
+				"deploymentId", owner.Deployment,
+				"componentName", owner.Component,
+				"error", err)
+		}
+	}
 }
 
 // the deploy path's compensation handle. A component that has claimed resources but has
@@ -131,7 +180,11 @@ func NewResourceRollback(
 
 // takes the caller's named error return because a deferred call has no other way to see
 // whether the function it is unwinding from succeeded
-func (r *ResourceRollback) ReleaseOnFailure(err *error) {}
+func (r *ResourceRollback) ReleaseOnFailure(err *error) {
+	if r.active && err != nil && *err != nil {
+		releaseOnFailure(r.ctx, r.coordinator, r.owner, r.log)
+	}
+}
 
 // disarms the rollback once the component has started successfully
 func (r *ResourceRollback) Complete() {
