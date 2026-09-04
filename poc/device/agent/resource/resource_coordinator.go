@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const ReleaseOnFailureCtxTimeout = 30 * time.Second
+
 // one component's ask, as it arrives from the manifest. The generated sbi shape is
 // unwrapped by normalization inside Plan, so no later stage sees a generated pointer
 type ResourceRequest struct {
@@ -128,7 +130,7 @@ func releaseOnFailure(
 	owner model.OwnerRef,
 	log *zap.SugaredLogger,
 ) {
-	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ReleaseOnFailureCtxTimeout)
 	defer cancel()
 
 	if err := coordinator.Release(releaseCtx, owner); err != nil {
