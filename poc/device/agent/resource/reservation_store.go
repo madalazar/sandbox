@@ -44,17 +44,31 @@ func NewDatabaseReservationStore(db database.DatabaseIfc, isolatedCpus map[int]s
 }
 
 func (s *DatabaseReservationStore) Snapshot() (ledger.AllocationSnapshot, error) {
-	return ledger.AllocationSnapshot{}, errNotImplemented
+	return ledger.NewAllocationSnapshot(s.db.AllocatedCpus(), s.isolatedCpus), nil
 }
 
 func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reservation, bool, error) {
-	return Reservation{}, false, errNotImplemented
+	allocations, err := s.db.GetAllocations(owner.Deployment)
+	if err != nil {
+		return Reservation{}, false, err
+	}
+
+	key := string(owner.Component)
+	cpus, hasCpus := allocations.Cpus[key]
+	if !hasCpus {
+		return Reservation{}, false, nil
+	}
+
+	return Reservation{
+		Owner: owner,
+		Cpus:  append([]int(nil), cpus...),
+	}, true, nil
 }
 
 func (s *DatabaseReservationStore) SaveAllocations(deploymentId string, cpus map[string][]int) error {
-	return errNotImplemented
+	return s.db.SetAllocations(deploymentId, database.Allocations{Cpus: cpus})
 }
 
 func (s *DatabaseReservationStore) ClearComponent(owner model.OwnerRef) error {
-	return errNotImplemented
+	return s.db.ClearComponentAllocations(owner.Deployment, string(owner.Component))
 }
