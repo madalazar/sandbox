@@ -64,10 +64,6 @@ func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.Allocation
 	return ledger.NewAllocationLedger(snapshot, deploymentId), nil
 }
 
-func (c *ResourceCoordinator) newLedger(deploymentId string) (*ledger.AllocationLedger, error) {
-	return c.NewLedger(deploymentId)
-}
-
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
 // No i/o and no context: planning must stay reproducible from its inputs alone
 func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {

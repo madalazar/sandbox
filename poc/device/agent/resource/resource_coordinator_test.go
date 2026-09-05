@@ -69,7 +69,7 @@ func TestResourceCoordinatorNewLedger(t *testing.T) {
 	}
 
 	// newLedger delegates to NewLedger
-	l2, err := c.newLedger("dep1")
+	l2, err := c.NewLedger("dep1")
 	if err != nil || l2 == nil {
 		t.Fatalf("newLedger() error = %v, l = %v", err, l2)
 	}
