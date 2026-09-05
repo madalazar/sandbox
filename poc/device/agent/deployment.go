@@ -15,7 +15,6 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
-	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/poc/device/agent/types"
@@ -453,11 +452,14 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	composeAssignments := map[string][]int{}
 	coordinator := dm.newComposeResourceCoordinator()
 	composeConfigurator := configurator.NewComposeConfigurator()
 	cpuPlanner := planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices)
-	ledger := dm.newAllocationLedger(deploymentId)
+
+	ledger, err := coordinator.NewLedger(deploymentId)
+	if err != nil {
+		return fmt.Errorf("unable to create ledger %v", err)
+	}
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
@@ -465,35 +467,20 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("invalid compose component %v", err)
 		}
 		owner := model.NewOwnerRef(deploymentId, composeComp.Name)
-		dm.log.Infow(
-			"deploying app component",
-			"appId",
-			deploymentId,
-			"componentName",
-			composeComp.Name,
-		)
+		dm.log.Infow("deploying app component", "appId", deploymentId, "componentName", composeComp.Name)
 
 		// Get compose content from package location
 		dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(composeComp))
-		dm.log.Infow(
-			"compose component requiredResources",
-			"appId",
-			deploymentId,
-			"profileType",
-			appDeployment.Spec.DeploymentProfile.Type,
-			"profileRequiredResources",
-			appDeployment.Spec.DeploymentProfile.RequiredResources,
-			"componentName",
-			composeComp.Name,
-			"componentRequiredResources",
-			dm.extractComponentRequiredResources(component),
-		)
+		dm.log.Infow("compose component requiredResources", "appId", deploymentId, "profileType",
+			appDeployment.Spec.DeploymentProfile.Type, "profileRequiredResources",
+			appDeployment.Spec.DeploymentProfile.RequiredResources, "componentName",
+			composeComp.Name, "componentRequiredResources", dm.extractComponentRequiredResources(component))
 
 		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(composeComp.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -506,70 +493,59 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, err := dm.composeClient.DownloadCompose(
-			ctx,
-			composeComp.Properties.PackageLocation,
-			composeComp.Properties.KeyLocation,
-			projectName,
-		)
+		composeFilename, err := dm.composeClient.DownloadCompose(ctx, composeComp.Properties.PackageLocation,
+			composeComp.Properties.KeyLocation, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
 
 		cpuRequirements, err := model.NormalizeCpuRequirements(
-			model.ComponentRef(composeComp.Name),
-			composeComp.RequiredResources,
-		)
+			model.ComponentRef(composeComp.Name), composeComp.RequiredResources)
 		if err != nil {
-			return fmt.Errorf("invalid CPU requirements for component %s: %w", composeComp.Name, err)
+			return fmt.Errorf("invalid cpu requirements for component %s: %w", composeComp.Name, err)
 		}
 
-		cpuPlan, err := cpuPlanner.PlanCpu(planner.CpuPlanningRequest{
-			Requirements: cpuRequirements,
-			Ledger:       ledger,
-		})
+		cpuPlan, err := cpuPlanner.PlanCpu(planner.CpuPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
 		if err != nil {
-			return fmt.Errorf("failed to resolve compose CPU assignments for component %s: %w", composeComp.Name, err)
+			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", composeComp.Name, err)
 		}
+
 		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
 
 		var rollback *resource.ResourceRollback
-		if cpuPlan.HasCpus() {
-			copied := make([]int, len(cpuPlan.Cpus))
-			copy(copied, cpuPlan.Cpus)
-			composeAssignments[composeComp.Name] = copied
+		preparedComposeFilename := composeFilename
 
-			if err := dm.database.SetAllocations(deploymentId, database.Allocations{
-				Cpus: composeAssignments,
-			}); err != nil {
+		if cpuPlan.HasCpus() {
+			if err := coordinator.Commit(ctx, resource.ResourcePlan{Owner: owner, Cpu: cpuPlan}); err != nil {
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
 			}
 
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
-		}
 
-		preparedComposeFilename, err := composeConfigurator.Apply(cpuPlan, owner, composeFilename)
-		if err != nil {
-			return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, err)
-		}
+			var prepErr error
+			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
+			if prepErr != nil {
+				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+			}
 
-		removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
-			strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
-			strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
-		defer func(prep string, src string, rmSrc bool) {
-			if rmSrc {
-				if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-					dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
+			removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
+				strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
+				strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
+			defer func(prep string, src string, rmSrc bool) {
+				if rmSrc {
+					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
+					}
 				}
-			}
-			if prep != src {
-				if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-					dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
+				if prep != src {
+					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
+					}
 				}
-			}
-		}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
@@ -581,27 +557,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		if exists {
 			// Update existing deployment
-			dm.log.Infow(
-				"Updating existing Docker Compose project",
-				"projectName",
-				projectName,
-				"deploymentId",
-				deploymentId,
-				"composeFilename",
-				preparedComposeFilename,
-			)
+			dm.log.Infow("Updating existing Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
 			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
 		} else {
 			// New deployment
-			dm.log.Infow(
-				"Deploying new Docker Compose project",
-				"projectName",
-				projectName,
-				"deploymentId",
-				deploymentId,
-				"composeFilename",
-				preparedComposeFilename,
-			)
+			dm.log.Infow("Deploying new Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
 			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
 		}
 
@@ -609,15 +571,9 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("docker compose operation failed: %v", err)
 		}
 
-		dm.log.Infow(
-			"Docker Compose deployment successful",
-			"appId",
-			deploymentId,
-			"componentName",
-			composeComp.Name,
-			"projectName",
-			projectName,
-		)
+		dm.log.Infow("Docker Compose deployment successful",
+			"appId", deploymentId, "componentName", composeComp.Name, "projectName", projectName)
+
 		if rollback != nil {
 			rollback.Complete()
 		}
@@ -758,9 +714,6 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			fmt.Sprintf("Removal completed with errors: %v", removeErr),
 		)
 	} else {
-		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
-			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
-		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
 
@@ -947,11 +900,6 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	}
 
 	return envVars
-}
-
-func (dm *DeploymentManager) newAllocationLedger(deploymentId string) *ledger.AllocationLedger {
-	snapshot := ledger.NewAllocationSnapshot(dm.database.AllocatedCpus(), dm.hostTopology.IsolatedCpuSet)
-	return ledger.NewAllocationLedger(snapshot, deploymentId)
 }
 
 func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
