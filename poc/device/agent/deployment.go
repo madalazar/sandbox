@@ -3,13 +3,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kr/pretty"
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/resource"
+	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
+	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	"github.com/margo/sandbox/shared-lib/constraints"
 	"github.com/margo/sandbox/shared-lib/workloads"
@@ -460,33 +469,34 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
-	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
-		dm.log.Infow(
-			"deploying app component",
-			"appId", deploymentId,
-			"componentName", component.Name,
-		)
-		dm.log.Infow("view of the compose component", "component", pretty.Sprint(component))
+) (err error) {
+	coordinator := dm.newComposeResourceCoordinator()
+	composeConfigurator := configurator.NewComposeConfigurator()
 
+	ledger, err := coordinator.NewLedger(deploymentId)
+	if err != nil {
+		return fmt.Errorf("unable to create ledger %v", err)
+	}
+
+	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
+		if err != nil {
+			return fmt.Errorf("invalid compose component %v", err)
+		}
+		owner := model.NewOwnerRef(deploymentId, component.Name)
+		dm.log.Infow("deploying app component", "appId", deploymentId, "componentName", component.Name)
+
+		// Get compose content from package location
+		dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(component))
+		dm.log.Infow("compose component requiredResources", "appId", deploymentId, "profileType",
+			appDeployment.Spec.DeploymentProfile.Type, "profileRequiredResources",
+			appDeployment.Spec.DeploymentProfile.RequiredResources, "componentName",
+			component.Name, "componentRequiredResources", dm.extractComponentRequiredResources(component))
+
+		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
 
-		dm.log.Infow(
-			"compose device constraints",
-			"appId",
-			deploymentId,
-			"profileType",
-			appDeployment.Spec.DeploymentProfile.Type,
-			"profileDeviceConstraints",
-			appDeployment.Spec.DeploymentProfile.DeviceConstraints,
-			"componentName",
-			component.Name,
-			"device constraints",
-			dm.extractComponentDeviceConstraints(component),
-		)
-
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -510,39 +520,82 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		dm.log.Debugw("compose file downloaded", "composeFilename", composeFilename)
 
+		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+			Owner:        owner,
+			Requirements: component.RequiredResources,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
+		}
+
+		cpuPlan := resourcePlan.Cpu
+		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
+
+		var rollback *resource.ResourceRollback
+		preparedComposeFilename := composeFilename
+
+		if cpuPlan.HasCpus() {
+			if err := coordinator.Commit(ctx, resourcePlan); err != nil {
+				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
+			}
+
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
+
+			var prepErr error
+			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
+			if prepErr != nil {
+				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+			}
+
+			removeSourceComposeFile := strings.HasPrefix(component.Properties.PackageLocation, "oci://") ||
+				strings.HasPrefix(component.Properties.PackageLocation, "http://") ||
+				strings.HasPrefix(component.Properties.PackageLocation, "https://")
+			defer func(prep string, src string, rmSrc bool) {
+				if rmSrc {
+					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
+					}
+				}
+				if prep != src {
+					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
+					}
+				}
+			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+		}
+
+		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, component.Name)
 
-		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
+		// Check if project already exists
+		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
 
 		if exists {
-			dm.log.Infow(
-				"Updating existing Docker Compose project",
-				"projectName", projectName,
-				"deploymentId", deploymentId,
-			)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
+			// Update existing deployment
+			dm.log.Infow("Updating existing Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
 		} else {
-			dm.log.Infow(
-				"Deploying new Docker Compose project",
-				"projectName", projectName,
-				"deploymentId", deploymentId,
-			)
-			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
+			// New deployment
+			dm.log.Infow("Deploying new Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
 		}
 
 		if err != nil {
 			return fmt.Errorf("docker compose operation failed: %v", err)
 		}
 
-		dm.log.Infow(
-			"Docker Compose deployment successful",
-			"appId", deploymentId,
-			"componentName", component.Name,
-			"projectName", projectName,
-		)
+		dm.log.Infow("Docker Compose deployment successful",
+			"appId", deploymentId, "componentName", component.Name, "projectName", projectName)
+
+		if rollback != nil {
+			rollback.Complete()
+		}
 	}
 	return nil
 }
@@ -726,6 +779,9 @@ func (dm *DeploymentManager) removeCompose(
 		return nil
 	}
 
+	coordinator := dm.newComposeResourceCoordinator()
+
+	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
@@ -750,6 +806,14 @@ func (dm *DeploymentManager) removeCompose(
 				"projectName", projectName,
 				"componentName", component.Name,
 			)
+
+			owner := model.NewOwnerRef(deploymentId, component.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release compose component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", component.Name,
+					"error", err)
+			}
 		}
 	}
 	return nil
@@ -769,18 +833,50 @@ func GetAddress[T any](a T) *T {
 	return &a
 }
 
+// TODO: this is just a method used for logging purposes. To be removed once the
+// implementation is added
+// extractComponentRequiredResources reads requiredResources from the raw component JSON.
+// The generated compose component type does not currently include this field.
+func (dm *DeploymentManager) extractComponentRequiredResources(
+	component sbi.AppDeploymentProfile_Components_Item,
+) map[string]interface{} {
+	raw, err := component.MarshalJSON()
+	if err != nil {
+		dm.log.Debugw("failed to marshal component JSON", "error", err)
+		return nil
+	}
+
+	var componentMap map[string]interface{}
+	if err := json.Unmarshal(raw, &componentMap); err != nil {
+		dm.log.Debugw("failed to unmarshal component JSON", "error", err)
+		return nil
+	}
+
+	if resources, ok := componentMap["requiredResources"].(map[string]interface{}); ok {
+		return resources
+	}
+
+	if properties, ok := componentMap["properties"].(map[string]interface{}); ok {
+		if resources, ok := properties["requiredResources"].(map[string]interface{}); ok {
+			return resources
+		}
+	}
+
+	return nil
+}
+
 // Helper function to convert parameters to environment variables
 func (dm *DeploymentManager) convertParametersToEnvVars(
-	params map[string]interface{},
+	params map[string]any,
 	componentName string,
 ) map[string]string {
 	envVars := make(map[string]string)
 
 	// Convert component-specific parameters
 	if componentParams, exists := params[componentName]; exists {
-		if paramMap, ok := componentParams.(map[string]interface{}); ok {
+		if paramMap, ok := componentParams.(map[string]any); ok {
 			for key, value := range paramMap {
-				envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+				envVars[strings.ToUpper(key)] = dm.formatEnvValue(value)
 			}
 		}
 	}
@@ -788,7 +884,7 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	// Convert global parameters
 	for key, value := range params {
 		if key != componentName { // Skip component-specific params already processed
-			envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+			envVars[strings.ToUpper(key)] = dm.formatEnvValue(value)
 		}
 	}
 
@@ -802,4 +898,36 @@ func (dm *DeploymentManager) extractComponentDeviceConstraints(
 	component sbi.ApplicationDeploymentProfileComponent,
 ) *sbi.DeviceConstraints {
 	return component.DeviceConstraints
+}
+
+// needed to properly convert integers with more > 6 digits
+func (dm *DeploymentManager) formatEnvValue(value any) string {
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if v == math.Trunc(v) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if f == math.Trunc(f) {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 32)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
+func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
+		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
+	)
 }
