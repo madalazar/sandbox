@@ -71,11 +71,11 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	}
 
 	store := NewDatabaseReservationStore(db, nil)
-	const componentName = "comp1"
-	cpuSet := []int{1, 2}
+	componentName1 := "comp1"
+	cpuSet1 := []int{1, 2}
 
 	if err := store.SaveReservation(deploymentID,
-		Reservation{Cpus: cpuSet, Owner: model.OwnerRef{Deployment: deploymentID, Component: componentName}}); err != nil {
+		Reservation{Cpus: cpuSet1, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName1)}}); err != nil {
 		t.Fatalf("SaveAllocations() error = %v", err)
 	}
 
@@ -83,8 +83,26 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAllocations() error = %v", err)
 	}
-	if !reflect.DeepEqual(allocations.Cpus[componentName], cpuSet) {
-		t.Fatalf("GetAllocations() cpus = %#v, want %#v", allocations.Cpus[componentName], cpuSet)
+	if !reflect.DeepEqual(allocations.Cpus[componentName1], cpuSet1) {
+		t.Fatalf("GetAllocations() cpus = %#v, want %#v", allocations.Cpus[componentName1], cpuSet1)
+	}
+
+	// Saving allocations for another component preserves existing component allocations
+	componentName2 := "comp2"
+	cpuSet2 := []int{3}
+
+	if err := store.SaveReservation(deploymentID,
+		Reservation{Cpus: cpuSet2, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName2)}}); err != nil {
+		t.Fatalf("SaveAllocations() error = %v", err)
+	}
+
+	allocations2, err := db.GetAllocations(deploymentID)
+	if err != nil {
+		t.Fatalf("GetAllocations() error = %v", err)
+	}
+	wantMerged := map[string][]int{componentName1: cpuSet1, componentName2: cpuSet2}
+	if !reflect.DeepEqual(allocations2.Cpus, wantMerged) {
+		t.Fatalf("GetAllocations() after merge = %#v, want %#v", allocations2.Cpus, wantMerged)
 	}
 }
 

@@ -65,15 +65,18 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reserv
 }
 
 func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
-	if len(reservation.Cpus) == 0 {
-		return nil
+	existing, err := s.db.GetAllocations(deploymentId)
+	if err != nil {
+		return err
 	}
 
-	cpus := map[string][]int{
-		string(reservation.Owner.Component): reservation.Cpus,
+	merged := make(map[string][]int, len(existing.Cpus)+len(reservation.Cpus))
+	for k, v := range existing.Cpus {
+		merged[k] = append([]int(nil), v...)
 	}
+	merged[string(reservation.Owner.Component)] = append([]int(nil), reservation.Cpus...)
 
-	return s.db.SetAllocations(deploymentId, database.Allocations{Cpus: cpus})
+	return s.db.SetAllocations(deploymentId, database.Allocations{Cpus: merged})
 }
 
 func (s *DatabaseReservationStore) ClearComponent(owner model.OwnerRef) error {

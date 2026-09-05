@@ -55,7 +55,7 @@ func NewResourceCoordinator(store ReservationStore, cpuPlanner planner.CpuPlanne
 // threads the result through every component of that deployment, so a component cannot
 // be planned onto cpus a sibling took earlier in the same pass
 func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.AllocationLedger, error) {
-	snapshot, err := c.store.Snapshot()
+	snapshot, err := c.store.LoadSnapshot()
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +90,10 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 	if !plan.Cpu.HasCpus() {
 		return nil
 	}
-	return c.store.SaveAllocations(plan.Owner.Deployment, map[string][]int{
-		string(plan.Owner.Component): plan.Cpu.Cpus,
+
+	return c.store.SaveReservation(plan.Owner.Deployment, Reservation{
+		Owner: model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
+		Cpus:  plan.Cpu.Cpus,
 	})
 }
 

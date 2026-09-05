@@ -23,7 +23,7 @@ type fakeReservationStore struct {
 	snapshot    ledger.AllocationSnapshot
 }
 
-func (s *fakeReservationStore) Snapshot() (ledger.AllocationSnapshot, error) {
+func (s *fakeReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, error) {
 	return s.snapshot, nil
 }
 
@@ -31,9 +31,9 @@ func (s *fakeReservationStore) LoadReservation(owner model.OwnerRef) (Reservatio
 	return s.reservation, s.found, s.loadErr
 }
 
-func (s *fakeReservationStore) SaveAllocations(deploymentId string, cpus map[string][]int) error {
+func (s *fakeReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
 	s.savedDep = deploymentId
-	s.savedCpus = cpus
+	s.savedCpus = map[string][]int{string(reservation.Owner.Component): reservation.Cpus}
 	return nil
 }
 
