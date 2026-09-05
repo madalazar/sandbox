@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/resource"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	wfm "github.com/margo/sandbox/poc/wfm/cli"
 	"github.com/margo/sandbox/shared-lib/mis/mtls"
@@ -38,6 +40,8 @@ type Agent struct {
 	capabilities   *sbi.DeviceCapabilitiesManifest
 	config         types.Config
 	database       database.DatabaseIfc
+	balloonPolicy  *resource.BalloonPolicyInformer
+	policyReader   model.BalloonPolicyReader
 	syncer         StateSyncerIfc
 	deployer       DeploymentManagerIfc
 	monitor        DeploymentMonitorIfc
@@ -75,12 +79,19 @@ func NewAgent(configPath string) (*Agent, error) {
 	opts := []Option{}
 	var helmClient *workloads.HelmClient
 	var composeClient *workloads.DockerComposeCliClient
+	var balloonPolicy *resource.BalloonPolicyInformer
 	for _, runtime := range cfg.Runtimes {
 		if runtime.Kubernetes != nil {
 			// Create Helm client
 			helmClient, err = workloads.NewHelmClient(runtime.Kubernetes.KubeconfigPath)
 			if err != nil {
 				return nil, err
+			}
+			if balloonPolicy == nil {
+				balloonPolicy, err = resource.NewBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
+				if err != nil {
+					return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
+				}
 			}
 			opts = append(opts, WithEnableHelmDeployment())
 		}
@@ -188,10 +199,8 @@ func NewAgent(configPath string) (*Agent, error) {
 		log.Errorw("unable to load host topology artifact", "path", topologyArtifactPath, "error", err)
 	}
 
-	// Create components
-	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, hostTopology, log)
+	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicy, hostTopology, log)
 	monitor := NewDeploymentMonitor(db, capabilities, helmClient, composeClient, log)
-
 	syncer := NewStateSyncer(
 		db,
 		wfmClient,
@@ -204,6 +213,8 @@ func NewAgent(configPath string) (*Agent, error) {
 
 	return &Agent{
 		database:       db,
+		balloonPolicy:  balloonPolicy,
+		policyReader:   balloonPolicy,
 		syncer:         syncer,
 		deployer:       deployer,
 		monitor:        monitor,
@@ -294,6 +305,15 @@ func (a *Agent) Start() error {
 		time.Sleep(5 * time.Second)
 	}
 
+	if a.balloonPolicy != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := a.balloonPolicy.Start(ctx); err != nil {
+			a.log.Warnw("balloon policy informer did not complete initial sync; continuing without NRI annotations", "err", err)
+		}
+	}
+
 	// 3. Start all components
 	a.statusReporter.Start()
 	a.deployer.Start()
@@ -313,6 +333,11 @@ func (a *Agent) Start() error {
 func (a *Agent) Stop() error {
 	a.log.Info("Stopping Workload Fleet Management Client")
 	a.tbCacher.Stop()
+
+	if a.balloonPolicy != nil {
+		a.balloonPolicy.Stop()
+	}
+
 	a.syncer.Stop()
 	a.deployer.Stop()
 	a.monitor.Stop()

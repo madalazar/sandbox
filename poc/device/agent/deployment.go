@@ -36,6 +36,7 @@ type DeploymentManager struct {
 	helmClient    *workloads.HelmClient
 	composeClient *workloads.DockerComposeCliClient
 	capabilities  *sbi.DeviceCapabilitiesManifest
+	policyReader  model.BalloonPolicyReader
 	log           *zap.SugaredLogger
 	stopChan      chan struct{}
 	hostTopology  types.HostTopology
@@ -48,6 +49,7 @@ func NewDeploymentManager(
 	capabilities *sbi.DeviceCapabilitiesManifest,
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
+	policyReader model.BalloonPolicyReader,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
@@ -55,6 +57,7 @@ func NewDeploymentManager(
 		database:       db,
 		helmClient:     helmClient,
 		composeClient:  composeClient,
+		policyReader:   policyReader,
 		hostTopology:   hostTopology,
 		log:            log,
 		capabilities:   capabilities,
@@ -380,17 +383,26 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
+) (err error) {
+	coordinator := dm.newHelmResourceCoordinator()
+	helmConfigurator := configurator.NewHelmConfigurator()
+
+	ledger, err := coordinator.NewLedger(deploymentId)
+	if err != nil {
+		return fmt.Errorf("unable to create ledger %v", err)
+	}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
-		dm.log.Infow(
-			"deploying app component",
-			"appId", deploymentId,
-			"componentName", component.Name,
-		)
+		if err != nil {
+			return fmt.Errorf("invalid helm component: %v", err)
+		}
+		owner := model.NewOwnerRef(deploymentId, component.Name)
+		dm.log.Infow("view of the helm component", "helmComp", pretty.Sprint(component))
+		dm.log.Infow("deploying app component", "appId", deploymentId, "componentName", component.Name)
 
 		releaseName := fmt.Sprintf("%s-%s", component.Name, deploymentId[:8])
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -399,68 +411,81 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to convert deployment profiles: %w", err)
 			}
 			if v, exists := componentValues[component.Name]; exists {
-				values = v
+				values = normalizeHelmValues(v)
 			}
 		}
 
 		values["fullnameOverride"] = releaseName
 
+		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+			Owner:        owner,
+			Requirements: component.RequiredResources,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
+		}
+
+		var rollback *resource.ResourceRollback
+		if plan.Cpu.HasCpus() {
+			if err := coordinator.Commit(ctx, plan); err != nil {
+				return fmt.Errorf("failed to persist helm allocations for component %s: %w", component.Name, err)
+			}
+
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
+		}
+
+		// update pod annotations for this helm component
+		values, err = helmConfigurator.Apply(plan.Cpu, owner, values)
+		if err != nil {
+			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", component.Name, err)
+		}
+
+		dm.log.Infow("Applied resource annotations to Helm values", "componentName", component.Name, "releaseName",
+			releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", plan.Cpu.CpuSet())
+
+		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
+
+		// Deploy/Update
 		release, err := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
 		if err != nil {
 			dm.log.Infow(
-				"release not found, will install",
-				"releaseName", releaseName,
-				"deploymentId", deploymentId,
-				"err", err.Error(),
-			)
+				"failed to check whether a release exists or not, assuming that it doesn't exist, will proceed with installation",
+				"releaseName", releaseName, "deploymentId", deploymentId, "err", err.Error())
 		}
 
 		if release != nil {
-			dm.log.Infow(
-				"Updating existing Helm release",
-				"releaseName", releaseName,
-				"deploymentId", deploymentId,
-			)
-			err = dm.helmClient.UpdateChart(
-				ctx,
-				releaseName,
-				component.Properties.Repository,
-				"",
-				values,
-			)
-			if err != nil {
+			// Release exists, update it
+			dm.log.Infow("Updating existing Helm release", "releaseName", releaseName, "deploymentId", deploymentId)
+
+			if err = dm.helmClient.UpdateChart(ctx, releaseName, component.Properties.Repository, "", values); err != nil {
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
 			}
-			return nil
+
+			if rollback != nil {
+				rollback.Complete()
+			}
+
+			continue
 		}
 
-		dm.log.Infow(
-			"Installing new Helm release",
-			"releaseName", releaseName,
-			"deploymentId", deploymentId,
-		)
+		// New deployment
+		dm.log.Infow("Installing new Helm release", "releaseName", releaseName, "deploymentId", deploymentId)
 
-		revision := component.Properties.Revision // now a string, not *string
+		revision := component.Properties.Revision
+
 		wait := component.Properties.Wait != nil && *component.Properties.Wait
-
-		err = dm.helmClient.InstallChart(
-			ctx,
-			releaseName,
-			component.Properties.Repository,
-			"",
-			revision,
-			wait,
-			values,
-		)
-		if err != nil {
+		if err = dm.helmClient.InstallChart(ctx, releaseName, component.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
 		}
-		dm.log.Infow(
-			"Helm deployment successful",
-			"appId", deploymentId,
-			"releaseName", releaseName,
-		)
+
+		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
+
+		if rollback != nil {
+			rollback.Complete()
+		}
 	}
+
 	return nil
 }
 
@@ -721,6 +746,9 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			fmt.Sprintf("Removal completed with errors: %v", removeErr),
 		)
 	} else {
+		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
+			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
+		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
 
@@ -739,6 +767,8 @@ func (dm *DeploymentManager) removeHelm(
 		dm.log.Warnw("Helm client not initialized, skipping", "deploymentId", deploymentId)
 		return nil
 	}
+
+	coordinator := dm.newHelmResourceCoordinator()
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		releaseName := fmt.Sprintf("%s-%s", component.Name, deploymentId[:8])
@@ -762,6 +792,14 @@ func (dm *DeploymentManager) removeHelm(
 				"releaseName", releaseName,
 				"componentName", component.Name,
 			)
+
+			owner := model.NewOwnerRef(deploymentId, component.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release helm component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", component.Name,
+					"error", err)
+			}
 		}
 	}
 	return nil
@@ -866,6 +904,20 @@ func (dm *DeploymentManager) extractComponentDeviceConstraints(
 	return component.DeviceConstraints
 }
 
+func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
+		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
+	)
+}
+
+func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
+		planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices),
+	)
+}
+
 // needed to properly convert integers with more > 6 digits
 func (dm *DeploymentManager) formatEnvValue(value any) string {
 	switch v := value.(type) {
@@ -891,9 +943,43 @@ func (dm *DeploymentManager) formatEnvValue(value any) string {
 	}
 }
 
-func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
-	return resource.NewResourceCoordinator(
-		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
-	)
+// normalizeHelmValues recursively normalizes values before Helm templating.
+// JSON-decoded numeric values arrive as float64; convert whole-number floats
+// to int64 so templates render integers (e.g. 1000000 instead of 1e+06).
+func normalizeHelmValues(values map[string]any) map[string]any {
+	normalized := make(map[string]any, len(values))
+	for key, value := range values {
+		normalized[key] = normalizeHelmValue(value)
+	}
+	return normalized
+}
+
+func normalizeHelmValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(v))
+		for key, nested := range v {
+			normalized[key] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(v))
+		for i, nested := range v {
+			normalized[i] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) {
+			return int64(v)
+		}
+		return v
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) {
+			return int64(f)
+		}
+		return v
+	default:
+		return value
+	}
 }
