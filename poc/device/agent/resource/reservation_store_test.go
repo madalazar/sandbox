@@ -83,6 +83,21 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	if !reflect.DeepEqual(allocations.Cpus, cpus) {
 		t.Fatalf("GetAllocations() cpus = %#v, want %#v", allocations.Cpus, cpus)
 	}
+
+	// Saving allocations for another component preserves existing component allocations
+	cpus2 := map[string][]int{"comp2": {3}}
+	if err := store.SaveAllocations(deploymentID, cpus2); err != nil {
+		t.Fatalf("SaveAllocations() error = %v", err)
+	}
+
+	allocations2, err := db.GetAllocations(deploymentID)
+	if err != nil {
+		t.Fatalf("GetAllocations() error = %v", err)
+	}
+	wantMerged := map[string][]int{"comp1": {1, 2}, "comp2": {3}}
+	if !reflect.DeepEqual(allocations2.Cpus, wantMerged) {
+		t.Fatalf("GetAllocations() after merge = %#v, want %#v", allocations2.Cpus, wantMerged)
+	}
 }
 
 func TestDatabaseReservationStoreSnapshot(t *testing.T) {
