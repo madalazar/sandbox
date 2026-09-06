@@ -201,15 +201,18 @@ func LoadHostTopology(path string) (HostTopology, error) {
 		IsolatedCpuSet:     isolatedSet,
 	}
 	lookup.L3Caches = caches
+
 	pqosInterface, err := readPqoSInterfaceFromArtifact(path)
 	if err != nil {
-		return HostTopology{}, err
+		// replace with log warning
+		fmt.Println("empty or invalid pqos_interface value found in host-topology artifact")
 	}
 	lookup.PqoSInterface = pqosInterface
 
 	maxClos, err := readMaxClosFromArtifact(path)
 	if err != nil {
-		return HostTopology{}, err
+		// replace with log warning
+		fmt.Println("empty or invalid max_clos value found in host-topology artifact")
 	}
 	lookup.MaxClos = maxClos
 
