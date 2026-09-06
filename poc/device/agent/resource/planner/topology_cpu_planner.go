@@ -15,6 +15,11 @@ type TopologyCpuPlanner struct {
 }
 
 func NewTopologyCpuPlanner(isolated []int) TopologyCpuPlanner {
+	if len(isolated) == 0 {
+		fmt.Println("[WARNING] no isolated cores found in host's topology;  cpu planner might not work correctly")
+	}
+
+	fmt.Printf("[DEBUG] iso cores from topology: %v \n", isolated)
 	return TopologyCpuPlanner{isolated: isolated}
 }
 
@@ -33,10 +38,14 @@ func (p TopologyCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, 
 		if len(selected) == needed {
 			break
 		}
+
 		if request.Ledger.IsCpuAvailable(cpu, requirements.Component) {
+			fmt.Printf("**** cpu %d: is available for use from the ledger\n", cpu)
 			selected = append(selected, cpu)
 		}
 	}
+
+	fmt.Printf("**** picked cores %v from host topoology for component %s\n", selected, requirements.Component)
 
 	if len(selected) < needed {
 		return model.CpuPlan{}, fmt.Errorf(
