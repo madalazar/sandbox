@@ -187,6 +187,7 @@ start_device_agent_docker_service() {
   prepare_host_resources || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
+  cp ../poc/device/agent/config/host-topology.json ./config/
   cp ../poc/device/agent/config/config.yaml ./config/
   set_capabilities_deployment_type compose
 
