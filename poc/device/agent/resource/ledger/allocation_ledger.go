@@ -1,8 +1,6 @@
 package ledger
 
 import (
-	"fmt"
-
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
@@ -25,6 +23,7 @@ func NewAllocationSnapshot(
 		}
 		owners[cpuIndex] = model.ParseOwnerRef(owner)
 	}
+
 	return AllocationSnapshot{CpuOwners: owners}
 }
 
@@ -46,23 +45,21 @@ func NewAllocationLedger(snapshot AllocationSnapshot, deploymentId string) *Allo
 }
 
 // reports whether ref may take cpuIndex: unheld, or already persisted to
-// ref itself. A sibling component's claim blocks, whether persisted or made earlier in
-// this pass
+// ref itself
 func (l *AllocationLedger) IsCpuAvailable(cpuIndex int, ref model.ComponentRef) bool {
 	if holder, reserved := l.reservedCpus[cpuIndex]; reserved {
 		return holder == ref
 	}
+
 	return model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(l.snapshot.CpuOwners[cpuIndex])
 }
 
-// records an exclusive claim for this pass. It reserves nothing when any
+// records an exclusive claim for this pass; it reserves nothing when any
 // index is unavailable.
 func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error {
-	for _, cpuIndex := range cpus {
-		if !l.IsCpuAvailable(cpuIndex, ref) {
-			return fmt.Errorf("cpu %d is not available to component %q", cpuIndex, ref)
-		}
-	}
+	// if we want to add a double check for l.IsCpuAvailable(cpuIndex, ref) we can add it here
+	// while originally added, it was removed as the planner's call to l.IsCpuAvailable
+	// makes this call redundant
 
 	for _, cpuIndex := range cpus {
 		l.reservedCpus[cpuIndex] = ref
