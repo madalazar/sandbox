@@ -19,16 +19,16 @@ func NewOwnerRef(deploymentId string, componentName string) OwnerRef {
 	}
 }
 
-// String is the persisted owner encoding used by database.AllocatedCpus and AllocatedCaches
+// persisted owner encoding used by database.AllocatedCpus and AllocatedCaches
 func (o OwnerRef) String() string {
 	if o.Component == "" {
 		return o.Deployment
 	}
+
 	return o.Deployment + "/" + string(o.Component)
 }
 
-// CanTake reports whether o may claim a resource currently held by holder: free, or
-// already owned by o itself. A sibling component's claim blocks
+// reports whether o may claim a resource currently held by holder
 func (o OwnerRef) CanTake(holder OwnerRef) bool {
 	if holder.Deployment == "" {
 		return true
@@ -37,14 +37,16 @@ func (o OwnerRef) CanTake(holder OwnerRef) bool {
 	if holder.Component == "" && holder.Deployment == o.Deployment {
 		return true
 	}
+
 	return holder == o
 }
 
-// ParseOwnerRef decodes the persisted owner encoding
+// decodes the persisted owner encoding
 func ParseOwnerRef(owner string) OwnerRef {
 	deployment, ref, found := strings.Cut(strings.TrimSpace(owner), "/")
 	if !found {
 		return OwnerRef{Deployment: deployment}
 	}
+
 	return OwnerRef{Deployment: strings.TrimSpace(deployment), Component: ComponentRef(strings.TrimSpace(ref))}
 }
