@@ -57,7 +57,7 @@ func TestRewriteComposeYamlBindsToSingleService(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := RewriteComposeYaml(strings.NewReader(testCase.source), &out, testCase.plan); err != nil {
+			if err := rewriteComposeYaml(strings.NewReader(testCase.source), &out, testCase.plan); err != nil {
 				t.Fatalf("RewriteComposeYaml: %v", err)
 			}
 
@@ -78,7 +78,7 @@ func TestRewriteComposeYamlAppliesToMultipleServices(t *testing.T) {
     image: second:latest
 `
 	var out bytes.Buffer
-	err := RewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1, 2))
+	err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1, 2))
 	if err != nil {
 		t.Fatalf("RewriteComposeYaml: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRewriteComposeYamlRejectsInvalidServices(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := RewriteComposeYaml(strings.NewReader(testCase.source), &out, cpuPlanFor("component", 1))
+			err := rewriteComposeYaml(strings.NewReader(testCase.source), &out, cpuPlanFor("component", 1))
 			if err == nil {
 				t.Fatal("expected an error, got nil")
 			}
@@ -138,7 +138,7 @@ func TestRewriteComposeYamlRejectsListFormEnvironment(t *testing.T) {
       - EXISTING=keep
 `
 	var out bytes.Buffer
-	if err := RewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err == nil {
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err == nil {
 		t.Fatal("expected an error for list-form environment, got nil")
 	}
 }
@@ -151,7 +151,7 @@ func TestRewriteComposeYamlCopiesSourceWhenPlanHasNoCpus(t *testing.T) {
     image: second:latest
 `
 	var out bytes.Buffer
-	if err := RewriteComposeYaml(strings.NewReader(source), &out, model.CpuPlan{}); err != nil {
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, model.CpuPlan{}); err != nil {
 		t.Fatalf("RewriteComposeYaml: %v", err)
 	}
 	if out.String() != source {
