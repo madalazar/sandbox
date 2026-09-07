@@ -50,8 +50,8 @@ type DeploymentRecord struct {
 	DesiredState        *AppDeploymentState
 	CurrentState        *AppDeploymentState
 	ComponentViseStatus map[string]sbi.ComponentStatus
-	CpuAssignments      map[string][]int // component name -> CPU indices
-	Phase               string           // "deploying", "running", "failed", "removing", "removed"
+	Allocations         Allocations
+	Phase               string // "deploying", "running", "failed", "removing", "removed"
 	Message             string
 	LastUpdated         time.Time
 }
@@ -337,9 +337,11 @@ func (db *Database) SetDesiredState(deploymentId string, state AppDeploymentStat
 			AppID:               deploymentId,
 			DeploymentID:        deploymentId,
 			ComponentViseStatus: make(map[string]sbi.ComponentStatus),
-			CpuAssignments:      make(map[string][]int),
-			Phase:               "pending",
-			LastUpdated:         time.Now(),
+			Allocations: Allocations{
+				Cpus: make(map[string][]int),
+			},
+			Phase:       "pending",
+			LastUpdated: time.Now(),
 		}
 	}
 
@@ -426,7 +428,7 @@ func (db *Database) SetAllocations(deploymentId string, allocations Allocations)
 		return fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	record.CpuAssignments = allocations.clone().Cpus
+	record.Allocations = allocations.clone()
 	record.LastUpdated = time.Now()
 	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
 	db.TriggerDataPersist()
@@ -445,7 +447,9 @@ func (db *Database) ClearComponentAllocations(deploymentId, componentName string
 		return fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	delete(record.CpuAssignments, componentName)
+	if record.Allocations.Cpus != nil {
+		delete(record.Allocations.Cpus, componentName)
+	}
 	record.LastUpdated = time.Now()
 	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
 	db.TriggerDataPersist()
@@ -462,7 +466,7 @@ func (db *Database) GetAllocations(deploymentId string) (Allocations, error) {
 		return Allocations{}, fmt.Errorf("deployment %s not found", deploymentId)
 	}
 
-	return Allocations{Cpus: record.CpuAssignments}.clone(), nil
+	return record.Allocations.clone(), nil
 }
 
 // the device-wide view of which cpu index is held by which component,
@@ -473,7 +477,7 @@ func (db *Database) AllocatedCpus() map[int]string {
 
 	allocated := make(map[int]string)
 	for deploymentID, deployment := range db.deployments {
-		for component, cpuIndices := range deployment.CpuAssignments {
+		for component, cpuIndices := range deployment.Allocations.Cpus {
 			owner := deploymentID
 			if strings.TrimSpace(component) != "" {
 				owner = fmt.Sprintf("%s/%s", deploymentID, component)
