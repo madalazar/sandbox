@@ -45,7 +45,7 @@ func (p TopologyCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, 
 		}
 	}
 
-	fmt.Printf("**** picked cores %v from host topoology for component %s\n", selected, requirements.Component)
+	fmt.Printf("**** picked cores %v from host topology for component %s\n", selected, requirements.Component)
 
 	if len(selected) < needed {
 		return model.CpuPlan{}, fmt.Errorf(
