@@ -15,6 +15,8 @@ import (
 
 const ComposeCpuSetEnvVarName = "TEST_CPUSET"
 
+var fileTokenReplacer = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
 // applies a cpu plan to a compose package by rewriting the downloaded file into a
 // temporary copy it owns
 type ComposeConfigurator struct{}
@@ -23,7 +25,7 @@ func NewComposeConfigurator() *ComposeConfigurator {
 	return &ComposeConfigurator{}
 }
 
-// writes the plan's cpuset into the source file's single service and returns the path of
+// writes the plan's cpuset into the services of the source file and returns the path of
 // the prepared copy. A plan with no cpus returns sourcePath unchanged, so the caller
 // must not assume it owns the returned file
 func (c *ComposeConfigurator) Apply(
@@ -77,7 +79,7 @@ func rewriteComposeFile(sourcePath string, targetPath string, plan model.CpuPlan
 		return err
 	}
 
-	rewriteErr := RewriteComposeYaml(in, out, plan)
+	rewriteErr := rewriteComposeYaml(in, out, plan)
 	closeErr := out.Close()
 	if rewriteErr != nil {
 		return rewriteErr
@@ -86,7 +88,7 @@ func rewriteComposeFile(sourcePath string, targetPath string, plan model.CpuPlan
 	return closeErr
 }
 
-func RewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
+func rewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
 	if !plan.HasCpus() {
 		_, err := io.Copy(out, in)
 		return err
@@ -102,7 +104,7 @@ func RewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
 		return fmt.Errorf("parse compose yaml: %w", err)
 	}
 
-	serviceNodes, err := updateComposeServiceNodes(&root)
+	serviceNodes, err := getComposeServiceNodes(&root)
 	if err != nil {
 		return err
 	}
@@ -130,7 +132,7 @@ func RewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
 
 // IMPORTANT: we can't safely assume that we will have only one compose service inside a yaml
 // file so we will assume that we want to assign the cpu plan to all the services inside the file
-func updateComposeServiceNodes(root *yamlv3.Node) (map[string]*yamlv3.Node, error) {
+func getComposeServiceNodes(root *yamlv3.Node) (map[string]*yamlv3.Node, error) {
 	if root == nil || len(root.Content) == 0 {
 		return nil, fmt.Errorf("compose yaml is empty")
 	}
@@ -144,22 +146,11 @@ func updateComposeServiceNodes(root *yamlv3.Node) (map[string]*yamlv3.Node, erro
 		return nil, fmt.Errorf("compose yaml must declare a services mapping")
 	}
 
-	if services.Kind != yamlv3.MappingNode {
-		return nil, fmt.Errorf("compose services must be a mapping")
-	}
-
 	result := make(map[string]*yamlv3.Node)
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		nameNode := services.Content[i]
 		valueNode := services.Content[i+1]
-		// TODO: hardcoding the "_compose" suffix here
-		// to deal with multiple services inside the docker-compose.yaml
-		// file for the same component. Once we decide there
-		// will be only one component per compose file, we can remove this suffix.
-		// or we add another field to map component to service name
-		result[nameNode.Value+"_compose"] = valueNode
-		// TODO: investigate why the need for the suffix _compose
-		// result[nameNode.Value] = valueNode
+		result[nameNode.Value] = valueNode
 	}
 	return result, nil
 }
@@ -176,24 +167,28 @@ func mappingValueByKey(mapping *yamlv3.Node, key string) *yamlv3.Node {
 	return nil
 }
 
+func setOrAppendMappingScalar(mapping *yamlv3.Node, key string, value string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1].Kind = yamlv3.ScalarNode
+			mapping.Content[i+1].Tag = "!!str"
+			mapping.Content[i+1].Value = value
+			return
+		}
+	}
+
+	mapping.Content = append(mapping.Content,
+		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: key},
+		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: value},
+	)
+}
+
 func setServiceCpuset(serviceNode *yamlv3.Node, cpuset string) error {
 	if serviceNode.Kind != yamlv3.MappingNode {
 		return fmt.Errorf("service definition must be a mapping")
 	}
 
-	for i := 0; i+1 < len(serviceNode.Content); i += 2 {
-		if serviceNode.Content[i].Value == "cpuset" {
-			serviceNode.Content[i+1].Kind = yamlv3.ScalarNode
-			serviceNode.Content[i+1].Tag = "!!str"
-			serviceNode.Content[i+1].Value = cpuset
-			return nil
-		}
-	}
-
-	serviceNode.Content = append(serviceNode.Content,
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: "cpuset"},
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: cpuset},
-	)
+	setOrAppendMappingScalar(serviceNode, "cpuset", cpuset)
 	return nil
 }
 
@@ -202,14 +197,7 @@ func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, var
 		return fmt.Errorf("service definition must be a mapping")
 	}
 
-	var envNode *yamlv3.Node
-	for i := 0; i+1 < len(serviceNode.Content); i += 2 {
-		if serviceNode.Content[i].Value == "environment" {
-			envNode = serviceNode.Content[i+1]
-			break
-		}
-	}
-
+	envNode := mappingValueByKey(serviceNode, "environment")
 	if envNode == nil {
 		envNode = &yamlv3.Node{
 			Kind:    yamlv3.MappingNode,
@@ -226,19 +214,7 @@ func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, var
 		return fmt.Errorf("service environment must be a mapping")
 	}
 
-	for i := 0; i+1 < len(envNode.Content); i += 2 {
-		if envNode.Content[i].Value == varName {
-			envNode.Content[i+1].Kind = yamlv3.ScalarNode
-			envNode.Content[i+1].Tag = "!!str"
-			envNode.Content[i+1].Value = varValue
-			return nil
-		}
-	}
-
-	envNode.Content = append(envNode.Content,
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varName},
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varValue},
-	)
+	setOrAppendMappingScalar(envNode, varName, varValue)
 	return nil
 }
 
@@ -247,8 +223,7 @@ func sanitizeFileToken(value string) string {
 	if value == "" {
 		return "unknown"
 	}
-	replacer := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-	cleaned := replacer.ReplaceAllString(value, "-")
+	cleaned := fileTokenReplacer.ReplaceAllString(value, "-")
 	cleaned = strings.Trim(cleaned, "-")
 	if cleaned == "" {
 		return "unknown"
