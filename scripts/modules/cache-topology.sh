@@ -409,3 +409,41 @@ read_cache_topology_as_json() {
 
   printf '%s\n' "$topology_json"
 }
+
+# Get the number of classes of service a level exposes, or 0 when unavailable.
+_get_num_closids_for_level() {
+  local level="$1"
+  local closid_file="$CACHE_RESCTRL_ROOT/info/${level}/num_closids"
+  [[ -r "$closid_file" ]] || { echo 0; return 1; }
+
+  local value
+  value="$(tr -d '[:space:]' < "$closid_file" 2>/dev/null || true)"
+  [[ "$value" =~ ^[0-9]+$ ]] || { echo 0; return 1; }
+
+  echo "$value"
+}
+
+# Echo the most classes of service the device can hold: the minimum num_closids across
+# the resctrl levels present, because one control group consumes a CLOS in every level.
+# Echoes 0 when resctrl is unmounted or exposes no level.
+get_device_max_closids() {
+  local min=0
+  local info_dir level value
+
+  for info_dir in "$CACHE_RESCTRL_ROOT"/info/*/; do
+    [[ -d "$info_dir" ]] || continue
+    level="$(basename "$info_dir")"
+    value="$(_get_num_closids_for_level "$level")" || continue
+    (( value > 0 )) || continue
+    if (( min == 0 || value < min )); then
+      min="$value"
+    fi
+  done
+
+  if (( min == 0 )); then
+    echo "[WARN] resctrl exposes no num_closids; cache allocation might not function properly" >&2
+  fi
+
+  _cache_topology_debug "device max_closids resolved to ${min}"
+  echo "$min"
+}
