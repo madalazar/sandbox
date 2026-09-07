@@ -19,13 +19,12 @@ func (r Reservation) CpuSet() string {
 // read device-wide allocations, and record, reconstruct and release a component's
 // recorded reservation
 type ReservationStore interface {
-	// every deployment's holdings, not just one. Taken once per reconcile, before the
+	// every deployment's holdings, not just one; taken once per reconcile, before the
 	// component loop, so a ledger built from it also sees siblings planned in that pass
-	// TODO: rename to GetSnapthot, LoadSnapshot ... something...
-	Snapshot() (ledger.AllocationSnapshot, error)
+	LoadSnapshot() (ledger.AllocationSnapshot, error)
 	LoadReservation(owner model.OwnerRef) (Reservation, bool, error)
 	// replaces the deployment's holdings rather than merging, in one write
-	SaveAllocations(deploymentId string, cpus map[string][]int) error
+	SaveReservation(deploymentId string, reservation Reservation) error
 	ClearComponent(owner model.OwnerRef) error
 }
 
@@ -43,7 +42,7 @@ func NewDatabaseReservationStore(db database.DatabaseIfc, isolatedCpus map[int]s
 	return &DatabaseReservationStore{db: db, isolatedCpus: isolatedCpus}
 }
 
-func (s *DatabaseReservationStore) Snapshot() (ledger.AllocationSnapshot, error) {
+func (s *DatabaseReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, error) {
 	return ledger.AllocationSnapshot{}, errNotImplemented
 }
 
@@ -51,7 +50,7 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reserv
 	return Reservation{}, false, errNotImplemented
 }
 
-func (s *DatabaseReservationStore) SaveAllocations(deploymentId string, cpus map[string][]int) error {
+func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
 	return errNotImplemented
 }
 
