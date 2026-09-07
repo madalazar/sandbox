@@ -6,8 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
-	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -36,8 +37,8 @@ func (c *ComposeConfigurator) Apply(
 
 	file, err := os.CreateTemp("", fmt.Sprintf(
 		"compose-pinned-%s-%s-*.yaml",
-		resource.SanitizeFileToken(string(owner.Component)),
-		resource.SanitizeFileToken(owner.Deployment),
+		sanitizeFileToken(string(owner.Component)),
+		sanitizeFileToken(owner.Deployment),
 	))
 	if err != nil {
 		return "", fmt.Errorf("create pinned compose file: %w", err)
@@ -239,4 +240,18 @@ func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, var
 		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: varValue},
 	)
 	return nil
+}
+
+func sanitizeFileToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	replacer := regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	cleaned := replacer.ReplaceAllString(value, "-")
+	cleaned = strings.Trim(cleaned, "-")
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
 }
