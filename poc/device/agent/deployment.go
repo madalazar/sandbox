@@ -344,8 +344,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
 	coordinator := dm.newHelmResourceCoordinator()
-	deploymentConfigurator := configurator.NewHelmConfigurator()
-	cpuPlanner := planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices)
+	helmConfigurator := configurator.NewHelmConfigurator()
 
 	ledger, err := coordinator.NewLedger(deploymentId)
 	if err != nil {
@@ -379,23 +378,18 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		cpuRequirements, err := model.NormalizeCpuRequirements(
-			model.ComponentRef(helmComp.Name),
-			helmComp.RequiredResources,
-		)
+		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+			Owner:        owner,
+			Requirements: helmComp.RequiredResources,
+		})
 		if err != nil {
-			return fmt.Errorf("invalid CPU requirements for component %s: %w", helmComp.Name, err)
-		}
-
-		cpuPlan, err := cpuPlanner.PlanCpu(planner.CpuPlanningRequest{Requirements: cpuRequirements, Ledger: ledger})
-		if err != nil {
-			return fmt.Errorf("failed to resolve resoure policy balloon annotations for component %s: %w", helmComp.Name, err)
+			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", helmComp.Name, err)
 		}
 
 		var rollback *resource.ResourceRollback
-		if cpuPlan.HasCpus() {
-			if err := coordinator.Commit(ctx, resource.ResourcePlan{Owner: owner, Cpu: cpuPlan}); err != nil {
-				return fmt.Errorf("failed to persist compose allocations for component %s: %w", helmComp.Name, err)
+		if plan.Cpu.HasCpus() {
+			if err := coordinator.Commit(ctx, plan); err != nil {
+				return fmt.Errorf("failed to persist helm allocations for component %s: %w", helmComp.Name, err)
 			}
 
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
@@ -403,13 +397,13 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		// update pod annotations for this helm component
-		values, err = deploymentConfigurator.Apply(cpuPlan, owner, values)
+		values, err = helmConfigurator.Apply(plan.Cpu, owner, values)
 		if err != nil {
 			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", helmComp.Name, err)
 		}
 
 		dm.log.Infow("Applied resource annotations to Helm values", "componentName", helmComp.Name, "releaseName",
-			releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", cpuPlan.CpuSet())
+			releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", plan.Cpu.CpuSet())
 
 		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
