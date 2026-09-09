@@ -91,7 +91,7 @@ DOCKER_VERSION="${DOCKER_VERSION:-29.1.2}"
 DOCKER_COMPOSE_VERSION="${DOCKER_COMPOSE_VERSION:-5.0.0}"
 
 # Stable version as of December 2024
-K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.36.4+k3s1}"
 
 # ----------------------------
 # GHCR Image References
