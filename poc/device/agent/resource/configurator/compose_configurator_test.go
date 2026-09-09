@@ -8,7 +8,7 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-func cpuPlanFor(component string, cpus ...int) model.CpuPlan {
+func composeCpuPlanFor(component string, cpus ...int) model.CpuPlan {
 	return model.CpuPlan{
 		Component: model.ComponentRef(component),
 		Cpus:      cpus,
@@ -28,7 +28,7 @@ func TestRewriteComposeYamlBindsToSingleService(t *testing.T) {
   cyclictest:
     image: cyclictest:latest
 `,
-			plan:     cpuPlanFor("cyclictest_compose", 8, 9),
+			plan:     composeCpuPlanFor("cyclictest_compose", 8, 9),
 			contains: []string{"cpuset: 8-9", "TEST_CPUSET: 8-9"},
 		},
 		{
@@ -38,7 +38,7 @@ func TestRewriteComposeYamlBindsToSingleService(t *testing.T) {
     image: stress:latest
     cpuset: "1"
 `,
-			plan:     cpuPlanFor("stressng_compose", 4),
+			plan:     composeCpuPlanFor("stressng_compose", 4),
 			contains: []string{"cpuset: \"4\""},
 		},
 		{
@@ -49,7 +49,7 @@ func TestRewriteComposeYamlBindsToSingleService(t *testing.T) {
     environment:
       EXISTING: keep
 `,
-			plan:     cpuPlanFor("stressng_compose", 4, 5),
+			plan:     composeCpuPlanFor("stressng_compose", 4, 5),
 			contains: []string{"EXISTING: keep", "TEST_CPUSET: 4-5"},
 		},
 	}
@@ -78,7 +78,7 @@ func TestRewriteComposeYamlAppliesToMultipleServices(t *testing.T) {
     image: second:latest
 `
 	var out bytes.Buffer
-	err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1, 2))
+	err := rewriteComposeYaml(strings.NewReader(source), &out, composeCpuPlanFor("component", 1, 2))
 	if err != nil {
 		t.Fatalf("RewriteComposeYaml: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRewriteComposeYamlRejectsInvalidServices(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := rewriteComposeYaml(strings.NewReader(testCase.source), &out, cpuPlanFor("component", 1))
+			err := rewriteComposeYaml(strings.NewReader(testCase.source), &out, composeCpuPlanFor("component", 1))
 			if err == nil {
 				t.Fatal("expected an error, got nil")
 			}
@@ -138,7 +138,7 @@ func TestRewriteComposeYamlRejectsListFormEnvironment(t *testing.T) {
       - EXISTING=keep
 `
 	var out bytes.Buffer
-	if err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err == nil {
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, composeCpuPlanFor("component", 1)); err == nil {
 		t.Fatal("expected an error for list-form environment, got nil")
 	}
 }
