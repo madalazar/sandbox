@@ -19,191 +19,37 @@ source "${SCRIPT_DIR_NRI}/cache-topology.sh"
 # Helpers
 # ---------------------------------------------------------------------------
 
-_nri_compact_cpuset() {
-  local -a ids=("$@")
-  local n="${#ids[@]}"
-  [[ "$n" -eq 0 ]] && { echo ""; return; }
-
-  local start="${ids[0]}"
-  local prev="${ids[0]}"
-  local out=""
-  local i curr
-
-  for ((i = 1; i < n; i++)); do
-    curr="${ids[i]}"
-    if (( curr == prev + 1 )); then
-      prev="$curr"
-      continue
-    fi
-
-    [[ -n "$out" ]] && out+=","
-    if (( start == prev )); then
-      out+="$start"
-    else
-      out+="${start}-${prev}"
-    fi
-
-    start="$curr"
-    prev="$curr"
-  done
-
-  [[ -n "$out" ]] && out+=","
-  if (( start == prev )); then
-    out+="$start"
-  else
-    out+="${start}-${prev}"
-  fi
-
-  echo "$out"
-}
-
-_nri_expand_range_count() {
-  local range_list="$1"
-  declare -A tmp=()
-  mark_cpu_set_from_range_list "$range_list" tmp
-  echo "${#tmp[@]}"
-}
-
 _nri_extract_available_cpus_from_policy() {
   local policy_file="$1"
   [[ -r "$policy_file" ]] || return 1
 
-  local cpu_line
-  cpu_line="$(awk '
-    /^[[:space:]]*availableResources:[[:space:]]*$/ {in_avail=1; next}
-    in_avail && /^[[:space:]]*reservedResources:[[:space:]]*$/ {in_avail=0}
-    in_avail && /^[[:space:]]*cpu:[[:space:]]*/ {
-      print
-      exit
-    }
-  ' "$policy_file" 2>/dev/null || true)"
+  local cpu_val
+  cpu_val="$(yq -r '.config.availableResources.cpu // ""' "$policy_file" 2>/dev/null || true)"
+  [[ -n "$cpu_val" && "$cpu_val" != "null" ]] || return 1
 
-  [[ -n "$cpu_line" ]] || return 1
-
-  local value
-  value="$(sed -E 's/^[[:space:]]*cpu:[[:space:]]*"?cpuset:([^"[:space:]]+)"?.*$/\1/' <<< "$cpu_line")"
-  [[ -n "$value" && "$value" != "$cpu_line" ]] || return 1
-
-  echo "$value"
-}
-
-_nri_load_l3_membership_from_sysfs() {
-  declare -gA _NRI_L3_TOTAL_CPUS=() _NRI_L3_MEMBER=()
-  declare -A _nri_l3_shared_to_id=()
-  local _nri_next_l3_id=0
-
-  local cpu_path index_path
-  for cpu_path in /sys/devices/system/cpu/cpu[0-9]*; do
-    [[ -d "$cpu_path" ]] || continue
-    for index_path in "$cpu_path"/cache/index*; do
-      [[ -d "$index_path" ]] || continue
-
-      local level_num shared_list l3_id
-      level_num="$(cat "$index_path/level" 2>/dev/null || true)"
-      [[ "$level_num" == "3" ]] || continue
-
-      shared_list="$(tr -d '[:space:]' < "$index_path/shared_cpu_list" 2>/dev/null || true)"
-      [[ -n "$shared_list" ]] || continue
-
-      l3_id=""
-      if [[ -r "$index_path/id" ]]; then
-        l3_id="$(tr -d '[:space:]' < "$index_path/id" 2>/dev/null || true)"
-      fi
-      if [[ ! "$l3_id" =~ ^[0-9]+$ ]]; then
-        if [[ -n "${_nri_l3_shared_to_id[$shared_list]:-}" ]]; then
-          l3_id="${_nri_l3_shared_to_id[$shared_list]}"
-        else
-          l3_id="$_nri_next_l3_id"
-          _nri_l3_shared_to_id["$shared_list"]="$l3_id"
-          _nri_next_l3_id=$((_nri_next_l3_id + 1))
-        fi
-      fi
-
-      local member
-      declare -A local_set=()
-      mark_cpu_set_from_range_list "$shared_list" local_set
-      _NRI_L3_TOTAL_CPUS["$l3_id"]="${#local_set[@]}"
-
-      for member in "${!local_set[@]}"; do
-        _NRI_L3_MEMBER["${l3_id}|${member}"]=1
-      done
-    done
-  done
-
-  [[ ${#_NRI_L3_TOTAL_CPUS[@]} -gt 0 ]]
-}
-
-_nri_load_l3_ways_from_cache_file() {
-  local cache_file="${1:-$CACHE_TOPOLOGY_CACHE_FILE}"
-  declare -gA _NRI_L3_WAYS=()
-
-  local cache_json
-  cache_json="$(read_cache_topology_as_json "$cache_file" 2>/dev/null)" || return 1
-
-  local l3_id ways
-  while read -r l3_id ways; do
-    [[ -n "$l3_id" && "$ways" =~ ^[0-9]+$ ]] || continue
-    (( ways > 0 )) || continue
-    _NRI_L3_WAYS["$l3_id"]="$ways"
-  done < <(jq -r '.[] | select(.level == "L3") | "\(.id | sub("^L#"; "")) \(.ways)"' <<< "$cache_json" 2>/dev/null || true)
-
-  [[ ${#_NRI_L3_WAYS[@]} -gt 0 ]]
-}
-
-_nri_range_to_bitmask() {
-  local start="$1"
-  local end="$2"
-
-  if (( start > end )); then
-    return 1
-  fi
-
-  local mask=0
-  local i
-  for (( i = start; i <= end; i++ )); do
-    mask=$(( mask | (1 << i) ))
-  done
-
-  printf '0x%x' "$mask"
-}
-
-_nri_format_way_range() {
-  local start="$1"
-  local end="$2"
-
-  _nri_range_to_bitmask "$start" "$end"
+  echo "${cpu_val#cpuset:}"
 }
 
 _nri_build_rdt_control_yaml() {
-  local available_range="$1"
-  local cache_file="$2"
-
-  # This function now generates a minimal RDT configuration with fullCache: null
+  # Generates a minimal RDT configuration with fullCache: null
   # to override default chart values and allow dynamic partition creation.
-
-  local rdt_yaml=""
-  rdt_yaml+="  control:"$'\n'
-  rdt_yaml+="    rdt:"$'\n'
-  rdt_yaml+="      enable: true"$'\n'
-  rdt_yaml+="      usePodQoSAsDefaultClass: false"$'\n'
-  rdt_yaml+="      options:"$'\n'
-  rdt_yaml+="        l3:"$'\n'
-  rdt_yaml+="          optional: true"$'\n'
-  rdt_yaml+="      partitions:"$'\n'
-  rdt_yaml+="        fullCache: null"$'\n'
-
-  printf '%s' "$rdt_yaml"
-  return 0
+  yq -n '
+    .control.rdt.enable = true |
+    .control.rdt.usePodQoSAsDefaultClass = false |
+    .control.rdt.options.l3.optional = true |
+    .control.rdt.partitions.fullCache = null
+  '
 }
-
 
 # ---------------------------------------------------------------------------
 # generate_default_nri_policy
 #
 # Generates a default NRI Balloon Resource Policy with:
-#   - Fixed available/reserved CPUs
+#   - Available CPUs derived from host CPU topology (or custom range)
+#   - Reserved CPUs defaulting to core 0, + 1 core if > 30 cores, + 2 cores if > 60 cores
 #   - Individual balloons for each isolated CPU core (ipc<class><core_id>)
 #   - Shared cores delegated to NRI's default balloon (no custom balloon)
+#   - RDT control block with fullCache: null
 #
 # Naming convention for isolated balloons:
 #   i<class_abbrev>c<core_id>
@@ -213,41 +59,21 @@ _nri_build_rdt_control_yaml() {
 #   - <core_id>: CPU index (0-N)
 #   Examples: ipc0, ipc1, ipe5, ilc2
 #
-# Usage: generate_default_nri_policy [available_cpus [reserved_cpus [output_file [cache_file]]]]
-#   available_cpus: cpuset range string (default: 0-119)
-#   reserved_cpus:  cpuset range string (default: 0,100,105)
-#   output_file:    destination for YAML (default: $HOME/sandbox/balloon-policy.yaml)
-#   cache_file:     topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
+# Usage: generate_default_nri_policy [available_cpus [reserved_cpus [output_file [topology_cache_file]]]]
+#   available_cpus:      cpuset range string (default: derived from topology cache)
+#   reserved_cpus:       cpuset range string (default: core 0, + last core if > 30 cores, + last 2 cores if > 60 cores)
+#   output_file:         destination for YAML (default: $HOME/sandbox/balloon-policy.yaml)
+#   topology_cache_file: topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
 # ---------------------------------------------------------------------------
 generate_default_nri_policy() {
-  # TODO: these cores should be all non-virtualized core. I think for 
-  # this host we have 0-60, 120-180 which are the physical cores and
-  # the other are the hyperthreading sylings
-  local available_cpus_range="${1:-0-119}"
-  local reserved_cpus_range="${2:-0,100,105}"
+  local available_cpus_range="${1:-}"
+  local reserved_cpus_range="${2:-}"
   local output_file="${3:-$HOME/sandbox/balloon-policy.yaml}"
-  local cache_file="${4:-$CPU_TOPOLOGY_CACHE_FILE}"
-
-  # If available range is not explicitly provided and the policy file exists,
-  # reuse availableResources.cpu from that file.
-  if [[ -z "${1:-}" && -f "$output_file" ]]; then
-    local extracted_available=""
-    extracted_available="$(_nri_extract_available_cpus_from_policy "$output_file" || true)"
-    [[ -n "$extracted_available" ]] && available_cpus_range="$extracted_available"
-  fi
-
-  local cache_topology_file="${CACHE_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cache-topology.tsv}"
-
-  mkdir -p "$(dirname "$output_file")"
-
-  # Load CPU topology from cache (builds it if absent)
-  if [[ ! -f "$cache_file" ]]; then
-    build_cpu_topology "$cache_file" || return 1
-  fi
+  local topology_cache_file="${4:-$CPU_TOPOLOGY_CACHE_FILE}"
 
   local cpu_topology_json
-  if ! cpu_topology_json="$(read_cpu_topology_as_json "$cache_file")"; then
-    echo "[ERROR] Failed to read CPU topology from: $cache_file" >&2
+  if ! cpu_topology_json="$(read_cpu_topology_as_json "$topology_cache_file")"; then
+    echo "[ERROR] Failed to read CPU topology from: $topology_cache_file" >&2
     return 1
   fi
 
@@ -258,68 +84,95 @@ generate_default_nri_policy() {
     return 1
   fi
 
-  # Mark reserved CPUs
-  declare -A reserved_map=()
-  mark_cpu_set_from_range_list "$reserved_cpus_range" reserved_map
+  # Derive available_cpus_range from CPU topology if not explicitly provided
+  if [[ -z "$available_cpus_range" ]]; then
+    available_cpus_range="$(jq -r '
+      [.[].id | tonumber] | sort as $ids |
+      reduce $ids[] as $x ([];
+        if length == 0 then [[$x, $x]]
+        elif .[-1][1] + 1 == $x then .[-1][1] = $x
+        else . + [[$x, $x]]
+        end
+      ) | map(if .[0] == .[1] then "\(.[0])" else "\(.[0])-\(.[1])" end) | join(",")
+    ' <<< "$cpu_topology_json")"
+  fi
 
-  # Collect isolated CPUs from topology (numerically sorted by id)
-  local -a isolated_cpus=()
-  local -A isolated_by_class=()
-  local cpu_id class
-  while read -r cpu_id class; do
-    [[ -n "$cpu_id" ]] || continue
-    isolated_cpus+=("$cpu_id")
-    isolated_by_class["$cpu_id"]="$class"
-  done < <(jq -r '.[] | select(.type == "isolated") | "\(.id) \(.class)"' <<< "$cpu_topology_json" 2>/dev/null | sort -n -k1,1)
+  # Derive reserved_cpus_range if not explicitly provided:
+  # Core 0 is always included; add 1 core (last one) if > 30 cores, or last 2 cores if > 60 cores.
+  if [[ -z "$reserved_cpus_range" ]]; then
+    reserved_cpus_range="$(jq -r '
+      [.[].id | tonumber] | sort as $ids |
+      ($ids | length) as $cnt |
+      (if $cnt > 60 then ([$ids[0]] + $ids[-2:])
+       elif $cnt > 30 then ([$ids[0]] + [$ids[-1]])
+       else [$ids[0]]
+       end) | unique | sort | join(",")
+    ' <<< "$cpu_topology_json")"
+  fi
 
-  if [[ "${#isolated_cpus[@]}" -eq 0 ]]; then
+  # Generate balloon definitions for isolated CPUs
+  local balloon_types_json
+  balloon_types_json="$(jq -c '
+    [ .[] | select(.type == "isolated") |
+      (if .class == "performance" then "p"
+       elif .class == "efficiency" then "e"
+       elif .class == "low-power" then "l"
+       else "?" end) as $abbrev |
+      {
+        name: "i\($abbrev)c\(.id)",
+        allocatorPriority: "high",
+        minBalloons: 1,
+        maxBalloons: 1,
+        minCPUs: 1,
+        maxCPUs: 1,
+        preferIsolCpus: true,
+        preferCloseToDevices: [
+          "/sys/devices/system/cpu/cpu\(.id)/cache/index2"
+        ]
+      }
+    ]
+  ' <<< "$cpu_topology_json")"
+
+  local isolated_count
+  isolated_count="$(jq 'length' <<< "$balloon_types_json" 2>/dev/null || echo 0)"
+  if [[ "$isolated_count" -eq 0 ]]; then
     echo "[WARN] No isolated CPUs found in topology. Generating policy with only shared cores." >&2
   fi
 
-  # Generate balloon blocks for each isolated CPU
-  local -a balloon_blocks=()
-  local class_abbrev
+  # Build full configuration JSON and emit formatted YAML via yq
+  local full_json
+  full_json="$(jq -n \
+    --arg available "cpuset:${available_cpus_range}" \
+    --arg reserved "cpuset:${reserved_cpus_range}" \
+    --argjson balloons "$balloon_types_json" \
+    '{
+      nri: {
+        runtime: { patchConfig: false },
+        plugin: { index: 10 }
+      },
+      config: {
+        pinCPU: true,
+        pinMemory: false,
+        availableResources: { cpu: $available },
+        reservedResources: { cpu: $reserved },
+        balloonTypes: (if ($balloons | length) > 0 then $balloons else [] end),
+        control: {
+          rdt: {
+            enable: true,
+            usePodQoSAsDefaultClass: false,
+            options: {
+              l3: { optional: true }
+            },
+            partitions: {
+              fullCache: null
+            }
+          }
+        }
+      }
+    }'
+  )"
 
-  for cpu_id in "${isolated_cpus[@]}"; do
-    class="${isolated_by_class[$cpu_id]}"
-    case "$class" in
-      performance) class_abbrev="p" ;;
-      efficiency) class_abbrev="e" ;;
-      low-power)  class_abbrev="l" ;;
-      *)          class_abbrev="?" ;;
-    esac
-
-    local balloon_name="i${class_abbrev}c${cpu_id}"
-    local block=""
-    block+="    - name: ${balloon_name}"$'\n'
-    block+="      allocatorPriority: high"$'\n'
-    block+="      minBalloons: 1"$'\n'
-    block+="      maxBalloons: 1"$'\n'
-    block+="      minCPUs: 1"$'\n'
-    block+="      maxCPUs: 1"$'\n'
-    block+="      preferIsolCpus: true"$'\n'
-    block+="      preferCloseToDevices:"$'\n'
-    block+="        - /sys/devices/system/cpu/cpu${cpu_id}/cache/index2"$'\n'
-
-    balloon_blocks+=("$block")
-  done
-
-  # Build compact cpuset strings
-  local available_cpuset="cpuset:${available_cpus_range}"
-  local reserved_cpuset="cpuset:${reserved_cpus_range}"
-
-  # Load cache topology if absent
-  if [[ ! -f "$cache_topology_file" ]]; then
-    build_cache_topology "$cache_topology_file" >/dev/null 2>&1 || true
-  fi
-
-  # Build RDT control block only if cache topology data is available and usable.
-  local rdt_control_yaml=""
-  if [[ -f "$cache_topology_file" ]] && read_cache_topology_as_json "$cache_topology_file" >/dev/null 2>&1; then
-    rdt_control_yaml="$(_nri_build_rdt_control_yaml "$available_cpus_range" "$cache_topology_file" 2>/dev/null || true)"
-  fi
-
-  # Emit YAML
+  mkdir -p "$(dirname "$output_file")"
   {
     cat <<'HEADER'
 # Default NRI Balloon Resource Policy
@@ -338,55 +191,15 @@ generate_default_nri_policy() {
 #     nri-plugins/nri-resource-policy-balloons \
 #     --namespace kube-system -f balloon-policy.yaml
 HEADER
-
-    cat <<PREAMBLE
-nri:
-  runtime:
-    patchConfig: false
-  plugin:
-    index: 10
-
-config:
-  pinCPU: true
-  pinMemory: false
-
-  availableResources:
-    cpu: "${available_cpuset}"
-
-  reservedResources:
-    cpu: "${reserved_cpuset}"
-
-  balloonTypes:
-PREAMBLE
-
-    if [[ "${#balloon_blocks[@]}" -gt 0 ]]; then
-      local balloon_block
-      for balloon_block in "${balloon_blocks[@]}"; do
-        printf '%s' "$balloon_block"
-      done
-    else
-      cat <<'NO_BALLOONS'
-    # No isolated CPUs in topology; only shared cores available
-    # Shared cores will use NRI's default balloon
-NO_BALLOONS
-    fi
-
-    if [[ -n "$rdt_control_yaml" ]]; then
-      printf '%s\n' "$rdt_control_yaml"
-    fi
+    echo "$full_json" | yq eval -P -
   } > "$output_file"
 
-  local isolated_count="${#balloon_blocks[@]}"
   echo "✅ Default balloon policy written to: $output_file"
-  echo "[INFO] Available CPUs: ${available_cpuset}"
-  echo "[INFO] Reserved CPUs: ${reserved_cpuset}"
+  echo "[INFO] Available CPUs: cpuset:${available_cpus_range}"
+  echo "[INFO] Reserved CPUs: cpuset:${reserved_cpus_range}"
   echo "[INFO] Isolated balloons generated: ${isolated_count}"
   echo "[INFO] Shared cores will use NRI default balloon"
-  if [[ -n "$rdt_control_yaml" ]]; then
-    echo "[INFO] RDT control/partitions generated from cache topology: $cache_topology_file"
-  else
-    echo "[INFO] RDT control/partitions skipped (no usable cache topology at $cache_topology_file)"
-  fi
+  echo "[INFO] RDT control configured"
 }
 
 
@@ -410,7 +223,7 @@ install_balloon_nri_plugin() {
 
   echo "Installing NRI Balloon Resource Policy plugin..."
 
-  if helm repo list 2>/dev/null | awk '{print $1}' | grep -q "^nri-plugins$"; then
+  if helm repo list 2>/dev/null | grep -q "^nri-plugins[[:space:]]"; then
     echo "✅ nri-plugins helm repo already added, skipping."
   else
     echo "Adding nri-plugins helm repo..."
