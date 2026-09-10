@@ -3,6 +3,7 @@ package database
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,19 +26,38 @@ type AppDeploymentState struct {
 	URL         *string   `json:"url,omitempty"`
 }
 
+type CacheAllocation struct {
+	// TODO: at the end of the wiring; if this field is not needed delete it
+	Owner         string `json:"owner,omitempty"`
+	ComponentName string `json:"componentName"`
+	Level         string `json:"level"`
+	CacheID       string `json:"cacheId"`
+	SizeKB        int64  `json:"sizeKb"`
+	Mask          string `json:"mask"`
+	Clos          string `json:"clos,omitempty"`
+}
+
 // this is one deployment's complete holdings, keyed by component name
 // written as a whole: SetAllocations replaces, it does not merge
 type Allocations struct {
-	Cpus map[string][]int
+	Cpus   map[string][]int
+	Caches map[string]CacheAllocation
 }
 
 func (a Allocations) clone() Allocations {
-	cloned := Allocations{Cpus: make(map[string][]int, len(a.Cpus))}
+	cloned := Allocations{
+		Cpus:   make(map[string][]int, len(a.Cpus)),
+		Caches: make(map[string]CacheAllocation, len(a.Caches)),
+	}
+
 	for component, cpus := range a.Cpus {
 		copied := make([]int, len(cpus))
 		copy(copied, cpus)
 		cloned.Cpus[component] = copied
 	}
+
+	maps.Copy(cloned.Caches, a.Caches)
+
 	return cloned
 }
 
@@ -108,6 +128,7 @@ type DatabaseIfc interface {
 	ClearComponentAllocations(deploymentId, componentName string) error
 	GetAllocations(deploymentId string) (Allocations, error)
 	AllocatedCpus() map[int]string
+	AllocatedCaches() []CacheAllocation
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -338,7 +359,8 @@ func (db *Database) SetDesiredState(deploymentId string, state AppDeploymentStat
 			DeploymentID:        deploymentId,
 			ComponentViseStatus: make(map[string]sbi.ComponentStatus),
 			Allocations: Allocations{
-				Cpus: make(map[string][]int),
+				Cpus:   make(map[string][]int),
+				Caches: make(map[string]CacheAllocation),
 			},
 			Phase:       "pending",
 			LastUpdated: time.Now(),
@@ -417,7 +439,7 @@ func (db *Database) SetComponentStatus(
 	db.notify(deploymentId, record, DeploymentChangeTypeComponentPhaseChanged)
 }
 
-// replaces a deployment's cpu holdings in a single write, so there is no
+// replaces a deployment's allocation holdings in a single write, so there is no
 // window in which the record shows a partially planned deployment
 func (db *Database) SetAllocations(deploymentId string, allocations Allocations) error {
 	db.mu.Lock()
@@ -436,8 +458,8 @@ func (db *Database) SetAllocations(deploymentId string, allocations Allocations)
 	return nil
 }
 
-// drops one component's cpu holdings under the same lock that
-// reads them, so a concurrent release of a sibling cannot reinstate it
+// drops one component's cpu and cache holdings under the same
+// lock that reads them, so a concurrent release of a sibling cannot reinstate it
 func (db *Database) ClearComponentAllocations(deploymentId, componentName string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -450,6 +472,11 @@ func (db *Database) ClearComponentAllocations(deploymentId, componentName string
 	if record.Allocations.Cpus != nil {
 		delete(record.Allocations.Cpus, componentName)
 	}
+
+	if record.Allocations.Caches != nil {
+		delete(record.Allocations.Caches, componentName)
+	}
+
 	record.LastUpdated = time.Now()
 	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
 	db.TriggerDataPersist()
@@ -486,6 +513,29 @@ func (db *Database) AllocatedCpus() map[int]string {
 			for _, cpuIndex := range cpuIndices {
 				allocated[cpuIndex] = owner
 			}
+		}
+	}
+
+	return allocated
+}
+
+// AllocatedCaches returns the device-wide view of which cache allocations are held,
+// annotated with owner "deployment/component".
+func (db *Database) AllocatedCaches() []CacheAllocation {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	allocated := make([]CacheAllocation, 0)
+	for deploymentID, deployment := range db.deployments {
+		for component, assignment := range deployment.Allocations.Caches {
+			owner := deploymentID
+			if strings.TrimSpace(component) != "" {
+				owner = fmt.Sprintf("%s/%s", deploymentID, component)
+			}
+
+			alloc := assignment
+			alloc.Owner = owner
+			allocated = append(allocated, alloc)
 		}
 	}
 
