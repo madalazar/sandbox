@@ -61,7 +61,7 @@ func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.Allocation
 	if err != nil {
 		return nil, err
 	}
-	return ledger.NewAllocationLedger(snapshot, deploymentId), nil
+	return ledger.NewAllocationLedger(snapshot, deploymentId, model.CacheCapacity{}, nil), nil
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
@@ -93,7 +93,7 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		return nil
 	}
 
-	return c.store.SaveReservation(plan.Owner.Deployment, Reservation{
+	return c.store.SaveReservation(plan.Owner.Deployment, model.Reservation{
 		Owner: model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
 		Cpus:  plan.Cpu.Cpus,
 	})

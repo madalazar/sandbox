@@ -13,7 +13,7 @@ import (
 )
 
 type fakeReservationStore struct {
-	reservation Reservation
+	reservation model.Reservation
 	found       bool
 	loadErr     error
 	clearErr    error
@@ -27,11 +27,11 @@ func (s *fakeReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, error)
 	return s.snapshot, nil
 }
 
-func (s *fakeReservationStore) LoadReservation(owner model.OwnerRef) (Reservation, bool, error) {
+func (s *fakeReservationStore) LoadReservation(owner model.OwnerRef) (model.Reservation, bool, error) {
 	return s.reservation, s.found, s.loadErr
 }
 
-func (s *fakeReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
+func (s *fakeReservationStore) SaveReservation(deploymentId string, reservation model.Reservation) error {
 	s.savedDep = deploymentId
 	s.savedCpus = map[string][]int{string(reservation.Owner.Component): reservation.Cpus}
 	return nil
@@ -156,7 +156,7 @@ func TestResourceCoordinatorActivateIsANoOp(t *testing.T) {
 
 func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
-	reservation := Reservation{Owner: owner, Cpus: []int{2}}
+	reservation := model.Reservation{Owner: owner, Cpus: []int{2}}
 	store := &fakeReservationStore{reservation: reservation, found: true}
 	coordinator := NewResourceCoordinator(store, nil)
 
@@ -184,7 +184,7 @@ func TestResourceCoordinatorReleaseDoesNothingWhenAbsent(t *testing.T) {
 func TestResourceRollbackReleasesOnlyOnFailure(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
 	store := &fakeReservationStore{
-		reservation: Reservation{Owner: owner},
+		reservation: model.Reservation{Owner: owner},
 		found:       true,
 	}
 	coordinator := NewResourceCoordinator(store, nil)
