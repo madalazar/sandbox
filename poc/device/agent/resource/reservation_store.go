@@ -1,15 +1,25 @@
 package resource
 
 import (
+	"maps"
+
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-// one component's recorded (for now only cpu) allocation
+// one component's recorded cpu and cache allocation
 type Reservation struct {
-	Owner model.OwnerRef
-	Cpus  []int
+	Owner             model.OwnerRef
+	Cpus              []int
+	L3CacheAssignment *model.CacheAssignment
+	// TODO: this might be duplicated, once we wire things up
+	// we might have to clean it
+	Clos model.ClosId
+}
+
+func (r Reservation) HasL3Cache() bool {
+	return r.L3CacheAssignment != nil
 }
 
 func (r Reservation) CpuSet() string {
@@ -43,7 +53,22 @@ func NewDatabaseReservationStore(db database.DatabaseIfc, isolatedCpus map[int]s
 }
 
 func (s *DatabaseReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, error) {
-	return ledger.NewAllocationSnapshot(s.db.AllocatedCpus(), s.isolatedCpus), nil
+	allocatedCpus := s.db.AllocatedCpus()
+	allocatedCaches := s.db.AllocatedCaches()
+
+	caches := make([]model.CacheAssignment, 0, len(allocatedCaches))
+	for _, alloc := range allocatedCaches {
+		caches = append(caches, model.CacheAssignment{
+			Owner:   model.ParseOwnerRef(alloc.Owner),
+			Level:   alloc.Level,
+			CacheId: alloc.CacheID,
+			SizeKiB: alloc.SizeKB,
+			Mask:    alloc.Mask,
+			Clos:    model.ClosId(alloc.Clos),
+		})
+	}
+	// TODO: use the proper c-tor at the end
+	return ledger.NewAllocationSnapshotWithCaches(allocatedCpus, s.isolatedCpus, caches), nil
 }
 
 func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reservation, bool, error) {
@@ -54,14 +79,30 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reserv
 
 	key := string(owner.Component)
 	cpus, hasCpus := allocations.Cpus[key]
-	if !hasCpus {
+	cacheAlloc, hasCache := allocations.Caches[key]
+	if !hasCpus && !hasCache {
 		return Reservation{}, false, nil
 	}
 
-	return Reservation{
+	reservation := Reservation{
 		Owner: owner,
 		Cpus:  append([]int(nil), cpus...),
-	}, true, nil
+	}
+
+	if hasCache {
+		res := model.CacheAssignment{
+			Owner:   owner,
+			Level:   cacheAlloc.Level,
+			CacheId: cacheAlloc.CacheID,
+			SizeKiB: cacheAlloc.SizeKB,
+			Mask:    cacheAlloc.Mask,
+			Clos:    model.ClosId(cacheAlloc.Clos),
+		}
+		reservation.L3CacheAssignment = &res
+		reservation.Clos = res.Clos
+	}
+
+	return reservation, true, nil
 }
 
 func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
@@ -70,13 +111,41 @@ func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservat
 		return err
 	}
 
-	merged := make(map[string][]int, len(existing.Cpus)+len(reservation.Cpus))
+	mergedCpus := make(map[string][]int, len(existing.Cpus)+1)
 	for k, v := range existing.Cpus {
-		merged[k] = append([]int(nil), v...)
+		mergedCpus[k] = append([]int(nil), v...)
 	}
-	merged[string(reservation.Owner.Component)] = append([]int(nil), reservation.Cpus...)
+	if len(reservation.Cpus) > 0 {
+		mergedCpus[string(reservation.Owner.Component)] = append([]int(nil), reservation.Cpus...)
+	} else {
+		delete(mergedCpus, string(reservation.Owner.Component))
+	}
 
-	return s.db.SetAllocations(deploymentId, database.Allocations{Cpus: merged})
+	mergedCaches := make(map[string]database.CacheAllocation, len(existing.Caches)+1)
+	maps.Copy(mergedCaches, existing.Caches)
+
+	if reservation.HasL3Cache() {
+		c := reservation.L3CacheAssignment
+		classStr := c.Clos.String()
+		if classStr == "" && reservation.Clos.Held() {
+			classStr = reservation.Clos.String()
+		}
+		mergedCaches[string(reservation.Owner.Component)] = database.CacheAllocation{
+			ComponentName: string(reservation.Owner.Component),
+			Level:         c.Level,
+			CacheID:       c.CacheId,
+			SizeKB:        c.SizeKiB,
+			Mask:          c.Mask,
+			Clos:          classStr,
+		}
+	} else {
+		delete(mergedCaches, string(reservation.Owner.Component))
+	}
+
+	return s.db.SetAllocations(deploymentId, database.Allocations{
+		Cpus:   mergedCpus,
+		Caches: mergedCaches,
+	})
 }
 
 func (s *DatabaseReservationStore) ClearComponent(owner model.OwnerRef) error {
