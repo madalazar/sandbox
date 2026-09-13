@@ -1,9 +1,10 @@
 package controller
 
 import (
-	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
 // spells a slot the ledger has confirmed is free
-// re-exported from the ledger package for runtime configuration
-type ClassNamer = ledger.ClassNamer
+type ClassNamer interface {
+	Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error)
+}
