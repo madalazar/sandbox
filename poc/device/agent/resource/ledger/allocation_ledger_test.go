@@ -175,7 +175,6 @@ func TestAllocationLedgerReserveClass(t *testing.T) {
 	}
 
 	snapshot := NewAllocationSnapshot(nil, nil, persistedCaches)
-
 	namer := &fakeClassNamer{
 		names: map[model.ComponentRef]model.ClosId{
 			"comp-a": "1",
@@ -212,7 +211,6 @@ func TestAllocationLedgerReserveClass(t *testing.T) {
 }
 
 func TestAllocationLedgerRollbackComponent(t *testing.T) {
-
 	caps := model.CacheCapacity{
 		Ways:     map[string]int64{"0": 12},
 		ClosPool: model.ClosPool{NumClos: 8, Reserved: 1},
