@@ -17,6 +17,7 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/poc/device/agent/types"
@@ -919,17 +920,31 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 }
 
 func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
-	return resource.NewResourceCoordinator(
-		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
-	)
+	coord, err := resource.NewResourceCoordinatorBuilder().
+		WithStore(resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet)).
+		WithCpuPlanner(planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices)).
+		WithCachePlanner(planner.NewL3CachePlanner(dm.hostTopology.L3Caches)).
+		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), dm.hostTopology.L3Caches, dm.hostTopology.MaxClos)).
+		Build()
+	if err != nil {
+		dm.log.Errorw("failed to build compose resource coordinator", "error", err)
+		return nil
+	}
+	return coord
 }
 
 func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
-	return resource.NewResourceCoordinator(
-		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices),
-	)
+	coord, err := resource.NewResourceCoordinatorBuilder().
+		WithStore(resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet)).
+		WithCpuPlanner(planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices)).
+		WithCachePlanner(planner.NewL3CachePlanner(dm.hostTopology.L3Caches)).
+		WithCacheController(controller.NewRdtPolicyController(dm.hostTopology.L3Caches)).
+		Build()
+	if err != nil {
+		dm.log.Errorw("failed to build helm resource coordinator", "error", err)
+		return nil
+	}
+	return coord
 }
 
 // needed to properly convert integers with more > 6 digits
