@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 )
 
 type dummyCommandRunner struct{}
@@ -26,7 +28,7 @@ func TestCommandRunnerInterface(t *testing.T) {
 	}
 }
 
-func TestDirectRunnerSkeleton(t *testing.T) {
+func TestDirectRunnerExecution(t *testing.T) {
 	var _ CommandRunner = (*directRunner)(nil)
 
 	runner := NewDirectRunner()
@@ -34,22 +36,49 @@ func TestDirectRunnerSkeleton(t *testing.T) {
 		t.Fatal("expected non-nil directRunner")
 	}
 
-	_, err := runner.Run(context.Background(), "echo", "test")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	out, err := runner.Run(context.Background(), "echo", "hello-world")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "hello-world" {
+		t.Fatalf("expected 'hello-world', got %q", string(out))
 	}
 }
 
-func TestNsenterRunnerSkeleton(t *testing.T) {
+func TestDirectRunnerTimeout(t *testing.T) {
+	runner := NewDirectRunner()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := runner.Run(ctx, "sleep", "2")
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+func TestDirectRunnerCommandError(t *testing.T) {
+	runner := NewDirectRunner()
+	_, err := runner.Run(context.Background(), "non-existent-command-xyz")
+	if err == nil {
+		t.Fatal("expected error for nonexistent command, got nil")
+	}
+}
+
+func TestNsenterRunnerConstructors(t *testing.T) {
 	var _ CommandRunner = (*nsenterRunner)(nil)
 
 	runner := NewNsenterRunner()
-	if runner == nil {
-		t.Fatal("expected non-nil nsenterRunner")
+	if runner == nil || runner.targetPID != "1" {
+		t.Fatalf("expected targetPID '1', got %+v", runner)
 	}
 
-	_, err := runner.Run(context.Background(), "echo", "test")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	runner2 := NewNsenterRunnerWithPid("1234")
+	if runner2 == nil || runner2.targetPID != "1234" {
+		t.Fatalf("expected targetPID '1234', got %+v", runner2)
+	}
+
+	runner3 := NewNsenterRunnerWithPid("")
+	if runner3 == nil || runner3.targetPID != "1" {
+		t.Fatalf("expected default targetPID '1', got %+v", runner3)
 	}
 }
