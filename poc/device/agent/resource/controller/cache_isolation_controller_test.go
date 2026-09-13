@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -125,7 +124,7 @@ func testIsolationContract(t *testing.T, createController func() (CacheIsolation
 	t.Run("ClassUnset and no cache entries is a no-op", func(t *testing.T) {
 		ctrl, dev, _ := createController()
 		initialState := dev.Snapshot()
-		emptyRes := model.Reservation{Clos: model.ClassUnset}
+		emptyRes := model.Reservation{}
 		if err := ctrl.Apply(context.Background(), emptyRes); err != nil {
 			t.Fatalf("Apply emptyRes error = %v", err)
 		}
@@ -175,13 +174,6 @@ func (d *fakePqosDevice) Wipe() {
 
 func (d *fakePqosDevice) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
 	cmdStr := command + " " + strings.Join(args, " ")
-	if strings.Contains(cmdStr, "-s") {
-		var b strings.Builder
-		for cos, mask := range d.classes {
-			b.WriteString(fmt.Sprintf("COS %s: LLC mask = %s, Cores = %s\n", cos, mask, d.cores[cos]))
-		}
-		return []byte(b.String()), nil
-	}
 	if strings.Contains(cmdStr, "core:0=") {
 		// Reset: move cores back to COS 0, reset LLC mask to default
 		for _, arg := range args {
@@ -242,7 +234,6 @@ func TestPqosIsolationContract(t *testing.T) {
 				Mask:    "0x3",
 				Clos:    "1",
 			},
-			Clos: "1",
 		}
 		return ctrl, dev, res
 	})
