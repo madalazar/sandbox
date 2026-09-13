@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
@@ -51,6 +52,111 @@ func (f *fakeCpuPlanner) PlanCpu(req planner.CpuPlanningRequest) (model.CpuPlan,
 	return f.plan, f.err
 }
 
+type fakeCachePlanner struct {
+	plan model.CachePlan
+	err  error
+}
+
+func (f *fakeCachePlanner) PlanCache(ctx context.Context, req planner.CachePlanningRequest) (model.CachePlan, error) {
+	return f.plan, f.err
+}
+
+type fakeIsolationController struct {
+	applied  model.Reservation
+	verified model.Reservation
+	released model.Reservation
+	err      error
+}
+
+func (f *fakeIsolationController) Apply(ctx context.Context, r model.Reservation) error {
+	f.applied = r
+	return f.err
+}
+
+func (f *fakeIsolationController) Verify(ctx context.Context, r model.Reservation) error {
+	f.verified = r
+	return f.err
+}
+
+func (f *fakeIsolationController) Release(ctx context.Context, r model.Reservation) error {
+	f.released = r
+	return f.err
+}
+
+func newTestCoordinator(store ReservationStore, cpu planner.CpuPlanner, cache planner.CachePlanner, iso controller.CacheIsolationController) *ResourceCoordinator {
+	if store == nil {
+		store = &fakeReservationStore{}
+	}
+	if cpu == nil {
+		cpu = &fakeCpuPlanner{}
+	}
+	if cache == nil {
+		cache = &fakeCachePlanner{}
+	}
+	if iso == nil {
+		iso = &fakeIsolationController{}
+	}
+	c, err := NewResourceCoordinatorBuilder().
+		WithStore(store).
+		WithCpuPlanner(cpu).
+		WithCachePlanner(cache).
+		WithCacheController(iso).
+		Build()
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+func TestResourceCoordinatorBuilderFailsOnNil(t *testing.T) {
+	store := &fakeReservationStore{}
+	cpu := &fakeCpuPlanner{}
+	cache := &fakeCachePlanner{}
+	iso := &fakeIsolationController{}
+
+	tests := []struct {
+		name        string
+		store       ReservationStore
+		cpu         planner.CpuPlanner
+		cache       planner.CachePlanner
+		iso         controller.CacheIsolationController
+		expectError bool
+	}{
+		{"all non-nil", store, cpu, cache, iso, false},
+		{"nil store", nil, cpu, cache, iso, true},
+		{"nil cpu", store, nil, cache, iso, true},
+		{"nil cache", store, cpu, nil, iso, true},
+		{"nil iso", store, cpu, cache, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewResourceCoordinatorBuilder().
+				WithStore(tt.store).
+				WithCpuPlanner(tt.cpu).
+				WithCachePlanner(tt.cache).
+				WithCacheController(tt.iso).
+				Build()
+			if (err != nil) != tt.expectError {
+				t.Fatalf("NewResourceCoordinator() error = %v, expectError = %v", err, tt.expectError)
+			}
+		})
+	}
+
+	t.Run("builder With... methods fail on nil", func(t *testing.T) {
+		b := NewResourceCoordinatorBuilder().
+			WithStore(nil).
+			WithCpuPlanner(nil).
+			WithCachePlanner(nil).
+			WithCacheController(nil)
+
+		_, err := b.Build()
+		if err == nil {
+			t.Fatal("expected error from builder with nil values, got nil")
+		}
+	})
+}
+
 func TestResourceCoordinatorNewLedger(t *testing.T) {
 	store := &fakeReservationStore{
 		snapshot: ledger.AllocationSnapshot{
@@ -59,7 +165,7 @@ func TestResourceCoordinatorNewLedger(t *testing.T) {
 			},
 		},
 	}
-	c := NewResourceCoordinator(store, nil)
+	c := newTestCoordinator(store, nil, nil, nil)
 	l, err := c.NewLedger("dep1")
 	if err != nil {
 		t.Fatalf("NewLedger() error = %v", err)
@@ -101,7 +207,7 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 			Cpus:      []int{2},
 		},
 	}
-	c := NewResourceCoordinator(nil, fakePlanner)
+	c := newTestCoordinator(nil, fakePlanner, nil, nil)
 	plan, err := c.Plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
@@ -112,11 +218,81 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 	if len(plan.Cpu.Cpus) != 1 || plan.Cpu.Cpus[0] != 2 {
 		t.Fatalf("plan.Cpu.Cpus = %v, want [2]", plan.Cpu.Cpus)
 	}
+	if plan.HasCache() {
+		t.Fatalf("plan.HasCache() = true, want false when no cache requested")
+	}
+}
+
+func TestResourceCoordinatorPlanWithCache(t *testing.T) {
+	owner := model.NewOwnerRef("dep-1", "comp-1")
+	cacheLevel := sbi.CacheLevelL3
+	allocMode := sbi.CacheAllocationExclusive
+	cacheSize := "4096 KI"
+
+	req := ResourceRequest{
+		Owner: owner,
+		Requirements: &sbi.RequiredResources{
+			Cache: &[]sbi.Cache{
+				{
+					Level:      cacheLevel,
+					Allocation: allocMode,
+					Size:       &cacheSize,
+				},
+			},
+		},
+	}
+
+	fakeCache := &fakeCachePlanner{
+		plan: model.CachePlan{
+			Component: "comp-1",
+			L3CacheAssignment: &model.CacheAssignment{
+				Owner:   owner,
+				Level:   "L3",
+				CacheId: "0",
+				SizeKiB: 4096,
+				Mask:    "0x3",
+				Clos:    "1",
+			},
+			Clos: "1",
+		},
+	}
+
+	// Without CPU assignments, requesting cache returns an error
+	fakeCpuNoCpus := &fakeCpuPlanner{
+		plan: model.CpuPlan{
+			Component: "comp-1",
+			Cpus:      []int{},
+		},
+	}
+	c := newTestCoordinator(nil, fakeCpuNoCpus, fakeCache, nil)
+	_, err := c.Plan(nil, req)
+	if err == nil {
+		t.Fatal("Plan() expected error when cache requested without CPU assignments, got nil")
+	}
+
+	// With CPU assignments, cache planning succeeds
+	fakeCpu := &fakeCpuPlanner{
+		plan: model.CpuPlan{
+			Component: "comp-1",
+			Cpus:      []int{2},
+		},
+	}
+	cWithCpu := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
+	plan, err := cWithCpu.Plan(nil, req)
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if !plan.HasCache() {
+		t.Fatalf("plan.HasCache() = false, want true")
+	}
+	if plan.Cache.Clos != "1" {
+		t.Fatalf("plan.Cache.Clos = %v, want 1", plan.Cache.Clos)
+	}
 }
 
 func TestResourceCoordinatorCommit(t *testing.T) {
 	store := &fakeReservationStore{}
-	c := NewResourceCoordinator(store, nil)
+	c := newTestCoordinator(store, nil, nil, nil)
 
 	owner := model.NewOwnerRef("dep-1", "comp-1")
 	plan := ResourcePlan{
@@ -148,8 +324,38 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 	}
 }
 
+func TestResourceCoordinatorCommitWithCache(t *testing.T) {
+	store := &fakeReservationStore{}
+	c := newTestCoordinator(store, nil, nil, nil)
+
+	owner := model.NewOwnerRef("dep-1", "comp-1")
+	plan := ResourcePlan{
+		Owner: owner,
+		Cache: model.CachePlan{
+			Component: "comp-1",
+			L3CacheAssignment: &model.CacheAssignment{
+				Owner:   owner,
+				Level:   "L3",
+				CacheId: "0",
+				SizeKiB: 2048,
+				Mask:    "0x1",
+				Clos:    "2",
+			},
+			Clos: "2",
+		},
+	}
+
+	if err := c.Commit(context.Background(), plan); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if store.savedDep != "dep-1" {
+		t.Fatalf("savedDep = %q, want dep-1", store.savedDep)
+	}
+}
+
 func TestResourceCoordinatorActivateIsANoOp(t *testing.T) {
-	if err := NewResourceCoordinator(nil, nil).Activate(context.Background(), model.OwnerRef{}); err != nil {
+	c := newTestCoordinator(nil, nil, nil, nil)
+	if err := c.Activate(context.Background(), model.OwnerRef{}); err != nil {
 		t.Fatalf("Activate() error = %v, want nil", err)
 	}
 }
@@ -158,7 +364,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
 	reservation := model.Reservation{Owner: owner, Cpus: []int{2}}
 	store := &fakeReservationStore{reservation: reservation, found: true}
-	coordinator := NewResourceCoordinator(store, nil)
+	coordinator := newTestCoordinator(store, nil, nil, nil)
 
 	if err := coordinator.Release(context.Background(), owner); err != nil {
 		t.Fatalf("Release() error = %v, want nil", err)
@@ -171,7 +377,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 func TestResourceCoordinatorReleaseDoesNothingWhenAbsent(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
 	store := &fakeReservationStore{}
-	coordinator := NewResourceCoordinator(store, nil)
+	coordinator := newTestCoordinator(store, nil, nil, nil)
 
 	if err := coordinator.Release(context.Background(), owner); err != nil {
 		t.Fatalf("Release() error = %v, want nil", err)
@@ -187,7 +393,7 @@ func TestResourceRollbackReleasesOnlyOnFailure(t *testing.T) {
 		reservation: model.Reservation{Owner: owner},
 		found:       true,
 	}
-	coordinator := NewResourceCoordinator(store, nil)
+	coordinator := newTestCoordinator(store, nil, nil, nil)
 	logger := zap.NewNop().Sugar()
 
 	// When error occurs and active

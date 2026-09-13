@@ -2,8 +2,11 @@ package resource
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
@@ -25,6 +28,15 @@ type ResourceRequest struct {
 type ResourcePlan struct {
 	Owner model.OwnerRef
 	Cpu   model.CpuPlan
+	Cache model.CachePlan
+}
+
+func (p ResourcePlan) HasCpu() bool {
+	return p.Cpu.HasCpus()
+}
+
+func (p ResourcePlan) HasCache() bool {
+	return p.Cache.HasCache()
 }
 
 // owns a component's resource lifecycle, split into the following stages:
@@ -43,14 +55,83 @@ type ResourcePlan struct {
 // code will calls its own configurator directly. A shared configurator might need to be
 // further researched
 type ResourceCoordinator struct {
-	store   ReservationStore
-	planner planner.CpuPlanner
+	store           ReservationStore
+	planner         planner.CpuPlanner
+	cachePlanner    planner.CachePlanner
+	cacheController controller.CacheIsolationController
 }
 
-// the planner is the only runtime-specific part: topology pinning for compose, balloon
-// placement for helm
-func NewResourceCoordinator(store ReservationStore, cpuPlanner planner.CpuPlanner) *ResourceCoordinator {
-	return &ResourceCoordinator{store: store, planner: cpuPlanner}
+// constructs a ResourceCoordinator ensuring all dependencies are non-nil.
+type ResourceCoordinatorBuilder struct {
+	store           ReservationStore
+	planner         planner.CpuPlanner
+	cachePlanner    planner.CachePlanner
+	cacheController controller.CacheIsolationController
+	err             error
+}
+
+func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
+	return &ResourceCoordinatorBuilder{}
+}
+
+func (b *ResourceCoordinatorBuilder) WithStore(store ReservationStore) *ResourceCoordinatorBuilder {
+	if store == nil {
+		b.err = errors.Join(b.err, errors.New("reservation store cannot be nil"))
+		return b
+	}
+	b.store = store
+	return b
+}
+
+func (b *ResourceCoordinatorBuilder) WithCpuPlanner(planner planner.CpuPlanner) *ResourceCoordinatorBuilder {
+	if planner == nil {
+		b.err = errors.Join(b.err, errors.New("cpu planner cannot be nil"))
+		return b
+	}
+	b.planner = planner
+	return b
+}
+
+func (b *ResourceCoordinatorBuilder) WithCachePlanner(planner planner.CachePlanner) *ResourceCoordinatorBuilder {
+	if planner == nil {
+		b.err = errors.Join(b.err, errors.New("cache planner cannot be nil"))
+		return b
+	}
+	b.cachePlanner = planner
+	return b
+}
+
+func (b *ResourceCoordinatorBuilder) WithCacheController(ctrl controller.CacheIsolationController) *ResourceCoordinatorBuilder {
+	if ctrl == nil {
+		b.err = errors.Join(b.err, errors.New("cache isolation controller cannot be nil"))
+		return b
+	}
+	b.cacheController = ctrl
+	return b
+}
+
+func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	if b.store == nil {
+		return nil, errors.New("reservation store cannot be nil")
+	}
+	if b.planner == nil {
+		return nil, errors.New("cpu planner cannot be nil")
+	}
+	if b.cachePlanner == nil {
+		return nil, errors.New("cache planner cannot be nil")
+	}
+	if b.cacheController == nil {
+		return nil, errors.New("cache isolation controller cannot be nil")
+	}
+	return &ResourceCoordinator{
+		store:           b.store,
+		planner:         b.planner,
+		cachePlanner:    b.cachePlanner,
+		cacheController: b.cacheController,
+	}, nil
 }
 
 // takes the device-wide snapshot once, for one reconcile of one deployment. The caller
@@ -65,38 +146,69 @@ func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.Allocation
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
-// No i/o and no context: planning must stay reproducible from its inputs alone
+// no i/o and no context: planning must stay reproducible from its inputs alone
 func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
-	requirements, err := model.NormalizeCpuRequirements(request.Owner.Component, request.Requirements)
+	cpuRequirements, err := model.NormalizeCpuRequirements(request.Owner.Component, request.Requirements)
+	if err != nil {
+		return ResourcePlan{}, err
+	}
+
+	cacheReqs, err := model.NormalizeCacheRequirements(request.Owner.Component, request.Requirements)
 	if err != nil {
 		return ResourcePlan{}, err
 	}
 
 	cpuPlan, err := c.planner.PlanCpu(planner.CpuPlanningRequest{
-		Requirements: requirements,
+		Requirements: cpuRequirements,
 		Ledger:       ledger,
 	})
 	if err != nil {
 		return ResourcePlan{}, err
 	}
 
+	if !cpuPlan.HasCpus() {
+		if cacheReqs.HasCache() {
+			return ResourcePlan{}, fmt.Errorf("component %q requests exclusive cache but has no cpu assignments",
+				request.Owner.Component)
+		}
+
+		return ResourcePlan{Owner: request.Owner, Cpu: cpuPlan}, nil
+	}
+
+	cachePlan := model.CachePlan{Component: request.Owner.Component}
+	if cacheReqs.HasCache() {
+		cachePlan, err = c.cachePlanner.PlanCache(context.Background(), planner.CachePlanningRequest{
+			Requirements: cacheReqs,
+			CpuPlan:      cpuPlan,
+			Ledger:       ledger,
+		})
+		if err != nil {
+			return ResourcePlan{}, err
+		}
+	}
+
 	return ResourcePlan{
 		Owner: request.Owner,
 		Cpu:   cpuPlan,
+		Cache: cachePlan,
 	}, nil
 }
 
 // records the plan before the workload starts, so nothing is ever applied to the device
 // that is not already recoverable from storage
 func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) error {
-	if !plan.Cpu.HasCpus() {
+	if !plan.Cpu.HasCpus() && !plan.HasCache() {
 		return nil
 	}
 
-	return c.store.SaveReservation(plan.Owner.Deployment, model.Reservation{
-		Owner: model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
-		Cpus:  plan.Cpu.Cpus,
-	})
+	reservation := model.Reservation{
+		Owner:             model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
+		Cpus:              plan.Cpu.Cpus,
+		L3CacheAssignment: plan.Cache.L3CacheAssignment,
+		Clos:              plan.Cache.Clos,
+	}
+
+	return c.store.SaveReservation(plan.Owner.Deployment, reservation)
 }
 
 // verifies, after the workload is running, that the device still matches what was
