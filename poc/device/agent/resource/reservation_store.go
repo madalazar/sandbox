@@ -8,33 +8,15 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-// one component's recorded cpu and cache allocation
-type Reservation struct {
-	Owner             model.OwnerRef
-	Cpus              []int
-	L3CacheAssignment *model.CacheAssignment
-	// TODO: this might be duplicated, once we wire things up
-	// we might have to clean it
-	Clos model.ClosId
-}
-
-func (r Reservation) HasL3Cache() bool {
-	return r.L3CacheAssignment != nil
-}
-
-func (r Reservation) CpuSet() string {
-	return model.FormatCpuSet(r.Cpus)
-}
-
 // read device-wide allocations, and record, reconstruct and release a component's
 // recorded reservation
 type ReservationStore interface {
 	// every deployment's holdings, not just one; taken once per reconcile, before the
 	// component loop, so a ledger built from it also sees siblings planned in that pass
 	LoadSnapshot() (ledger.AllocationSnapshot, error)
-	LoadReservation(owner model.OwnerRef) (Reservation, bool, error)
+	LoadReservation(owner model.OwnerRef) (model.Reservation, bool, error)
 	// replaces the deployment's holdings rather than merging, in one write
-	SaveReservation(deploymentId string, reservation Reservation) error
+	SaveReservation(deploymentId string, reservation model.Reservation) error
 	ClearComponent(owner model.OwnerRef) error
 }
 
@@ -71,20 +53,20 @@ func (s *DatabaseReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, er
 	return ledger.NewAllocationSnapshotWithCaches(allocatedCpus, s.isolatedCpus, caches), nil
 }
 
-func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reservation, bool, error) {
+func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (model.Reservation, bool, error) {
 	allocations, err := s.db.GetAllocations(owner.Deployment)
 	if err != nil {
-		return Reservation{}, false, err
+		return model.Reservation{}, false, err
 	}
 
 	key := string(owner.Component)
 	cpus, hasCpus := allocations.Cpus[key]
 	cacheAlloc, hasCache := allocations.Caches[key]
 	if !hasCpus && !hasCache {
-		return Reservation{}, false, nil
+		return model.Reservation{}, false, nil
 	}
 
-	reservation := Reservation{
+	reservation := model.Reservation{
 		Owner: owner,
 		Cpus:  append([]int(nil), cpus...),
 	}
@@ -105,7 +87,7 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (Reserv
 	return reservation, true, nil
 }
 
-func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation Reservation) error {
+func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation model.Reservation) error {
 	existing, err := s.db.GetAllocations(deploymentId)
 	if err != nil {
 		return err

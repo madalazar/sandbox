@@ -4,20 +4,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/margo/sandbox/poc/device/agent/resource"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
 type dummyIsolationController struct{}
 
-func (d *dummyIsolationController) Apply(ctx context.Context, r resource.Reservation) error {
+func (d *dummyIsolationController) Apply(ctx context.Context, r model.Reservation) error {
 	return nil
 }
 
-func (d *dummyIsolationController) Verify(ctx context.Context, r resource.Reservation) error {
+func (d *dummyIsolationController) Verify(ctx context.Context, r model.Reservation) error {
 	return nil
 }
 
-func (d *dummyIsolationController) Release(ctx context.Context, r resource.Reservation) error {
+func (d *dummyIsolationController) Release(ctx context.Context, r model.Reservation) error {
 	return nil
 }
 
@@ -26,7 +26,7 @@ func TestCacheIsolationControllerInterface(t *testing.T) {
 
 	ctrl := &dummyIsolationController{}
 	ctx := context.Background()
-	res := resource.Reservation{}
+	res := model.Reservation{}
 
 	if err := ctrl.Apply(ctx, res); err != nil {
 		t.Fatalf("unexpected Apply error: %v", err)

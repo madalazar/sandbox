@@ -93,7 +93,7 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		return nil
 	}
 
-	return c.store.SaveReservation(plan.Owner.Deployment, Reservation{
+	return c.store.SaveReservation(plan.Owner.Deployment, model.Reservation{
 		Owner: model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
 		Cpus:  plan.Cpu.Cpus,
 	})
