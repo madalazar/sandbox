@@ -3,6 +3,7 @@ package ledger
 import (
 	"errors"
 
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
@@ -10,11 +11,6 @@ var (
 	// ErrCapacityExhausted indicates that the requested resource capacity is unavailable.
 	ErrCapacityExhausted = errors.New("capacity exhausted")
 )
-
-// returns a clos (class id) the ledger has confirmed is free
-type ClassNamer interface {
-	Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error)
-}
 
 // device-wide read of persisted allocations, taken once per
 // reconcile of one deployment, never mutated after construction
@@ -71,7 +67,7 @@ type AllocationLedger struct {
 	reservedCpus map[int]model.ComponentRef
 
 	cacheCapacity model.CacheCapacity
-	classNamer    ClassNamer
+	classNamer    controller.ClassNamer
 }
 
 func NewAllocationLedger(snapshot AllocationSnapshot, deploymentId string) *AllocationLedger {
@@ -86,7 +82,7 @@ func (l *AllocationLedger) SetCacheCapacity(caps model.CacheCapacity) {
 	l.cacheCapacity = caps
 }
 
-func (l *AllocationLedger) SetClassName(classNamer ClassNamer) {
+func (l *AllocationLedger) SetClassName(classNamer controller.ClassNamer) {
 	l.classNamer = classNamer
 }
 
