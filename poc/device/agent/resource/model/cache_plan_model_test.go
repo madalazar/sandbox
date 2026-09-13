@@ -26,6 +26,58 @@ func TestWayInterval(t *testing.T) {
 	}
 }
 
+func TestFreeWayIntervals(t *testing.T) {
+	tests := []struct {
+		name string
+		used []bool
+		want []WayInterval
+	}{
+		{
+			name: "empty array",
+			used: nil,
+			want: []WayInterval{},
+		},
+		{
+			name: "all free",
+			used: []bool{false, false, false, false},
+			want: []WayInterval{{Start: 0, Length: 4}},
+		},
+		{
+			name: "all used",
+			used: []bool{true, true, true, true},
+			want: []WayInterval{},
+		},
+		{
+			name: "fragmented intervals",
+			used: []bool{false, false, true, true, false, true, false, false, false},
+			want: []WayInterval{
+				{Start: 0, Length: 2},
+				{Start: 4, Length: 1},
+				{Start: 6, Length: 3},
+			},
+		},
+		{
+			name: "used at start and end",
+			used: []bool{true, false, false, true},
+			want: []WayInterval{{Start: 1, Length: 2}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FreeWayIntervals(tc.used)
+			if len(got) != len(tc.want) {
+				t.Fatalf("expected %d intervals, got %d: %+v", len(tc.want), len(got), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("at index %d: expected %+v, got %+v", i, tc.want[i], got[i])
+				}
+			}
+		})
+	}
+}
+
 func TestClassID(t *testing.T) {
 	if ClassUnset.Held() {
 		t.Fatal("expected ClassUnset not to be held")

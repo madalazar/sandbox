@@ -2,10 +2,13 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 )
+
+var errNotImplemented = errors.New("not implemented")
 
 var _ CacheIsolationController = (*RdtPolicyController)(nil)
 
