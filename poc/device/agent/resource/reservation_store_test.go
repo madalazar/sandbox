@@ -75,7 +75,7 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	cpuSet1 := []int{1, 2}
 
 	if err := store.SaveReservation(deploymentID,
-		Reservation{Cpus: cpuSet1, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName1)}}); err != nil {
+		model.Reservation{Cpus: cpuSet1, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName1)}}); err != nil {
 		t.Fatalf("SaveAllocations() error = %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	cpuSet2 := []int{3}
 
 	if err := store.SaveReservation(deploymentID,
-		Reservation{Cpus: cpuSet2, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName2)}}); err != nil {
+		model.Reservation{Cpus: cpuSet2, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName2)}}); err != nil {
 		t.Fatalf("SaveAllocations() error = %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 	owner := model.NewOwnerRef(deploymentID, componentName)
 	store := NewDatabaseReservationStore(db, map[int]struct{}{2: {}, 4: {}})
 
-	res := Reservation{
+	res := model.Reservation{
 		Owner: owner,
 		Cpus:  []int{2, 4},
 		L3CacheAssignment: &model.CacheAssignment{
