@@ -16,6 +16,32 @@ func (w WayInterval) Overlaps(other WayInterval) bool {
 	return w.Start < other.End() && other.Start < w.End()
 }
 
+// FreeWayIntervals scans a boolean bitmap of used ways and returns all contiguous free (false) intervals.
+func FreeWayIntervals(used []bool) []WayInterval {
+	intervals := make([]WayInterval, 0)
+	start := int64(-1)
+
+	for i := int64(0); i < int64(len(used)); i++ {
+		if !used[i] {
+			if start == -1 {
+				start = i
+			}
+			continue
+		}
+
+		if start != -1 {
+			intervals = append(intervals, WayInterval{Start: start, Length: i - start})
+			start = -1
+		}
+	}
+
+	if start != -1 {
+		intervals = append(intervals, WayInterval{Start: start, Length: int64(len(used)) - start})
+	}
+
+	return intervals
+}
+
 // identifies one reserved slot in the device-wide class-of-service pool.
 // the pool is shared hardware; only the spelling is runtime-specific:
 // - pqos uses "COS" + index
