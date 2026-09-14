@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -178,13 +177,6 @@ func (d *fakePqosDevice) Wipe() {
 
 func (d *fakePqosDevice) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
 	cmdStr := command + " " + strings.Join(args, " ")
-	if strings.Contains(cmdStr, "-s") {
-		var b strings.Builder
-		for cos, mask := range d.classes {
-			b.WriteString(fmt.Sprintf("COS %s: LLC mask = %s, Cores = %s\n", cos, mask, d.cores[cos]))
-		}
-		return []byte(b.String()), nil
-	}
 	if strings.Contains(cmdStr, "core:0=") {
 		// Reset: move cores back to COS 0, reset LLC mask to default
 		parts := strings.Split(cmdStr, "'")

@@ -607,6 +607,11 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("docker compose operation failed: %v", err)
 		}
 
+		//TODO: do we need this???
+		if err = coordinator.Activate(ctx, owner); err != nil {
+			return fmt.Errorf("failed to activate cache isolation for component %s: %w", composeComp.Name, err)
+		}
+
 		dm.log.Infow("Docker Compose deployment successful",
 			"appId", deploymentId, "componentName", composeComp.Name, "projectName", projectName)
 
