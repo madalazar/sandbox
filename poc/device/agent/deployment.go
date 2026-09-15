@@ -572,20 +572,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
 			}
 
-			// repository only uses oci:// type urls
-			removeSourceComposeFile := strings.HasPrefix(component.Properties.Repository, "oci://")
-			defer func(prep string, src string, rmSrc bool) {
-				if rmSrc {
-					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
-					}
-				}
+			defer func(prep string, src string) {
 				if prep != src {
 					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
 					}
 				}
-			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+			}(preparedComposeFilename, composeFilename)
 		}
 
 		// Convert parameters to environment variables
