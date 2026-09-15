@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/dynamic"
+
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/types"
@@ -78,6 +80,7 @@ func NewAgent(configPath string) (*Agent, error) {
 	var helmClient *workloads.HelmClient
 	var composeClient *workloads.DockerComposeCliClient
 	var balloonPolicyInformer *resource.BalloonPolicyInformer
+	var dynClient dynamic.Interface
 	for _, runtime := range cfg.Runtimes {
 		if runtime.Kubernetes != nil {
 			// Create Helm client
@@ -85,8 +88,14 @@ func NewAgent(configPath string) (*Agent, error) {
 			if err != nil {
 				return nil, err
 			}
+			if dynClient == nil {
+				dynClient, err = workloads.NewDynamicClient(runtime.Kubernetes.KubeconfigPath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to initialize kubernetes dynamic client: %w", err)
+				}
+			}
 			if balloonPolicyInformer == nil {
-				balloonPolicyInformer, err = resource.NewBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
+				balloonPolicyInformer, err = resource.NewBalloonPolicyInformer(dynClient, log)
 				if err != nil {
 					return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
 				}
@@ -197,7 +206,7 @@ func NewAgent(configPath string) (*Agent, error) {
 		log.Errorw("unable to load host topology artifact", "path", topologyArtifactPath, "error", err)
 	}
 
-	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, hostTopology, log)
+	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, dynClient, hostTopology, log)
 	monitor := NewDeploymentMonitor(db, capabilities, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,

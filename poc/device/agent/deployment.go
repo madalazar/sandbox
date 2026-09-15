@@ -25,6 +25,7 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
 	"go.uber.org/zap"
+	"k8s.io/client-go/dynamic"
 )
 
 type DeploymentManagerIfc interface {
@@ -40,6 +41,7 @@ type DeploymentManager struct {
 	policyReader       model.BalloonPolicyReader
 	composeCoordinator *resource.ResourceCoordinator
 	helmCoordinator    *resource.ResourceCoordinator
+	dynClient          dynamic.Interface
 	log                *zap.SugaredLogger
 	stopChan           chan struct{}
 	hostTopology       types.HostTopology
@@ -53,6 +55,7 @@ func NewDeploymentManager(
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
 	policyReader model.BalloonPolicyReader,
+	dynClient dynamic.Interface,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
@@ -87,6 +90,7 @@ func NewDeploymentManager(
 		policyReader:       policyReader,
 		composeCoordinator: composeCoord,
 		helmCoordinator:    helmCoord,
+		dynClient:          dynClient,
 		hostTopology:       hostTopology,
 		log:                log,
 		capabilities:       capabilities,
@@ -495,6 +499,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
 			}
 
+			if err = coordinator.Activate(ctx, owner); err != nil {
+				return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
+			}
+
 			if rollback != nil {
 				rollback.Complete()
 			}
@@ -510,6 +518,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		wait := component.Properties.Wait != nil && *component.Properties.Wait
 		if err = dm.helmClient.InstallChart(ctx, releaseName, component.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
+		}
+
+		if err = coordinator.Activate(ctx, owner); err != nil {
+			return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
 		}
 
 		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
@@ -945,6 +957,7 @@ func (dm *DeploymentManager) ComposeResourceCoordinator() (*resource.ResourceCoo
 	if dm.composeCoordinator == nil {
 		return nil, errors.New("compose resource coordinator not initialized")
 	}
+
 	return dm.composeCoordinator, nil
 }
 
@@ -952,6 +965,7 @@ func (dm *DeploymentManager) HelmResourceCoordinator() (*resource.ResourceCoordi
 	if dm.helmCoordinator == nil {
 		return nil, errors.New("helm resource coordinator not initialized")
 	}
+
 	return dm.helmCoordinator, nil
 }
 

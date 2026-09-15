@@ -12,24 +12,7 @@ type CommandRunner interface {
 	Run(ctx context.Context, command string, args ...string) ([]byte, error)
 }
 
-var _ CommandRunner = (*directRunner)(nil)
 var _ CommandRunner = (*nsenterRunner)(nil)
-
-// executes commands directly on the host
-type directRunner struct{}
-
-func NewDirectRunner() CommandRunner {
-	return &directRunner{}
-}
-
-func (r *directRunner) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return output, fmt.Errorf("%s %s failed: %w: %s", command, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
-	}
-	return output, nil
-}
 
 // executes commands within the host namespace using nsenter
 type nsenterRunner struct {
