@@ -566,21 +566,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
 			}
 
-			removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
-				strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
-				strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
-			defer func(prep string, src string, rmSrc bool) {
-				if rmSrc {
-					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
-					}
-				}
+			defer func(prep string, src string) {
 				if prep != src {
 					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
 					}
 				}
-			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+			}(preparedComposeFilename, composeFilename)
 		}
 
 		// Convert parameters to environment variables
