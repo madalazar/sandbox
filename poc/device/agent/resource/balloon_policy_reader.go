@@ -23,14 +23,10 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-const (
-	balloonsPolicyNamespace = "kube-system"
-)
-
 var balloonsPolicyGVR = schema.GroupVersionResource{
 	Group:    "config.nri",
 	Version:  "v1alpha1",
-	Resource: "balloonspolicies",
+	Resource: model.BalloonsPolicyResource,
 }
 
 var _ model.BalloonPolicyReader = (*BalloonPolicyInformer)(nil)
@@ -65,7 +61,7 @@ func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*B
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient,
 		0,
-		balloonsPolicyNamespace,
+		model.DefaultBalloonsPolicyNamespace,
 		nil,
 	)
 	informer := factory.ForResource(balloonsPolicyGVR).Informer()
@@ -201,6 +197,16 @@ func cloneParsedBalloonPolicy(p *model.ParsedBalloonPolicy) *model.ParsedBalloon
 			out.BalloonTypes[i] = clonedBt
 		}
 	}
+	out.RdtConfig = model.RdtConfig{
+		Partitions: make(map[string]struct{}, len(p.RdtConfig.Partitions)),
+		Classes:    make(map[string]struct{}, len(p.RdtConfig.Classes)),
+	}
+	for k := range p.RdtConfig.Partitions {
+		out.RdtConfig.Partitions[k] = struct{}{}
+	}
+	for k := range p.RdtConfig.Classes {
+		out.RdtConfig.Classes[k] = struct{}{}
+	}
 	return out
 }
 
@@ -214,57 +220,97 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*model.ParsedBalloonPo
 		return nil, fmt.Errorf("policy config section not found")
 	}
 
-	out := &model.ParsedBalloonPolicy{
-		Name:      obj.GetName(),
-		Namespace: obj.GetNamespace(),
+	balloonTypes, err := parseBalloonTypes(cfg[model.PolicyKeyBalloonTypes])
+	if err != nil {
+		return nil, err
 	}
 
-	if rawTypes, ok := cfg["balloonTypes"].([]any); ok {
-		out.BalloonTypes = make([]model.ParsedBalloonType, 0, len(rawTypes))
-		for idx, item := range rawTypes {
-			m, ok := item.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("balloonTypes[%d] is not a map: %T", idx, item)
-			}
+	rdtConfig := parseRdtConfig(cfg[model.PolicyKeyControl])
 
-			p := model.ParsedBalloonType{}
-			if v, ok := m["name"].(string); ok {
-				p.Name = strings.TrimSpace(v)
-			}
-			if p.Name == "" {
-				return nil, fmt.Errorf("balloonTypes[%d] has empty or missing name", idx)
-			}
+	return &model.ParsedBalloonPolicy{
+		Name:         obj.GetName(),
+		Namespace:    obj.GetNamespace(),
+		BalloonTypes: balloonTypes,
+		RdtConfig:    rdtConfig,
+	}, nil
+}
 
-			if v, ok := m["preferCoreType"].(string); ok {
-				p.PreferCoreType = v
-			}
-			if v, ok := m["preferIsolCpus"].(bool); ok {
-				vCopy := v
-				p.PreferIsolCpus = &vCopy
-			}
-			var err error
-			if p.MinCpus, err = parseNonNegativeCPUField(m, "minCPUs", p.Name, idx); err != nil {
-				return nil, err
-			}
-			if p.MaxCpus, err = parseNonNegativeCPUField(m, "maxCPUs", p.Name, idx); err != nil {
-				return nil, err
-			}
-			if p.MinCpus != nil && p.MaxCpus != nil && *p.MinCpus > *p.MaxCpus {
-				return nil, fmt.Errorf("balloonTypes[%d] %q has minCPUs (%d) greater than maxCPUs (%d)", idx, p.Name, *p.MinCpus, *p.MaxCpus)
-			}
-			if arr, ok := m["preferCloseToDevices"].([]any); ok {
-				for _, path := range arr {
-					if s, ok := path.(string); ok {
-						p.PreferCloseToDevices = append(p.PreferCloseToDevices, s)
-					}
+func parseBalloonTypes(raw any) ([]model.ParsedBalloonType, error) {
+	rawTypes, ok := raw.([]any)
+	if !ok {
+		return nil, nil
+	}
+
+	balloonTypes := make([]model.ParsedBalloonType, 0, len(rawTypes))
+	for idx, item := range rawTypes {
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("balloonTypes[%d] is not a map: %T", idx, item)
+		}
+
+		p := model.ParsedBalloonType{}
+		if v, ok := m[model.BalloonKeyName].(string); ok {
+			p.Name = strings.TrimSpace(v)
+		}
+		if p.Name == "" {
+			return nil, fmt.Errorf("balloonTypes[%d] has empty or missing name", idx)
+		}
+
+		if v, ok := m[model.BalloonKeyPreferCoreType].(string); ok {
+			p.PreferCoreType = v
+		}
+		if v, ok := m[model.BalloonKeyPreferIsolCpus].(bool); ok {
+			vCopy := v
+			p.PreferIsolCpus = &vCopy
+		}
+		var err error
+		if p.MinCpus, err = parseNonNegativeCPUField(m, model.BalloonKeyMinCPUs, p.Name, idx); err != nil {
+			return nil, err
+		}
+		if p.MaxCpus, err = parseNonNegativeCPUField(m, model.BalloonKeyMaxCPUs, p.Name, idx); err != nil {
+			return nil, err
+		}
+		if p.MinCpus != nil && p.MaxCpus != nil && *p.MinCpus > *p.MaxCpus {
+			return nil, fmt.Errorf("balloonTypes[%d] %q has minCPUs (%d) greater than maxCPUs (%d)", idx, p.Name, *p.MinCpus, *p.MaxCpus)
+		}
+		if arr, ok := m[model.BalloonKeyPreferCloseToDevices].([]any); ok {
+			for _, path := range arr {
+				if s, ok := path.(string); ok {
+					p.PreferCloseToDevices = append(p.PreferCloseToDevices, s)
 				}
 			}
+		}
 
-			out.BalloonTypes = append(out.BalloonTypes, p)
+		balloonTypes = append(balloonTypes, p)
+	}
+
+	return balloonTypes, nil
+}
+
+func parseRdtConfig(controlRaw any) model.RdtConfig {
+	rdtConfig := model.RdtConfig{
+		Partitions: map[string]struct{}{},
+		Classes:    map[string]struct{}{},
+	}
+
+	control, _ := controlRaw.(map[string]any)
+	rdt, _ := control[model.RdtKeyControl].(map[string]any)
+	partitions, _ := rdt[model.RdtKeyPartitions].(map[string]any)
+
+	for partitionName, partitionValue := range partitions {
+		rdtConfig.Partitions[partitionName] = struct{}{}
+
+		partitionObj, ok := partitionValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		classes, _ := partitionObj[model.RdtKeyClasses].(map[string]any)
+		for className := range classes {
+			rdtConfig.Classes[className] = struct{}{}
 		}
 	}
 
-	return out, nil
+	return rdtConfig
 }
 
 func parseNonNegativeCPUField(m map[string]any, fieldName, balloonName string, idx int) (*int64, error) {
@@ -287,19 +333,19 @@ func extractPolicyConfig(root map[string]any) map[string]any {
 		return nil
 	}
 
-	if cfg, ok := root["config"].(map[string]any); ok {
+	if cfg, ok := root[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
 
-	spec, ok := root["spec"].(map[string]any)
+	spec, ok := root[model.PolicyKeySpec].(map[string]any)
 	if !ok {
 		return nil
 	}
 
-	if cfg, ok := spec["config"].(map[string]any); ok {
+	if cfg, ok := spec[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
-	if _, ok := spec["balloonTypes"]; ok {
+	if _, ok := spec[model.PolicyKeyBalloonTypes]; ok {
 		return spec
 	}
 

@@ -15,5 +15,5 @@ func NewRdtClassNamer() *RdtClassNamer {
 
 // generates a deterministic class name for the component reference
 func (n *RdtClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
-	return model.ClassUnset, errNotImplemented
+	return model.ClosId(string(ref) + "_class"), nil
 }
