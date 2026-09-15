@@ -235,3 +235,49 @@ func TestParsedImmutability(t *testing.T) {
 		t.Errorf("copy2.PreferCloseToDevices = %v, want [/dev/vfio/0]", copy2.BalloonTypes[0].PreferCloseToDevices)
 	}
 }
+
+func TestParseBalloonsPolicyWithRDT(t *testing.T) {
+	obj := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "config.nri/v1alpha1",
+			"kind":       "BalloonsPolicy",
+			"metadata": map[string]any{
+				"name":      "default-balloons",
+				"namespace": "kube-system",
+			},
+			"spec": map[string]any{
+				"config": map[string]any{
+					"control": map[string]any{
+						"rdt": map[string]any{
+							"partitions": map[string]any{
+								"comp-a": map[string]any{
+									"classes": map[string]any{
+										"comp-a_class": map[string]any{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	policy, err := parseBalloonsPolicy(obj)
+	if err != nil {
+		t.Fatalf("parseBalloonsPolicy() error = %v", err)
+	}
+
+	if !policy.HasPartition("comp-a") {
+		t.Errorf("expected policy to have partition comp-a")
+	}
+	if !policy.HasClass("comp-a_class") {
+		t.Errorf("expected policy to have class comp-a_class")
+	}
+	if policy.HasPartition("comp-b") {
+		t.Errorf("expected policy to not have partition comp-b")
+	}
+	if policy.HasClass("comp-b_class") {
+		t.Errorf("expected policy to not have class comp-b_class")
+	}
+}

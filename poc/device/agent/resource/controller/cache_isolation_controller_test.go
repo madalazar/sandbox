@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -234,6 +236,118 @@ func TestPqosIsolationContract(t *testing.T) {
 				Mask:    "0x3",
 				Clos:    "1",
 			},
+		}
+		return ctrl, dev, res
+	})
+}
+
+type fakeRdtDevice struct {
+	partitions map[string]any
+	classes    map[string]any
+}
+
+func newFakeRdtDevice() *fakeRdtDevice {
+	return &fakeRdtDevice{
+		partitions: make(map[string]any),
+		classes:    make(map[string]any),
+	}
+}
+
+func (d *fakeRdtDevice) Snapshot() any {
+	p := make(map[string]any, len(d.partitions))
+	maps.Copy(p, d.partitions)
+	c := make(map[string]any, len(d.classes))
+	maps.Copy(c, d.classes)
+	return struct {
+		partitions map[string]any
+		classes    map[string]any
+	}{partitions: p, classes: c}
+}
+
+func (d *fakeRdtDevice) Wipe() {
+	d.partitions = make(map[string]any)
+	d.classes = make(map[string]any)
+}
+
+func (d *fakeRdtDevice) Parsed() *model.ParsedBalloonPolicy {
+	parts := make(map[string]struct{}, len(d.partitions))
+	for k := range d.partitions {
+		parts[k] = struct{}{}
+	}
+	cls := make(map[string]struct{}, len(d.classes))
+	for k := range d.classes {
+		cls[k] = struct{}{}
+	}
+	return &model.ParsedBalloonPolicy{
+		Name:      "default",
+		Namespace: "kube-system",
+		RdtConfig: model.RdtConfig{
+			Partitions: parts,
+			Classes:    cls,
+		},
+	}
+}
+
+func (d *fakeRdtDevice) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
+	cmdStr := command + " " + strings.Join(args, " ")
+	_, after, ok := strings.Cut(cmdStr, "--patch ")
+	if !ok {
+		return []byte("ok"), nil
+	}
+	patchStr := after
+
+	var patchMap map[string]any
+	if err := json.Unmarshal([]byte(patchStr), &patchMap); err != nil {
+		return nil, err
+	}
+
+	spec, _ := patchMap["spec"].(map[string]any)
+	control, _ := spec["control"].(map[string]any)
+	rdt, _ := control["rdt"].(map[string]any)
+
+	if parts, ok := rdt["partitions"].(map[string]any); ok {
+		for k, v := range parts {
+			if v == nil {
+				delete(d.partitions, k)
+			} else {
+				d.partitions[k] = v
+				if pMap, ok := v.(map[string]any); ok {
+					if cMap, ok := pMap["classes"].(map[string]any); ok {
+						maps.Copy(d.classes, cMap)
+					}
+				}
+			}
+		}
+	}
+	if cls, ok := rdt["classes"].(map[string]any); ok {
+		for k, v := range cls {
+			if v == nil {
+				delete(d.classes, k)
+			} else {
+				d.classes[k] = v
+			}
+		}
+	}
+
+	return []byte("patched"), nil
+}
+
+func TestRdtIsolationContract(t *testing.T) {
+	caches := []types.HostTopologyCache{
+		{Id: "0", Level: "L3", Ways: 12, WaySizeKB: 1024},
+	}
+	testIsolationContract(t, func() (CacheIsolationController, FakeDevice, model.Reservation) {
+		dev := newFakeRdtDevice()
+		ctrl := NewRdtPolicyControllerWithReader(dev, dev, caches)
+		res := model.Reservation{
+			Owner: model.NewOwnerRef("dep-1", "comp-a"),
+			Cpus:  []int{2, 3},
+			L3CacheAssignment: &model.CacheAssignment{
+				CacheId: "0",
+				Mask:    "0x3",
+				Clos:    "comp-a_class",
+			},
+			Clos: "comp-a_class",
 		}
 		return ctrl, dev, res
 	})
