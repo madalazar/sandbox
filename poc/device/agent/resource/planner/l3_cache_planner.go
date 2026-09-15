@@ -92,6 +92,8 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 		Clos:     clos,
 	}
 
+	fmt.Printf("[cache planner] cache assignment %+v, clos: %v\n", assignment, clos)
+
 	return model.CachePlan{
 		Component:         request.Requirements.Component,
 		L3CacheAssignment: assignment,

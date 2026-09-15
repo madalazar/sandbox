@@ -220,6 +220,8 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		L3CacheAssignment: plan.Cache.L3CacheAssignment,
 	}
 
+	fmt.Printf("[resource coordinator] cache plan details: %#v\n", plan.Cache)
+
 	if err := c.store.SaveReservation(plan.Owner.Deployment, reservation); err != nil {
 		return err
 	}
