@@ -20,14 +20,10 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-const (
-	balloonsPolicyNamespace = "kube-system"
-)
-
 var balloonsPolicyGVR = schema.GroupVersionResource{
 	Group:    "config.nri",
 	Version:  "v1alpha1",
-	Resource: "balloonspolicies",
+	Resource: model.BalloonsPolicyResource,
 }
 
 var _ model.BalloonPolicyReader = (*BalloonPolicyInformer)(nil)
@@ -66,7 +62,7 @@ func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*B
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient,
 		0,
-		balloonsPolicyNamespace,
+		model.DefaultBalloonsPolicyNamespace,
 		nil,
 	)
 	informer := factory.ForResource(balloonsPolicyGVR).Informer()
@@ -217,19 +213,19 @@ func extractPolicyConfig(root map[string]any) map[string]any {
 		return nil
 	}
 
-	if cfg, ok := root["config"].(map[string]any); ok {
+	if cfg, ok := root[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
 
-	spec, ok := root["spec"].(map[string]any)
+	spec, ok := root[model.PolicyKeySpec].(map[string]any)
 	if !ok {
 		return nil
 	}
 
-	if cfg, ok := spec["config"].(map[string]any); ok {
+	if cfg, ok := spec[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
-	if _, ok := spec["balloonTypes"]; ok {
+	if _, ok := spec[model.PolicyKeyBalloonTypes]; ok {
 		return spec
 	}
 
