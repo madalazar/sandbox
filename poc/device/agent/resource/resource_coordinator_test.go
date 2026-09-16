@@ -57,7 +57,7 @@ type fakeCachePlanner struct {
 	err  error
 }
 
-func (f *fakeCachePlanner) PlanCache(ctx context.Context, req planner.CachePlanningRequest) (model.CachePlan, error) {
+func (f *fakeCachePlanner) PlanCache(req planner.CachePlanningRequest) (model.CachePlan, error) {
 	return f.plan, f.err
 }
 

@@ -67,7 +67,6 @@ type ResourceCoordinatorBuilder struct {
 	planner         planner.CpuPlanner
 	cachePlanner    planner.CachePlanner
 	cacheController controller.CacheIsolationController
-	err             error
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -75,56 +74,41 @@ func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
 }
 
 func (b *ResourceCoordinatorBuilder) WithStore(store ReservationStore) *ResourceCoordinatorBuilder {
-	if store == nil {
-		b.err = errors.Join(b.err, errors.New("reservation store cannot be nil"))
-		return b
-	}
 	b.store = store
 	return b
 }
 
 func (b *ResourceCoordinatorBuilder) WithCpuPlanner(planner planner.CpuPlanner) *ResourceCoordinatorBuilder {
-	if planner == nil {
-		b.err = errors.Join(b.err, errors.New("cpu planner cannot be nil"))
-		return b
-	}
 	b.planner = planner
 	return b
 }
 
 func (b *ResourceCoordinatorBuilder) WithCachePlanner(planner planner.CachePlanner) *ResourceCoordinatorBuilder {
-	if planner == nil {
-		b.err = errors.Join(b.err, errors.New("cache planner cannot be nil"))
-		return b
-	}
 	b.cachePlanner = planner
 	return b
 }
 
 func (b *ResourceCoordinatorBuilder) WithCacheController(ctrl controller.CacheIsolationController) *ResourceCoordinatorBuilder {
-	if ctrl == nil {
-		b.err = errors.Join(b.err, errors.New("cache isolation controller cannot be nil"))
-		return b
-	}
 	b.cacheController = ctrl
 	return b
 }
 
 func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
-	if b.err != nil {
-		return nil, b.err
-	}
+	var errs []error
 	if b.store == nil {
-		return nil, errors.New("reservation store cannot be nil")
+		errs = append(errs, errors.New("reservation store cannot be nil"))
 	}
 	if b.planner == nil {
-		return nil, errors.New("cpu planner cannot be nil")
+		errs = append(errs, errors.New("cpu planner cannot be nil"))
 	}
 	if b.cachePlanner == nil {
-		return nil, errors.New("cache planner cannot be nil")
+		errs = append(errs, errors.New("cache planner cannot be nil"))
 	}
 	if b.cacheController == nil {
-		return nil, errors.New("cache isolation controller cannot be nil")
+		errs = append(errs, errors.New("cache isolation controller cannot be nil"))
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return &ResourceCoordinator{
 		store:           b.store,
@@ -177,7 +161,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 
 	cachePlan := model.CachePlan{Component: request.Owner.Component}
 	if cacheReqs.HasCache() {
-		cachePlan, err = c.cachePlanner.PlanCache(context.Background(), planner.CachePlanningRequest{
+		cachePlan, err = c.cachePlanner.PlanCache(planner.CachePlanningRequest{
 			Requirements: cacheReqs,
 			CpuPlan:      cpuPlan,
 			Ledger:       ledger,
