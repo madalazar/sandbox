@@ -25,6 +25,7 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
 	"go.uber.org/zap"
+	"k8s.io/client-go/dynamic"
 )
 
 type DeploymentManagerIfc interface {
@@ -36,9 +37,10 @@ type DeploymentManager struct {
 	database           database.DatabaseIfc
 	helmClient         *workloads.HelmClient
 	composeClient      *workloads.DockerComposeCliClient
-	policyReader       model.BalloonPolicyReader
 	composeCoordinator *resource.ResourceCoordinator
 	helmCoordinator    *resource.ResourceCoordinator
+	policyReader       model.BalloonPolicyReader
+	dynClient          dynamic.Interface
 	log                *zap.SugaredLogger
 	stopChan           chan struct{}
 	hostTopology       types.HostTopology
@@ -51,6 +53,7 @@ func NewDeploymentManager(
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
 	policyReader model.BalloonPolicyReader,
+	dynClient dynamic.Interface,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
@@ -85,6 +88,7 @@ func NewDeploymentManager(
 		policyReader:       policyReader,
 		composeCoordinator: composeCoord,
 		helmCoordinator:    helmCoord,
+		dynClient:          dynClient,
 		hostTopology:       hostTopology,
 		log:                log,
 		stopChan:           make(chan struct{}),
