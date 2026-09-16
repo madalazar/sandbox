@@ -40,7 +40,8 @@ func NewNsenterRunner() CommandRunner {
 	return &nsenterRunner{targetPID: "1"}
 }
 
-func NewNsenterRunnerWithPid(targetPID string) *nsenterRunner {
+func NewNsenterRunnerWithPid(targetPID string) CommandRunner {
+	targetPID = strings.TrimSpace(targetPID)
 	if targetPID == "" {
 		targetPID = "1"
 	}
