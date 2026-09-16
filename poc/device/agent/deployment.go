@@ -344,7 +344,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator := dm.newHelmResourceCoordinator()
+	coordinator, err := dm.newHelmResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	}
+
 	helmConfigurator := configurator.NewHelmConfigurator()
 
 	ledger, err := coordinator.NewLedger(deploymentId)
@@ -459,7 +463,11 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator := dm.newComposeResourceCoordinator()
+	coordinator, err := dm.newComposeResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	}
+
 	composeConfigurator := configurator.NewComposeConfigurator()
 
 	ledger, err := coordinator.NewLedger(deploymentId)
@@ -744,7 +752,10 @@ func (dm *DeploymentManager) removeHelm(
 		return nil
 	}
 
-	coordinator := dm.newHelmResourceCoordinator()
+	coordinator, err := dm.newHelmResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	}
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
@@ -798,7 +809,10 @@ func (dm *DeploymentManager) removeCompose(
 		return nil
 	}
 
-	coordinator := dm.newComposeResourceCoordinator()
+	coordinator, err := dm.newComposeResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	}
 
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
@@ -919,7 +933,7 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	return envVars
 }
 
-func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
+func (dm *DeploymentManager) newComposeResourceCoordinator() (*resource.ResourceCoordinator, error) {
 	coord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices)).
@@ -928,12 +942,12 @@ func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceC
 		Build()
 	if err != nil {
 		dm.log.Errorw("failed to build compose resource coordinator", "error", err)
-		return nil
+		return nil, err
 	}
-	return coord
+	return coord, nil
 }
 
-func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
+func (dm *DeploymentManager) newHelmResourceCoordinator() (*resource.ResourceCoordinator, error) {
 	coord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices)).
@@ -942,9 +956,9 @@ func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoor
 		Build()
 	if err != nil {
 		dm.log.Errorw("failed to build helm resource coordinator", "error", err)
-		return nil
+		return nil, err
 	}
-	return coord
+	return coord, nil
 }
 
 // needed to properly convert integers with more > 6 digits

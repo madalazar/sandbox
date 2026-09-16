@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"context"
 	"errors"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -22,6 +21,6 @@ func NewL3CachePlanner(caches []types.HostTopologyCache) *L3CachePlanner {
 }
 
 // decides cache way allocations and class reservation for a component
-func (p *L3CachePlanner) PlanCache(ctx context.Context, request CachePlanningRequest) (model.CachePlan, error) {
+func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePlan, error) {
 	return model.CachePlan{}, errNotImplemented
 }

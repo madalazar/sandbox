@@ -1,7 +1,6 @@
 package planner
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -16,7 +15,7 @@ func TestL3CachePlannerInterface(t *testing.T) {
 		t.Fatal("expected non-nil L3CachePlanner")
 	}
 
-	_, err := planner.PlanCache(context.Background(), CachePlanningRequest{})
+	_, err := planner.PlanCache(CachePlanningRequest{})
 	if !errors.Is(err, errNotImplemented) {
 		t.Fatalf("PlanCache() error = %v, want %v", err, errNotImplemented)
 	}
