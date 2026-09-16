@@ -15,7 +15,7 @@ var _ CommandRunner = (*nsenterRunner)(nil)
 // executes commands directly on the host
 type directRunner struct{}
 
-func NewDirectRunner() *directRunner {
+func NewDirectRunner() CommandRunner {
 	return &directRunner{}
 }
 
@@ -28,7 +28,7 @@ type nsenterRunner struct {
 	targetPID string
 }
 
-func NewNsenterRunner() *nsenterRunner {
+func NewNsenterRunner() CommandRunner {
 	return &nsenterRunner{targetPID: "1"}
 }
 
