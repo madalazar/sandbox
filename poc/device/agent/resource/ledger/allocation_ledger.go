@@ -22,13 +22,13 @@ type AllocationSnapshot struct {
 	Caches []model.CacheAssignment
 }
 
-// keeping both c-tors until we wire the ledger properly in deployment.go
-
 // decodes the persisted owner strings into domain owners,
-// keeping only the isolated indices the planners can allocate from
+// keeping only the isolated indices the planners can allocate from,
+// and records any persisted cache allocations
 func NewAllocationSnapshot(
 	allocatedCpus map[int]string,
 	isolatedCpus map[int]struct{},
+	caches []model.CacheAssignment,
 ) AllocationSnapshot {
 	owners := make(map[int]model.OwnerRef, len(allocatedCpus))
 	for cpuIndex, owner := range allocatedCpus {
@@ -38,23 +38,15 @@ func NewAllocationSnapshot(
 		owners[cpuIndex] = model.ParseOwnerRef(owner)
 	}
 
+	var cacheAssignments []model.CacheAssignment
+	if len(caches) > 0 {
+		cacheAssignments = append([]model.CacheAssignment(nil), caches...)
+	}
+
 	return AllocationSnapshot{
 		CpuOwners: owners,
-		Caches:    nil,
+		Caches:    cacheAssignments,
 	}
-}
-
-// creates a snapshot with both cpu owners and cache reservations
-func NewAllocationSnapshotWithCaches(
-	allocatedCpus map[int]string,
-	isolatedCpus map[int]struct{},
-	caches []model.CacheAssignment,
-) AllocationSnapshot {
-	snapshot := NewAllocationSnapshot(allocatedCpus, isolatedCpus)
-	if len(caches) > 0 {
-		snapshot.Caches = append([]model.CacheAssignment(nil), caches...)
-	}
-	return snapshot
 }
 
 // answers free-versus-taken for one deployment's reconcile pass. It
@@ -82,7 +74,7 @@ func (l *AllocationLedger) SetCacheCapacity(caps model.CacheCapacity) {
 	l.cacheCapacity = caps
 }
 
-func (l *AllocationLedger) SetClassName(classNamer controller.ClassNamer) {
+func (l *AllocationLedger) SetClassNamer(classNamer controller.ClassNamer) {
 	l.classNamer = classNamer
 }
 

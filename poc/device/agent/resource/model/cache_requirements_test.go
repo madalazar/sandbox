@@ -96,6 +96,9 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 		if normalized.HasCache() {
 			t.Fatal("expected shared cache allocation to be skipped")
 		}
+		if normalized.Component != "comp-a" {
+			t.Fatalf("expected component 'comp-a', got %q", normalized.Component)
+		}
 	})
 
 	t.Run("rejects multiple L3 cache requirements", func(t *testing.T) {
@@ -157,6 +160,8 @@ func TestParseBinarySizeKi(t *testing.T) {
 		{name: "non-numeric", raw: strPtr("abcKi"), expectErr: true},
 		{name: "zero", raw: strPtr("0Ki"), expectErr: true},
 		{name: "negative", raw: strPtr("-5Mi"), expectErr: true},
+		{name: "nan", raw: strPtr("NaNKi"), expectErr: true},
+		{name: "infinity", raw: strPtr("+InfGi"), expectErr: true},
 		{name: "unsupported unit", raw: strPtr("100KB"), expectErr: true},
 	}
 
