@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -49,38 +48,53 @@ func TestNewPqosCommandFactory(t *testing.T) {
 	}
 }
 
-func TestBuildApplyCommand(t *testing.T) {
+func TestBuildApplyArgs(t *testing.T) {
 	factory, err := NewPqosCommandFactory("os")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	cmd := factory.BuildApplyCommand("0", "1", "0x3", "2,3")
-	expected := "pqos --iface=os -e 'llc@0:1=0x3' -a 'core:1=2,3'"
-	if !strings.Contains(cmd, expected) {
-		t.Fatalf("expected command to contain %q, got %q", expected, cmd)
+	args := factory.BuildApplyArgs("0", "1", "0x3", "2,3")
+	expected := []string{"--iface=os", "-e", "llc@0:1=0x3", "-a", "core:1=2,3"}
+	if len(args) != len(expected) {
+		t.Fatalf("expected args %+v, got %+v", expected, args)
+	}
+	for i := range args {
+		if args[i] != expected[i] {
+			t.Fatalf("args[%d] = %q, want %q", i, args[i], expected[i])
+		}
 	}
 }
 
-func TestBuildResetCommand(t *testing.T) {
+func TestBuildResetArgs(t *testing.T) {
 	factory, err := NewPqosCommandFactory("msr")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	t.Run("with core assignment", func(t *testing.T) {
-		cmd := factory.BuildResetCommand("0", "1", "0xfff", "2,3")
-		expected := "pqos --iface=msr -e 'llc@0:1=0xfff' -a 'core:0=2,3'"
-		if !strings.Contains(cmd, expected) {
-			t.Fatalf("expected reset command to contain %q, got %q", expected, cmd)
+		args := factory.BuildResetArgs("0", "1", "0xfff", "2,3")
+		expected := []string{"--iface=msr", "-e", "llc@0:1=0xfff", "-a", "core:0=2,3"}
+		if len(args) != len(expected) {
+			t.Fatalf("expected args %+v, got %+v", expected, args)
+		}
+		for i := range args {
+			if args[i] != expected[i] {
+				t.Fatalf("args[%d] = %q, want %q", i, args[i], expected[i])
+			}
 		}
 	})
 
 	t.Run("without core assignment", func(t *testing.T) {
-		cmd := factory.BuildResetCommand("0", "1", "0xfff", "")
-		expected := "pqos --iface=msr -e 'llc@0:1=0xfff'"
-		if !strings.Contains(cmd, expected) {
-			t.Fatalf("expected reset command to contain %q, got %q", expected, cmd)
+		args := factory.BuildResetArgs("0", "1", "0xfff", "")
+		expected := []string{"--iface=msr", "-e", "llc@0:1=0xfff"}
+		if len(args) != len(expected) {
+			t.Fatalf("expected args %+v, got %+v", expected, args)
+		}
+		for i := range args {
+			if args[i] != expected[i] {
+				t.Fatalf("args[%d] = %q, want %q", i, args[i], expected[i])
+			}
 		}
 	})
 }
@@ -92,15 +106,15 @@ func TestPqosCommandWithMockRunner(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	applyCmd := factory.BuildApplyCommand("0", "2", "0xF0", "4-7")
-	out, err := runner.Run(context.Background(), "/bin/sh", "-c", applyCmd)
+	applyArgs := factory.BuildApplyArgs("0", "2", "0xF0", "4-7")
+	out, err := runner.Run(context.Background(), "pqos", applyArgs...)
 	if err != nil {
 		t.Fatalf("unexpected runner error: %v", err)
 	}
 	if string(out) != "success" {
 		t.Fatalf("expected output 'success', got %q", string(out))
 	}
-	if runner.lastCmd != "/bin/sh" || len(runner.lastArgs) != 2 || runner.lastArgs[1] != applyCmd {
+	if runner.lastCmd != "pqos" || len(runner.lastArgs) != len(applyArgs) {
 		t.Fatalf("unexpected runner command: %s %v", runner.lastCmd, runner.lastArgs)
 	}
 }

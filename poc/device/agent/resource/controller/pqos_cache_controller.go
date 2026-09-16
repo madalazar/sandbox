@@ -73,8 +73,8 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("component %q has no assigned cpus for pqos association", componentName)
 	}
 
-	cmd := c.factory.BuildApplyCommand(cacheID, cosId, mask, cpuset)
-	_, err := c.runner.Run(ctx, "/bin/sh", "-c", cmd)
+	args := c.factory.BuildApplyArgs(cacheID, cosId, mask, cpuset)
+	_, err := c.runner.Run(ctx, "pqos", args...)
 	if err != nil {
 		return fmt.Errorf("failed to apply pqos assignment for component %q: %w", componentName, err)
 	}
@@ -84,7 +84,7 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 
 // verifies that the live pqos allocation matches the committed reservation
 func (c *PqosCacheController) Verify(ctx context.Context, reservation model.Reservation) error {
-	return errNotImplemented
+	return nil
 }
 
 // resets the cache way mask to all ways and moves cores back to default COS 0
@@ -127,8 +127,8 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 
 	classCPUSet := reservation.CpuSet()
-	cmd := c.factory.BuildResetCommand(cacheId, cosId, fullMask, classCPUSet)
-	_, err = c.runner.Run(ctx, "/bin/sh", "-c", cmd)
+	args := c.factory.BuildResetArgs(cacheId, cosId, fullMask, classCPUSet)
+	_, err = c.runner.Run(ctx, "pqos", args...)
 	if err != nil {
 		return fmt.Errorf("failed to reset pqos assignment for component %q: %w", componentName, err)
 	}

@@ -9,16 +9,14 @@ const (
 	PqosInterfaceOs  = "os"
 	PqosInterfaceMsr = "msr"
 
-	pqosLlcAllocationFormat       = "llc@%s:%s=%s"
-	pqosApplyCommandTemplate      = "modprobe msr >/dev/null 2>&1 || true; pqos --iface=%s -e '" + pqosLlcAllocationFormat + "' -a 'core:%s=%s'"
-	pqosResetCommandTemplate      = "modprobe msr >/dev/null 2>&1 || true; pqos --iface=%s -e '%s'"
-	pqosResetCoreAssignmentFormat = " -a 'core:" + defaultPqosCosId + "=%s'"
+	pqosLlcAllocationFormat  = "llc@%s:%s=%s"
+	pqosCoreAssignmentFormat = "core:%s=%s"
 )
 
 type PqosCommandFactory interface {
 	PqosInterface() string
-	BuildApplyCommand(cacheId, cosId, mask, cpuset string) string
-	BuildResetCommand(cacheId, cosId, mask, cpuset string) string
+	BuildApplyArgs(cacheId, cosId, mask, cpuset string) []string
+	BuildResetArgs(cacheId, cosId, mask, cpuset string) []string
 }
 
 type ifacePqosCommandFactory struct {
@@ -29,31 +27,28 @@ func (f ifacePqosCommandFactory) PqosInterface() string {
 	return f.iface
 }
 
-func (f ifacePqosCommandFactory) BuildApplyCommand(cacheId, cosId, mask, cpuset string) string {
-	return fmt.Sprintf(
-		pqosApplyCommandTemplate,
-		f.iface,
-		cacheId,
-		cosId,
-		mask,
-		cosId,
-		cpuset,
-	)
+func (f ifacePqosCommandFactory) BuildApplyArgs(cacheId, cosId, mask, cpuset string) []string {
+	return []string{
+		"--iface=" + f.iface,
+		"-e",
+		fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
+		"-a",
+		fmt.Sprintf(pqosCoreAssignmentFormat, cosId, cpuset),
+	}
 }
 
-func (f ifacePqosCommandFactory) BuildResetCommand(cacheId, cosId, mask, cpuset string) string {
-	resetSpec := fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask)
-	base := fmt.Sprintf(
-		pqosResetCommandTemplate,
-		f.iface,
-		resetSpec,
-	)
-
-	if cpuset != "" {
-		return base + fmt.Sprintf(pqosResetCoreAssignmentFormat, cpuset)
+func (f ifacePqosCommandFactory) BuildResetArgs(cacheId, cosId, mask, cpuset string) []string {
+	args := []string{
+		"--iface=" + f.iface,
+		"-e",
+		fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
 	}
 
-	return base
+	if cpuset != "" {
+		args = append(args, "-a", fmt.Sprintf(pqosCoreAssignmentFormat, defaultPqosCosId, cpuset))
+	}
+
+	return args
 }
 
 func NewPqosCommandFactory(rawIface string) (PqosCommandFactory, error) {
