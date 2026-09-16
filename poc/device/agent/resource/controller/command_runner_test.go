@@ -68,17 +68,20 @@ func TestNsenterRunnerConstructors(t *testing.T) {
 	var _ CommandRunner = (*nsenterRunner)(nil)
 
 	runner := NewNsenterRunner()
-	if runner == nil || runner.targetPID != "1" {
+	nr, ok := runner.(*nsenterRunner)
+	if !ok || nr.targetPID != "1" {
 		t.Fatalf("expected targetPID '1', got %+v", runner)
 	}
 
 	runner2 := NewNsenterRunnerWithPid("1234")
-	if runner2 == nil || runner2.targetPID != "1234" {
+	nr2, ok := runner2.(*nsenterRunner)
+	if !ok || nr2.targetPID != "1234" {
 		t.Fatalf("expected targetPID '1234', got %+v", runner2)
 	}
 
 	runner3 := NewNsenterRunnerWithPid("")
-	if runner3 == nil || runner3.targetPID != "1" {
+	nr3, ok := runner3.(*nsenterRunner)
+	if !ok || nr3.targetPID != "1" {
 		t.Fatalf("expected default targetPID '1', got %+v", runner3)
 	}
 }
