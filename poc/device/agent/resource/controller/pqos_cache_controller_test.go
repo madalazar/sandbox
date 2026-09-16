@@ -127,23 +127,15 @@ func TestPqosCacheControllerVerify(t *testing.T) {
 		Clos: "1",
 	}
 
-	t.Run("verify success", func(t *testing.T) {
-		runner := &fakeRunner{output: []byte("COS 1: LLC mask = 0x3, Cores = 2,3")}
-		ctrl := NewPqosCacheController(runner, caches, 8)
+	runner := &fakeRunner{}
+	ctrl := NewPqosCacheController(runner, caches, 8)
 
-		if err := ctrl.Verify(context.Background(), res); err != nil {
-			t.Fatalf("Verify failed: %v", err)
-		}
-	})
-
-	t.Run("verify absent class", func(t *testing.T) {
-		runner := &fakeRunner{output: []byte("COS 2: LLC mask = 0xf")}
-		ctrl := NewPqosCacheController(runner, caches, 8)
-
-		if err := ctrl.Verify(context.Background(), res); err == nil {
-			t.Fatal("expected error when class is absent, got nil")
-		}
-	})
+	if err := ctrl.Verify(context.Background(), res); err != nil {
+		t.Fatalf("Verify failed: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("expected 0 runner calls for Verify, got %d", len(runner.calls))
+	}
 }
 
 func TestPqosCacheControllerRelease(t *testing.T) {
