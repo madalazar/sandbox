@@ -15,7 +15,7 @@ func TestAllocationsClone(t *testing.T) {
 			"comp1": {
 				ComponentName: "comp1",
 				Level:         "L3",
-				CacheID:       "0",
+				CacheId:       "0",
 				SizeKB:        2048,
 				Mask:          "0x3",
 				Clos:          "1",
@@ -67,7 +67,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 			"comp-a": {
 				ComponentName: "comp-a",
 				Level:         "L3",
-				CacheID:       "0",
+				CacheId:       "0",
 				SizeKB:        4096,
 				Mask:          "0xf",
 				Clos:          "2",
@@ -105,7 +105,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 		Owner:         "dep-1/comp-a",
 		ComponentName: "comp-a",
 		Level:         "L3",
-		CacheID:       "0",
+		CacheId:       "0",
 		SizeKB:        4096,
 		Mask:          "0xf",
 		Clos:          "2",

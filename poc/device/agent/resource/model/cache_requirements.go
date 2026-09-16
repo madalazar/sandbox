@@ -64,8 +64,7 @@ func NormalizeCacheRequirements(
 	}
 
 	if len(exclusiveReqs) == 0 {
-		fmt.Printf("component %q requires no exclusive l3 cache allocations, will proceed to use a shared clos\n", ref)
-		return NormalizedCacheRequirements{}, nil
+		return normalized, nil
 	}
 
 	if len(exclusiveReqs) > 1 {
@@ -76,7 +75,7 @@ func NormalizeCacheRequirements(
 
 	sizeKiB, err := parseBinarySizeKi(exclusiveReqs[0].Size)
 	if err != nil {
-		return NormalizedCacheRequirements{}, fmt.Errorf("component %q  requires valid l3 cache size: %w", ref, err)
+		return NormalizedCacheRequirements{}, fmt.Errorf("component %q requires valid l3 cache size: %w", ref, err)
 	}
 
 	normalized.L3CacheRequirement = &CacheRequirement{
@@ -119,10 +118,14 @@ func parseBinarySizeKi(raw *string) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid numeric value %q", numberPart)
 		}
-		if value <= 0 {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
 			return 0, fmt.Errorf("size must be > 0 in %q", *raw)
 		}
-		return int64(math.Ceil(value * multiplier)), nil
+		totalKiB := math.Ceil(value * multiplier)
+		if totalKiB > math.MaxInt64 {
+			return 0, fmt.Errorf("size exceeds maximum limit in %q", *raw)
+		}
+		return int64(totalKiB), nil
 	}
 
 	return 0, fmt.Errorf("unsupported size unit in %q (expected ki, mi, or gi)", *raw)

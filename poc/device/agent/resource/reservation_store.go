@@ -34,23 +34,41 @@ func NewDatabaseReservationStore(db database.DatabaseIfc, isolatedCpus map[int]s
 	return &DatabaseReservationStore{db: db, isolatedCpus: isolatedCpus}
 }
 
+func toModelCacheAssignment(owner model.OwnerRef, alloc database.CacheAllocation) model.CacheAssignment {
+	return model.CacheAssignment{
+		Owner:   owner,
+		Level:   alloc.Level,
+		CacheId: alloc.CacheId,
+		SizeKiB: alloc.SizeKB,
+		Mask:    alloc.Mask,
+		Clos:    model.ClosId(alloc.Clos),
+	}
+}
+
+func toDatabaseCacheAllocation(componentName string, c *model.CacheAssignment, defaultClos model.ClosId) database.CacheAllocation {
+	classStr := c.Clos.String()
+	if classStr == "" && defaultClos.Held() {
+		classStr = defaultClos.String()
+	}
+	return database.CacheAllocation{
+		ComponentName: componentName,
+		Level:         c.Level,
+		CacheId:       c.CacheId,
+		SizeKB:        c.SizeKiB,
+		Mask:          c.Mask,
+		Clos:          classStr,
+	}
+}
+
 func (s *DatabaseReservationStore) LoadSnapshot() (ledger.AllocationSnapshot, error) {
 	allocatedCpus := s.db.AllocatedCpus()
 	allocatedCaches := s.db.AllocatedCaches()
 
 	caches := make([]model.CacheAssignment, 0, len(allocatedCaches))
 	for _, alloc := range allocatedCaches {
-		caches = append(caches, model.CacheAssignment{
-			Owner:   model.ParseOwnerRef(alloc.Owner),
-			Level:   alloc.Level,
-			CacheId: alloc.CacheID,
-			SizeKiB: alloc.SizeKB,
-			Mask:    alloc.Mask,
-			Clos:    model.ClosId(alloc.Clos),
-		})
+		caches = append(caches, toModelCacheAssignment(model.ParseOwnerRef(alloc.Owner), alloc))
 	}
-	// TODO: use the proper c-tor at the end
-	return ledger.NewAllocationSnapshotWithCaches(allocatedCpus, s.isolatedCpus, caches), nil
+	return ledger.NewAllocationSnapshot(allocatedCpus, s.isolatedCpus, caches), nil
 }
 
 func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (model.Reservation, bool, error) {
@@ -72,14 +90,7 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (model.
 	}
 
 	if hasCache {
-		res := model.CacheAssignment{
-			Owner:   owner,
-			Level:   cacheAlloc.Level,
-			CacheId: cacheAlloc.CacheID,
-			SizeKiB: cacheAlloc.SizeKB,
-			Mask:    cacheAlloc.Mask,
-			Clos:    model.ClosId(cacheAlloc.Clos),
-		}
+		res := toModelCacheAssignment(owner, cacheAlloc)
 		reservation.L3CacheAssignment = &res
 		reservation.Clos = res.Clos
 	}
@@ -106,22 +117,11 @@ func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservat
 	mergedCaches := make(map[string]database.CacheAllocation, len(existing.Caches)+1)
 	maps.Copy(mergedCaches, existing.Caches)
 
+	compKey := string(reservation.Owner.Component)
 	if reservation.HasL3Cache() {
-		c := reservation.L3CacheAssignment
-		classStr := c.Clos.String()
-		if classStr == "" && reservation.Clos.Held() {
-			classStr = reservation.Clos.String()
-		}
-		mergedCaches[string(reservation.Owner.Component)] = database.CacheAllocation{
-			ComponentName: string(reservation.Owner.Component),
-			Level:         c.Level,
-			CacheID:       c.CacheId,
-			SizeKB:        c.SizeKiB,
-			Mask:          c.Mask,
-			Clos:          classStr,
-		}
+		mergedCaches[compKey] = toDatabaseCacheAllocation(compKey, reservation.L3CacheAssignment, reservation.Clos)
 	} else {
-		delete(mergedCaches, string(reservation.Owner.Component))
+		delete(mergedCaches, compKey)
 	}
 
 	return s.db.SetAllocations(deploymentId, database.Allocations{

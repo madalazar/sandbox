@@ -29,7 +29,7 @@ func TestAllocationLedgerIsCpuAvailable(t *testing.T) {
 		2: "deployment-1/component-b",
 		3: "deployment-2/component-a",
 		5: "deployment-2/component-a", // not isolated; never allocatable
-	}, isolated)
+	}, isolated, nil)
 
 	tests := []struct {
 		name     string
@@ -53,7 +53,7 @@ func TestAllocationLedgerIsCpuAvailable(t *testing.T) {
 }
 
 func TestAllocationLedgerReserveBlocksSiblingsInSamePass(t *testing.T) {
-	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil), "deployment-1")
+	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil, nil), "deployment-1")
 
 	if err := ledger.ReserveCpus("component-a", []int{4}); err != nil {
 		t.Fatalf("ReserveCpus() error = %v", err)
@@ -86,10 +86,10 @@ func TestAllocationLedgerCacheStubs(t *testing.T) {
 		},
 	}
 
-	snapshot := NewAllocationSnapshotWithCaches(nil, nil, persistedCaches)
+	snapshot := NewAllocationSnapshot(nil, nil, persistedCaches)
 	ledger := NewAllocationLedger(snapshot, "deployment-1")
 	ledger.SetCacheCapacity(caps)
-	ledger.SetClassName(&fakeClassNamer{})
+	ledger.SetClassNamer(&fakeClassNamer{})
 
 	// FreeWays stub returns nil in Phase 1
 	if got := ledger.FreeWays("0", "component-a"); got != nil {
@@ -112,7 +112,7 @@ func TestAllocationLedgerCacheStubs(t *testing.T) {
 }
 
 func TestAllocationLedgerRollbackComponent(t *testing.T) {
-	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil), "deployment-1")
+	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil, nil), "deployment-1")
 
 	if err := ledger.ReserveCpus("comp-a", []int{1, 2}); err != nil {
 		t.Fatalf("ReserveCpus failed: %v", err)

@@ -31,7 +31,7 @@ type CacheAllocation struct {
 	Owner         string `json:"owner,omitempty"`
 	ComponentName string `json:"componentName"`
 	Level         string `json:"level"`
-	CacheID       string `json:"cacheId"`
+	CacheId       string `json:"cacheId"`
 	SizeKB        int64  `json:"sizeKb"`
 	Mask          string `json:"mask"`
 	Clos          string `json:"clos,omitempty"`
@@ -496,6 +496,13 @@ func (db *Database) GetAllocations(deploymentId string) (Allocations, error) {
 	return record.Allocations.clone(), nil
 }
 
+func formatOwner(deploymentId, componentName string) string {
+	if strings.TrimSpace(componentName) != "" {
+		return fmt.Sprintf("%s/%s", deploymentId, componentName)
+	}
+	return deploymentId
+}
+
 // the device-wide view of which cpu index is held by which component,
 // encoded as "deployment/component"
 func (db *Database) AllocatedCpus() map[int]string {
@@ -505,11 +512,7 @@ func (db *Database) AllocatedCpus() map[int]string {
 	allocated := make(map[int]string)
 	for deploymentID, deployment := range db.deployments {
 		for component, cpuIndices := range deployment.Allocations.Cpus {
-			owner := deploymentID
-			if strings.TrimSpace(component) != "" {
-				owner = fmt.Sprintf("%s/%s", deploymentID, component)
-			}
-
+			owner := formatOwner(deploymentID, component)
 			for _, cpuIndex := range cpuIndices {
 				allocated[cpuIndex] = owner
 			}
@@ -528,13 +531,8 @@ func (db *Database) AllocatedCaches() []CacheAllocation {
 	allocated := make([]CacheAllocation, 0)
 	for deploymentID, deployment := range db.deployments {
 		for component, assignment := range deployment.Allocations.Caches {
-			owner := deploymentID
-			if strings.TrimSpace(component) != "" {
-				owner = fmt.Sprintf("%s/%s", deploymentID, component)
-			}
-
 			alloc := assignment
-			alloc.Owner = owner
+			alloc.Owner = formatOwner(deploymentID, component)
 			allocated = append(allocated, alloc)
 		}
 	}

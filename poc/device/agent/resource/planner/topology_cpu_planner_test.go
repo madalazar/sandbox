@@ -97,6 +97,7 @@ func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/cyclictest_compose"},
 		map[int]struct{}{1: {}, 3: {}},
+		nil,
 	)
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
@@ -121,6 +122,7 @@ func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/caterpillar_compose"},
 		map[int]struct{}{1: {}, 3: {}},
+		nil,
 	)
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
