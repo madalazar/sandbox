@@ -2,9 +2,7 @@ package controller
 
 import (
 	"context"
-	"strings"
 	"testing"
-	"time"
 )
 
 type dummyCommandRunner struct{}
@@ -25,42 +23,6 @@ func TestCommandRunnerInterface(t *testing.T) {
 	}
 	if string(out) != "ok" {
 		t.Fatalf("expected 'ok', got %q", string(out))
-	}
-}
-
-func TestDirectRunnerExecution(t *testing.T) {
-	var _ CommandRunner = (*directRunner)(nil)
-
-	runner := NewDirectRunner()
-	if runner == nil {
-		t.Fatal("expected non-nil directRunner")
-	}
-
-	out, err := runner.Run(context.Background(), "echo", "hello-world")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if strings.TrimSpace(string(out)) != "hello-world" {
-		t.Fatalf("expected 'hello-world', got %q", string(out))
-	}
-}
-
-func TestDirectRunnerTimeout(t *testing.T) {
-	runner := NewDirectRunner()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	_, err := runner.Run(ctx, "sleep", "2")
-	if err == nil {
-		t.Fatal("expected timeout error, got nil")
-	}
-}
-
-func TestDirectRunnerCommandError(t *testing.T) {
-	runner := NewDirectRunner()
-	_, err := runner.Run(context.Background(), "non-existent-command-xyz")
-	if err == nil {
-		t.Fatal("expected error for nonexistent command, got nil")
 	}
 }
 

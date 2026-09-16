@@ -8,6 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
+
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 )
@@ -242,15 +248,57 @@ func TestPqosIsolationContract(t *testing.T) {
 }
 
 type fakeRdtDevice struct {
+	client     dynamic.Interface
 	partitions map[string]any
 	classes    map[string]any
 }
 
 func newFakeRdtDevice() *fakeRdtDevice {
-	return &fakeRdtDevice{
+	d := &fakeRdtDevice{
 		partitions: make(map[string]any),
 		classes:    make(map[string]any),
 	}
+	scheme := runtime.NewScheme()
+	fakeClient := dynamicfake.NewSimpleDynamicClient(scheme)
+	fakeClient.PrependReactor("patch", "balloonspolicies", func(action clienttesting.Action) (handled bool, ret runtime.Object, err error) {
+		patchAction := action.(clienttesting.PatchAction)
+		var patchMap map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &patchMap); err != nil {
+			return true, nil, err
+		}
+
+		spec, _ := patchMap["spec"].(map[string]any)
+		control, _ := spec["control"].(map[string]any)
+		rdt, _ := control["rdt"].(map[string]any)
+
+		if parts, ok := rdt["partitions"].(map[string]any); ok {
+			for k, v := range parts {
+				if v == nil {
+					delete(d.partitions, k)
+				} else {
+					d.partitions[k] = v
+					if pMap, ok := v.(map[string]any); ok {
+						if cMap, ok := pMap["classes"].(map[string]any); ok {
+							maps.Copy(d.classes, cMap)
+						}
+					}
+				}
+			}
+		}
+		if cls, ok := rdt["classes"].(map[string]any); ok {
+			for k, v := range cls {
+				if v == nil {
+					delete(d.classes, k)
+				} else {
+					d.classes[k] = v
+				}
+			}
+		}
+
+		return true, &unstructured.Unstructured{}, nil
+	})
+	d.client = fakeClient
+	return d
 }
 
 func (d *fakeRdtDevice) Snapshot() any {
@@ -288,57 +336,13 @@ func (d *fakeRdtDevice) Parsed() *model.ParsedBalloonPolicy {
 	}
 }
 
-func (d *fakeRdtDevice) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
-	cmdStr := command + " " + strings.Join(args, " ")
-	_, after, ok := strings.Cut(cmdStr, "--patch ")
-	if !ok {
-		return []byte("ok"), nil
-	}
-	patchStr := after
-
-	var patchMap map[string]any
-	if err := json.Unmarshal([]byte(patchStr), &patchMap); err != nil {
-		return nil, err
-	}
-
-	spec, _ := patchMap["spec"].(map[string]any)
-	control, _ := spec["control"].(map[string]any)
-	rdt, _ := control["rdt"].(map[string]any)
-
-	if parts, ok := rdt["partitions"].(map[string]any); ok {
-		for k, v := range parts {
-			if v == nil {
-				delete(d.partitions, k)
-			} else {
-				d.partitions[k] = v
-				if pMap, ok := v.(map[string]any); ok {
-					if cMap, ok := pMap["classes"].(map[string]any); ok {
-						maps.Copy(d.classes, cMap)
-					}
-				}
-			}
-		}
-	}
-	if cls, ok := rdt["classes"].(map[string]any); ok {
-		for k, v := range cls {
-			if v == nil {
-				delete(d.classes, k)
-			} else {
-				d.classes[k] = v
-			}
-		}
-	}
-
-	return []byte("patched"), nil
-}
-
 func TestRdtIsolationContract(t *testing.T) {
 	caches := []types.HostTopologyCache{
 		{Id: "0", Level: "L3", Ways: 12, WaySizeKB: 1024},
 	}
 	testIsolationContract(t, func() (CacheIsolationController, FakeDevice, model.Reservation) {
 		dev := newFakeRdtDevice()
-		ctrl := NewRdtPolicyControllerWithReader(dev, dev, caches)
+		ctrl := NewRdtPolicyControllerWithClient(dev.client, dev, caches)
 		res := model.Reservation{
 			Owner: model.NewOwnerRef("dep-1", "comp-a"),
 			Cpus:  []int{2, 3},
