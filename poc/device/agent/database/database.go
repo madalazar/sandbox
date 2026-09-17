@@ -522,8 +522,8 @@ func (db *Database) AllocatedCpus() map[int]string {
 	return allocated
 }
 
-// AllocatedCaches returns the device-wide view of which cache allocations are held,
-// annotated with owner "deployment/component".
+// returns the device-wide view of which cache allocations are held,
+// annotated with owner "deployment/component"
 func (db *Database) AllocatedCaches() []CacheAllocation {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
