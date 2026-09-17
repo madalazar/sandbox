@@ -38,10 +38,7 @@ func (c *HelmConfigurator) Apply(
 		annotations[BalloonPodAnnotationKey] = balloon
 	}
 	if cachePlan.HasCache() {
-		clos := cachePlan.Clos
-		if !clos.Held() && cachePlan.L3CacheAssignment != nil {
-			clos = cachePlan.L3CacheAssignment.Clos
-		}
+		clos := cachePlan.L3CacheAssignment.Clos
 		if clos.Held() {
 			annotations[RdtClassPodAnnotationKey] = clos.String()
 		}

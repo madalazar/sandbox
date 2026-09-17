@@ -90,7 +90,6 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
 	t.Run("successful apply with multi-cache filler synthesis", func(t *testing.T) {
@@ -235,7 +234,6 @@ func TestRdtPolicyControllerVerify(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
 	fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
@@ -262,7 +260,6 @@ func TestRdtPolicyControllerRelease(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
 	t.Run("successful release sets partition and class to null", func(t *testing.T) {

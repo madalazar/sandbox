@@ -319,7 +319,6 @@ func TestRdtIsolationContract(t *testing.T) {
 				Mask:    "0x3",
 				Clos:    "comp-a_class",
 			},
-			Clos: "comp-a_class",
 		}
 		return ctrl, dev, res
 	})
