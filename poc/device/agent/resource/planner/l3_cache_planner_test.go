@@ -201,9 +201,7 @@ func TestPickSmallestFittingCacheInterval(t *testing.T) {
 	}
 
 	snap := ledger.NewAllocationSnapshot(nil, nil, persisted)
-	l := ledger.NewAllocationLedger(snap, "deployment-1")
-	l.SetCacheCapacity(caps)
-	l.SetClassNamer(&testClassNamer{})
+	l := ledger.NewAllocationLedger(snap, "deployment-1", caps, &testClassNamer{})
 
 	// Required 2048 KiB -> 2 ways
 	// Cache 1 has free run length 4, Cache 0 has free run length 6
@@ -257,9 +255,7 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 	}
 
 	t.Run("no cache requirements", func(t *testing.T) {
-		l := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "dep-1")
-		l.SetCacheCapacity(caps)
-		l.SetClassNamer(&testClassNamer{})
+		l := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "dep-1", caps, &testClassNamer{})
 
 		plan, err := planner.PlanCache(CachePlanningRequest{
 			Requirements: model.NormalizedCacheRequirements{Component: "comp-a"},
@@ -278,9 +274,7 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 	})
 
 	t.Run("successful cache planning", func(t *testing.T) {
-		l := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "dep-1")
-		l.SetCacheCapacity(caps)
-		l.SetClassNamer(&testClassNamer{name: "cos-1"})
+		l := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "dep-1", caps, &testClassNamer{name: "cos-1"})
 
 		req := model.NormalizedCacheRequirements{
 			Component: "comp-a",
@@ -326,9 +320,7 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 			},
 		}
 		snap := ledger.NewAllocationSnapshot(nil, nil, persisted)
-		l := ledger.NewAllocationLedger(snap, "dep-1")
-		l.SetCacheCapacity(caps)
-		l.SetClassNamer(&testClassNamer{})
+		l := ledger.NewAllocationLedger(snap, "dep-1", caps, &testClassNamer{})
 
 		req := model.NormalizedCacheRequirements{
 			Component: "comp-a",
