@@ -354,7 +354,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 	if store.savedDep != "dep-1" {
 		t.Fatalf("savedDep = %q, want dep-1", store.savedDep)
 	}
-	if iso.applied.Clos != "2" || !iso.applied.HasL3Cache() {
+	if !iso.applied.HasL3Cache() || iso.applied.L3CacheAssignment.Clos != "2" {
 		t.Fatalf("expected isolation.Apply to receive reservation with clos '2', got %+v", iso.applied)
 	}
 
@@ -375,7 +375,6 @@ func TestResourceCoordinatorActivate(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 
 	t.Run("successful activate", func(t *testing.T) {
@@ -386,7 +385,7 @@ func TestResourceCoordinatorActivate(t *testing.T) {
 		if err := c.Activate(context.Background(), owner); err != nil {
 			t.Fatalf("Activate() error = %v", err)
 		}
-		if iso.verified.Clos != "1" {
+		if iso.verified.L3CacheAssignment.Clos != "1" {
 			t.Fatalf("expected isolation.Verify to receive reservation with clos '1', got %+v", iso.verified)
 		}
 	})
@@ -399,7 +398,7 @@ func TestResourceCoordinatorActivate(t *testing.T) {
 		if err := c.Activate(context.Background(), owner); err != nil {
 			t.Fatalf("Activate() error = %v", err)
 		}
-		if iso.verified.Clos != "" {
+		if iso.verified.L3CacheAssignment != nil {
 			t.Fatal("expected no verification for absent reservation")
 		}
 	})
@@ -425,7 +424,6 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 	store := &fakeReservationStore{reservation: reservation, found: true}
 	iso := &fakeIsolationController{}
@@ -437,7 +435,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	if len(store.cleared) != 1 || store.cleared[0] != owner {
 		t.Fatalf("cleared owners = %#v, want %#v", store.cleared, owner)
 	}
-	if iso.released.Clos != "1" {
+	if iso.released.L3CacheAssignment.Clos != "1" {
 		t.Fatalf("expected isolation.Release to be called with clos '1', got %+v", iso.released)
 	}
 }
@@ -451,7 +449,6 @@ func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 	store := &fakeReservationStore{reservation: reservation, found: true}
 	iso := &fakeIsolationController{err: errors.New("release failed")}

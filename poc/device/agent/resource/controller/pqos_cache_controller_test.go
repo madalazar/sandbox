@@ -67,7 +67,6 @@ func TestPqosCacheControllerApply(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 
 	t.Run("successful apply", func(t *testing.T) {
@@ -158,7 +157,6 @@ func TestPqosCacheControllerVerify(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 
 	runner := &fakeRunner{}
@@ -185,7 +183,6 @@ func TestPqosCacheControllerRelease(t *testing.T) {
 			Mask:    "0x3",
 			Clos:    "1",
 		},
-		Clos: "1",
 	}
 
 	t.Run("successful release", func(t *testing.T) {
