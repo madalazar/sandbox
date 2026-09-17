@@ -30,7 +30,6 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 	if !request.Requirements.HasCache() || request.Requirements.L3CacheRequirement == nil {
 		return model.CachePlan{
 			Component: request.Requirements.Component,
-			Clos:      model.ClassUnset,
 		}, nil
 	}
 
@@ -97,7 +96,6 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 	return model.CachePlan{
 		Component:         request.Requirements.Component,
 		L3CacheAssignment: assignment,
-		Clos:              clos,
 	}, nil
 }
 

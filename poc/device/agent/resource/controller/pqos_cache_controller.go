@@ -50,10 +50,7 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 	componentName := string(reservation.Owner.Component)
 	alloc := reservation.L3CacheAssignment
 
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(alloc.Clos)
-	}
+	cosId := string(alloc.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) || cosId == defaultPqosCosId {
 		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, cosId)
 	}
@@ -94,10 +91,7 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
+	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) || cosId == defaultPqosCosId {
 		return nil
 	}
