@@ -191,13 +191,34 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		L3CacheAssignment: plan.Cache.L3CacheAssignment,
 	}
 
-	return c.store.SaveReservation(plan.Owner.Deployment, reservation)
+	if err := c.store.SaveReservation(plan.Owner.Deployment, reservation); err != nil {
+		return err
+	}
+
+	if c.cacheController != nil && reservation.HasL3Cache() {
+		if err := c.cacheController.Apply(ctx, reservation); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // verifies, after the workload is running, that the device still matches what was
-// committed. A cpu pinning is enforced by the runtime itself and has nothing to
-// re-check, so this is a placeholder until cache isolation gives it work to do
+// committed
 func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef) error {
+	reservation, found, err := c.store.LoadReservation(owner)
+	if err != nil {
+		return err
+	}
+	if !found || !reservation.HasL3Cache() {
+		return nil
+	}
+
+	if c.cacheController != nil {
+		return c.cacheController.Verify(ctx, reservation)
+	}
+
 	return nil
 }
 
@@ -213,7 +234,18 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef)
 		return nil
 	}
 
-	return c.store.ClearComponent(reservation.Owner)
+	var errs []error
+	if c.cacheController != nil && reservation.HasL3Cache() {
+		if err := c.cacheController.Release(ctx, reservation); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if err := c.store.ClearComponent(reservation.Owner); err != nil {
+		errs = append(errs, err)
+	}
+
+	return errors.Join(errs...)
 }
 
 // detaches from the caller's context, because a deploy that failed precisely because

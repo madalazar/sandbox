@@ -325,7 +325,8 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 
 func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 	store := &fakeReservationStore{}
-	c := newTestCoordinator(store, nil, nil, nil)
+	iso := &fakeIsolationController{}
+	c := newTestCoordinator(store, nil, nil, iso)
 
 	owner := model.NewOwnerRef("dep-1", "comp-1")
 	plan := ResourcePlan{
@@ -349,26 +350,116 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 	if store.savedDep != "dep-1" {
 		t.Fatalf("savedDep = %q, want dep-1", store.savedDep)
 	}
+	if iso.applied.Clos != "2" || !iso.applied.HasL3Cache() {
+		t.Fatalf("expected isolation.Apply to receive reservation with clos '2', got %+v", iso.applied)
+	}
+
+	// Commit failure on Apply
+	isoFail := &fakeIsolationController{err: errors.New("apply failed")}
+	cFail := newTestCoordinator(store, nil, nil, isoFail)
+	if err := cFail.Commit(context.Background(), plan); err == nil {
+		t.Fatal("expected error when isolation.Apply fails, got nil")
+	}
 }
 
-func TestResourceCoordinatorActivateIsANoOp(t *testing.T) {
-	c := newTestCoordinator(nil, nil, nil, nil)
-	if err := c.Activate(context.Background(), model.OwnerRef{}); err != nil {
-		t.Fatalf("Activate() error = %v, want nil", err)
+func TestResourceCoordinatorActivate(t *testing.T) {
+	owner := model.NewOwnerRef("deployment", "component")
+	res := model.Reservation{
+		Owner: owner,
+		L3CacheAssignment: &model.CacheAssignment{
+			CacheId: "0",
+			Mask:    "0x3",
+			Clos:    "1",
+		},
+		Clos: "1",
 	}
+
+	t.Run("successful activate", func(t *testing.T) {
+		store := &fakeReservationStore{reservation: res, found: true}
+		iso := &fakeIsolationController{}
+		c := newTestCoordinator(store, nil, nil, iso)
+
+		if err := c.Activate(context.Background(), owner); err != nil {
+			t.Fatalf("Activate() error = %v", err)
+		}
+		if iso.verified.Clos != "1" {
+			t.Fatalf("expected isolation.Verify to receive reservation with clos '1', got %+v", iso.verified)
+		}
+	})
+
+	t.Run("absent reservation is a no-op", func(t *testing.T) {
+		store := &fakeReservationStore{found: false}
+		iso := &fakeIsolationController{}
+		c := newTestCoordinator(store, nil, nil, iso)
+
+		if err := c.Activate(context.Background(), owner); err != nil {
+			t.Fatalf("Activate() error = %v", err)
+		}
+		if iso.verified.Clos != "" {
+			t.Fatal("expected no verification for absent reservation")
+		}
+	})
+
+	t.Run("verify failure propagates", func(t *testing.T) {
+		store := &fakeReservationStore{reservation: res, found: true}
+		iso := &fakeIsolationController{err: errors.New("verify failed")}
+		c := newTestCoordinator(store, nil, nil, iso)
+
+		if err := c.Activate(context.Background(), owner); err == nil {
+			t.Fatal("expected error when Verify fails, got nil")
+		}
+	})
 }
 
 func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
-	reservation := model.Reservation{Owner: owner, Cpus: []int{2}}
+	reservation := model.Reservation{
+		Owner: owner,
+		Cpus:  []int{2},
+		L3CacheAssignment: &model.CacheAssignment{
+			CacheId: "0",
+			Mask:    "0x3",
+			Clos:    "1",
+		},
+		Clos: "1",
+	}
 	store := &fakeReservationStore{reservation: reservation, found: true}
-	coordinator := newTestCoordinator(store, nil, nil, nil)
+	iso := &fakeIsolationController{}
+	coordinator := newTestCoordinator(store, nil, nil, iso)
 
 	if err := coordinator.Release(context.Background(), owner); err != nil {
 		t.Fatalf("Release() error = %v, want nil", err)
 	}
 	if len(store.cleared) != 1 || store.cleared[0] != owner {
 		t.Fatalf("cleared owners = %#v, want %#v", store.cleared, owner)
+	}
+	if iso.released.Clos != "1" {
+		t.Fatalf("expected isolation.Release to be called with clos '1', got %+v", iso.released)
+	}
+}
+
+func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
+	owner := model.NewOwnerRef("deployment", "component")
+	reservation := model.Reservation{
+		Owner: owner,
+		L3CacheAssignment: &model.CacheAssignment{
+			CacheId: "0",
+			Mask:    "0x3",
+			Clos:    "1",
+		},
+		Clos: "1",
+	}
+	store := &fakeReservationStore{reservation: reservation, found: true}
+	iso := &fakeIsolationController{err: errors.New("release failed")}
+	coordinator := newTestCoordinator(store, nil, nil, iso)
+
+	err := coordinator.Release(context.Background(), owner)
+	if err == nil {
+		t.Fatal("expected error returned from Release when isolation fails")
+	}
+	// Even on failure, store.ClearComponent MUST be called
+	if len(store.cleared) != 1 || store.cleared[0] != owner {
+		t.Fatalf("expected ClearComponent called despite isolation failure, got cleared=%v", store.cleared)
 	}
 }
 
