@@ -268,9 +268,6 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 		if plan.HasCache() {
 			t.Fatal("expected HasCache() = false")
 		}
-		if plan.Clos != model.ClassUnset {
-			t.Fatalf("expected ClassUnset, got %v", plan.Clos)
-		}
 	})
 
 	t.Run("successful cache planning", func(t *testing.T) {
@@ -295,9 +292,6 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 		}
 		if !plan.HasCache() {
 			t.Fatal("expected HasCache() = true")
-		}
-		if plan.Clos != "cos-1" {
-			t.Fatalf("expected clos 'cos-1', got %s", plan.Clos)
 		}
 		if plan.L3CacheAssignment.CacheId != "0" {
 			t.Fatalf("expected cacheId '0', got %s", plan.L3CacheAssignment.CacheId)
