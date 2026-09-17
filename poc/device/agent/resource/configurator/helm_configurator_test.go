@@ -138,7 +138,6 @@ func TestHelmConfiguratorApplyWithCacheInjectsRdtAnnotation(t *testing.T) {
 	}
 	cachePlan := model.CachePlan{
 		Component: "cyclictest",
-		Clos:      "cyclictest_class",
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
 			Mask:    "0x3",
@@ -178,7 +177,6 @@ func TestHelmConfiguratorApplyWithBothBalloonAndRdtAnnotations(t *testing.T) {
 	cpuPlan := helmCpuPlanFor("worker", []int{4, 5}, "isolated-balloon")
 	cachePlan := model.CachePlan{
 		Component: "worker",
-		Clos:      "worker_class",
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
 			Mask:    "0xf",

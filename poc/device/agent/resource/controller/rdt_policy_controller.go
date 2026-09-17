@@ -66,10 +66,7 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("reservation has empty component name")
 	}
 
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
+	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, cosId)
 	}
@@ -135,10 +132,8 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
+
+	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return nil
 	}
