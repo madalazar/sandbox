@@ -189,7 +189,6 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		Owner:             model.NewOwnerRef(plan.Owner.Deployment, string(plan.Owner.Component)),
 		Cpus:              plan.Cpu.Cpus,
 		L3CacheAssignment: plan.Cache.L3CacheAssignment,
-		Clos:              plan.Cache.Clos,
 	}
 
 	return c.store.SaveReservation(plan.Owner.Deployment, reservation)
