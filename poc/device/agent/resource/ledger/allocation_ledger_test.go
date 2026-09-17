@@ -182,7 +182,6 @@ func TestAllocationLedgerReserveClass(t *testing.T) {
 			"comp-d": "4",
 		},
 	}
-
 	ledger := NewAllocationLedger(snapshot, "deployment-1", caps, namer)
 
 	// comp-a reuses its own class slot
