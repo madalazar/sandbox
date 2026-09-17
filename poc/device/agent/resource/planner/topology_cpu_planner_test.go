@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"go.uber.org/zap"
 )
@@ -104,7 +105,7 @@ func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCpuRequirement("cyclictest_compose"),
-		ledger.NewAllocationLedger(snapshot, "deployment-123"),
+		ledger.NewAllocationLedger(snapshot, "deployment-123", model.CacheCapacity{}, nil),
 	))
 	if err != nil {
 		t.Fatalf("PlanCpu() error = %v", err)
@@ -129,7 +130,7 @@ func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCpuRequirement("cyclictest_compose"),
-		ledger.NewAllocationLedger(snapshot, "deployment-123"),
+		ledger.NewAllocationLedger(snapshot, "deployment-123", model.CacheCapacity{}, nil),
 	))
 	if err != nil {
 		t.Fatalf("PlanCpu() error = %v", err)
