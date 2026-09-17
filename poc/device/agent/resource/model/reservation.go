@@ -5,9 +5,6 @@ type Reservation struct {
 	Owner             OwnerRef
 	Cpus              []int
 	L3CacheAssignment *CacheAssignment
-	// TODO: this might be duplicated, once we wire things up
-	// we might have to clean it
-	Clos ClosId
 }
 
 func (r Reservation) HasL3Cache() bool {

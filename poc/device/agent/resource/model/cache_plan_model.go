@@ -75,7 +75,6 @@ type CachePlan struct {
 	// TODO: review the need for ComponentRef
 	Component         ComponentRef
 	L3CacheAssignment *CacheAssignment
-	Clos              ClosId
 }
 
 // reports whether the plan contains any cache allocations
