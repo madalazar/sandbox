@@ -18,7 +18,6 @@ type AllocationSnapshot struct {
 	CpuOwners map[int]model.OwnerRef
 	// we don't key caches by owner as caches can be split exclusively
 	// between one or more components
-	// so there's no good way to group them differently at this time
 	Caches []model.CacheAssignment
 }
 
@@ -62,20 +61,19 @@ type AllocationLedger struct {
 	classNamer    controller.ClassNamer
 }
 
-func NewAllocationLedger(snapshot AllocationSnapshot, deploymentId string) *AllocationLedger {
+func NewAllocationLedger(
+	snapshot AllocationSnapshot,
+	deploymentId string,
+	cacheCapacity model.CacheCapacity,
+	classNamer controller.ClassNamer,
+) *AllocationLedger {
 	return &AllocationLedger{
-		snapshot:     snapshot,
-		deploymentId: deploymentId,
-		reservedCpus: map[int]model.ComponentRef{},
+		snapshot:      snapshot,
+		deploymentId:  deploymentId,
+		reservedCpus:  map[int]model.ComponentRef{},
+		cacheCapacity: cacheCapacity,
+		classNamer:    classNamer,
 	}
-}
-
-func (l *AllocationLedger) SetCacheCapacity(caps model.CacheCapacity) {
-	l.cacheCapacity = caps
-}
-
-func (l *AllocationLedger) SetClassNamer(classNamer controller.ClassNamer) {
-	l.classNamer = classNamer
 }
 
 // reports whether ref may take cpuIndex: unheld, or already persisted to
