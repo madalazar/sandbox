@@ -71,7 +71,6 @@ type ResourceCoordinatorBuilder struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
-	err             error
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -218,6 +217,7 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 
 	if c.cacheController != nil && reservation.HasL3Cache() {
 		if err := c.cacheController.Apply(ctx, reservation); err != nil {
+			_ = c.store.ClearComponent(reservation.Owner)
 			return err
 		}
 	}
