@@ -58,6 +58,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
 		Build()
 	if err != nil {
@@ -68,6 +70,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
 		Build()
 	if err != nil {
@@ -552,7 +556,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		var rollback *resource.ResourceRollback
 		preparedComposeFilename := composeFilename
 
-		if cpuPlan.HasCpus() {
+		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
