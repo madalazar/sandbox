@@ -253,7 +253,6 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 				Mask:    "0x3",
 				Clos:    "1",
 			},
-			Clos: "1",
 		},
 	}
 
@@ -285,8 +284,8 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 	if !plan.HasCache() {
 		t.Fatalf("plan.HasCache() = false, want true")
 	}
-	if plan.Cache.Clos != "1" {
-		t.Fatalf("plan.Cache.Clos = %v, want 1", plan.Cache.Clos)
+	if plan.Cache.L3CacheAssignment.Clos != "1" {
+		t.Fatalf("plan.Cache.Clos = %v, want 1", plan.Cache.L3CacheAssignment.Clos)
 	}
 }
 
@@ -341,7 +340,6 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 				Mask:    "0x1",
 				Clos:    "2",
 			},
-			Clos: "2",
 		},
 	}
 
