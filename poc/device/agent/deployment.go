@@ -550,8 +550,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", composeComp.Name, err)
 		}
 
-		cpuPlan := resourcePlan.Cpu
-		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
+		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
 
 		var rollback *resource.ResourceRollback
 		preparedComposeFilename := composeFilename
@@ -565,7 +564,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 
 			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
+			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
 			if prepErr != nil {
 				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
 			}
