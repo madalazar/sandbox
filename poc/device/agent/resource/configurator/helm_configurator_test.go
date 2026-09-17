@@ -22,7 +22,7 @@ func TestHelmConfiguratorApplyMergesPlacementAndCpuset(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 	plan := helmCpuPlanFor("worker", []int{8, 9}, "rt-balloon")
 
-	values, err := configurator.Apply(plan, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
+	values, err := configurator.Apply(plan, model.CachePlan{}, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
 		"replicaCount":   1,
 		"podAnnotations": map[string]any{"existing": "keep"},
 		"worker":         map[string]any{"image": "worker:latest"},
@@ -60,7 +60,7 @@ func TestHelmConfiguratorApplyMergesPlacementAndCpuset(t *testing.T) {
 func TestHelmConfiguratorApplyLeavesValuesAloneWithoutAPlan(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 
-	values, err := configurator.Apply(model.CpuPlan{}, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
+	values, err := configurator.Apply(model.CpuPlan{}, model.CachePlan{}, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
 		"replicaCount": 1,
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestHelmConfiguratorApplyWithoutPlacementClass(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 	plan := helmCpuPlanFor("worker", []int{3}, "")
 
-	values, err := configurator.Apply(plan, model.NewOwnerRef("deployment-1", "worker"), nil)
+	values, err := configurator.Apply(plan, model.CachePlan{}, model.NewOwnerRef("deployment-1", "worker"), nil)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestHelmConfiguratorApplyNormalizesDifferentMapTypes(t *testing.T) {
 	configurator := newTestHelmConfigurator()
 	plan := helmCpuPlanFor("worker", []int{2}, "balloon-1")
 
-	values, err := configurator.Apply(plan, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
+	values, err := configurator.Apply(plan, model.CachePlan{}, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
 		"podAnnotations": map[any]any{"intKey": 123, "strKey": "val"},
 		"worker":         map[string]string{"image": "worker:latest"},
 	})
@@ -127,5 +127,83 @@ func TestHelmConfiguratorApplyNormalizesDifferentMapTypes(t *testing.T) {
 	}
 	if worker["image"] != "worker:latest" || worker["cpuset"] != "2" {
 		t.Errorf("worker values unexpected: %v", worker)
+	}
+}
+
+func TestHelmConfiguratorApplyWithCacheInjectsRdtAnnotation(t *testing.T) {
+	configurator := newTestHelmConfigurator()
+	cpuPlan := model.CpuPlan{
+		Component: "cyclictest",
+		Cpus:      []int{2, 3},
+	}
+	cachePlan := model.CachePlan{
+		Component: "cyclictest",
+		Clos:      "cyclictest_class",
+		L3CacheAssignment: &model.CacheAssignment{
+			CacheId: "0",
+			Mask:    "0x3",
+			Clos:    "cyclictest_class",
+		},
+	}
+
+	values, err := configurator.Apply(cpuPlan, cachePlan, model.NewOwnerRef("deployment-1", "cyclictest"), map[string]any{
+		"replicaCount": 1,
+	})
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	annotations, ok := values["podAnnotations"].(map[string]any)
+	if !ok {
+		t.Fatalf("podAnnotations unexpected type %T", values["podAnnotations"])
+	}
+	if annotations[RdtClassPodAnnotationKey] != "cyclictest_class" {
+		t.Errorf("rdt annotation = %v, want cyclictest_class", annotations[RdtClassPodAnnotationKey])
+	}
+	if _, hasBalloon := annotations[BalloonPodAnnotationKey]; hasBalloon {
+		t.Errorf("balloon annotation present unexpectedly: %v", annotations)
+	}
+
+	component, ok := values["cyclictest"].(map[string]any)
+	if !ok {
+		t.Fatalf("component values unexpected type %T", values["cyclictest"])
+	}
+	if component["cpuset"] != "2-3" {
+		t.Errorf("cpuset = %v, want 2-3", component["cpuset"])
+	}
+}
+
+func TestHelmConfiguratorApplyWithBothBalloonAndRdtAnnotations(t *testing.T) {
+	configurator := newTestHelmConfigurator()
+	cpuPlan := helmCpuPlanFor("worker", []int{4, 5}, "isolated-balloon")
+	cachePlan := model.CachePlan{
+		Component: "worker",
+		Clos:      "worker_class",
+		L3CacheAssignment: &model.CacheAssignment{
+			CacheId: "0",
+			Mask:    "0xf",
+			Clos:    "worker_class",
+		},
+	}
+
+	values, err := configurator.Apply(cpuPlan, cachePlan, model.NewOwnerRef("deployment-1", "worker"), map[string]any{
+		"podAnnotations": map[string]any{"custom": "user-value"},
+	})
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	annotations, ok := values["podAnnotations"].(map[string]any)
+	if !ok {
+		t.Fatalf("podAnnotations unexpected type %T", values["podAnnotations"])
+	}
+	if annotations["custom"] != "user-value" {
+		t.Errorf("existing user annotation lost: %v", annotations)
+	}
+	if annotations[BalloonPodAnnotationKey] != "isolated-balloon" {
+		t.Errorf("balloon annotation = %v, want isolated-balloon", annotations[BalloonPodAnnotationKey])
+	}
+	if annotations[RdtClassPodAnnotationKey] != "worker_class" {
+		t.Errorf("rdt annotation = %v, want worker_class", annotations[RdtClassPodAnnotationKey])
 	}
 }
