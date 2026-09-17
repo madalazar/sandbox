@@ -45,18 +45,14 @@ func toModelCacheAssignment(owner model.OwnerRef, alloc database.CacheAllocation
 	}
 }
 
-func toDatabaseCacheAllocation(componentName string, c *model.CacheAssignment, defaultClos model.ClosId) database.CacheAllocation {
-	classStr := c.Clos.String()
-	if classStr == "" && defaultClos.Held() {
-		classStr = defaultClos.String()
-	}
+func toDatabaseCacheAllocation(componentName string, c *model.CacheAssignment) database.CacheAllocation {
 	return database.CacheAllocation{
 		ComponentName: componentName,
 		Level:         c.Level,
 		CacheId:       c.CacheId,
 		SizeKB:        c.SizeKiB,
 		Mask:          c.Mask,
-		Clos:          classStr,
+		Clos:          c.Clos.String(),
 	}
 }
 
@@ -92,7 +88,6 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (model.
 	if hasCache {
 		res := toModelCacheAssignment(owner, cacheAlloc)
 		reservation.L3CacheAssignment = &res
-		reservation.Clos = res.Clos
 	}
 
 	return reservation, true, nil
@@ -119,7 +114,7 @@ func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservat
 
 	compKey := string(reservation.Owner.Component)
 	if reservation.HasL3Cache() {
-		mergedCaches[compKey] = toDatabaseCacheAllocation(compKey, reservation.L3CacheAssignment, reservation.Clos)
+		mergedCaches[compKey] = toDatabaseCacheAllocation(compKey, reservation.L3CacheAssignment)
 	} else {
 		delete(mergedCaches, compKey)
 	}

@@ -194,7 +194,6 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 			Mask:    "0xC",
 			Clos:    model.ClosId("cos1"),
 		},
-		Clos: model.ClosId("cos1"),
 	}
 
 	if !res.HasL3Cache() {
@@ -216,13 +215,13 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 	if !loaded.HasL3Cache() {
 		t.Fatal("expected loaded reservation to have cache")
 	}
-	if loaded.Clos != model.ClosId("cos1") {
-		t.Fatalf("expected class 'cos1', got %s", loaded.Clos)
-	}
 	if loaded.L3CacheAssignment == nil {
 		t.Fatal("expected non-nil cache reservation")
 	}
 	cacheRes := *loaded.L3CacheAssignment
+	if cacheRes.Clos != model.ClosId("cos1") {
+		t.Fatalf("expected class 'cos1', got %s", cacheRes.Clos)
+	}
 	if cacheRes.CacheId != "0" || cacheRes.Mask != "0xC" {
 		t.Fatalf("unexpected cache reservation ID/mask: %+v", cacheRes)
 	}

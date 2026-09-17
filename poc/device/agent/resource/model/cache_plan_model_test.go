@@ -76,7 +76,6 @@ func TestCachePlan(t *testing.T) {
 	plan := CachePlan{
 		Component:         ComponentRef("comp1"),
 		L3CacheAssignment: &assignment,
-		Clos:              ClosId("1"),
 	}
 
 	if !plan.HasCache() {
