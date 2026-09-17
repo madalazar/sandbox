@@ -1,20 +1,33 @@
 package ledger
 
 import (
+	"errors"
+
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
+)
+
+var (
+	// ErrCapacityExhausted indicates that the requested resource capacity is unavailable.
+	ErrCapacityExhausted = errors.New("capacity exhausted")
 )
 
 // device-wide read of persisted allocations, taken once per
 // reconcile of one deployment, never mutated after construction
 type AllocationSnapshot struct {
 	CpuOwners map[int]model.OwnerRef
+	// we don't key caches by owner as caches can be split exclusively
+	// between one or more components
+	Caches []model.CacheAssignment
 }
 
 // decodes the persisted owner strings into domain owners,
-// keeping only the isolated indices the planners can allocate from
+// keeping only the isolated indices the planners can allocate from,
+// and records any persisted cache allocations
 func NewAllocationSnapshot(
 	allocatedCpus map[int]string,
 	isolatedCpus map[int]struct{},
+	caches []model.CacheAssignment,
 ) AllocationSnapshot {
 	owners := make(map[int]model.OwnerRef, len(allocatedCpus))
 	for cpuIndex, owner := range allocatedCpus {
@@ -24,23 +37,42 @@ func NewAllocationSnapshot(
 		owners[cpuIndex] = model.ParseOwnerRef(owner)
 	}
 
-	return AllocationSnapshot{CpuOwners: owners}
+	var cacheAssignments []model.CacheAssignment
+	if len(caches) > 0 {
+		cacheAssignments = append([]model.CacheAssignment(nil), caches...)
+	}
+
+	return AllocationSnapshot{
+		CpuOwners: owners,
+		Caches:    cacheAssignments,
+	}
 }
 
 // answers free-versus-taken for one deployment's reconcile pass. It
 // keeps the persisted snapshot separate from what this pass has handed out, because a
-// component may reuse the CPUs it already holds but may not take a sibling's
+// component may reuse the cpus and cache ways it already holds but may not take a sibling's
 type AllocationLedger struct {
 	snapshot     AllocationSnapshot
 	deploymentId string
+
 	reservedCpus map[int]model.ComponentRef
+
+	cacheCapacity model.CacheCapacity
+	classNamer    controller.ClassNamer
 }
 
-func NewAllocationLedger(snapshot AllocationSnapshot, deploymentId string) *AllocationLedger {
+func NewAllocationLedger(
+	snapshot AllocationSnapshot,
+	deploymentId string,
+	cacheCapacity model.CacheCapacity,
+	classNamer controller.ClassNamer,
+) *AllocationLedger {
 	return &AllocationLedger{
-		snapshot:     snapshot,
-		deploymentId: deploymentId,
-		reservedCpus: map[int]model.ComponentRef{},
+		snapshot:      snapshot,
+		deploymentId:  deploymentId,
+		reservedCpus:  map[int]model.ComponentRef{},
+		cacheCapacity: cacheCapacity,
+		classNamer:    classNamer,
 	}
 }
 
@@ -66,4 +98,30 @@ func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error
 	}
 
 	return nil
+}
+
+// returns the contiguous way intervals on cacheId that ref may take: unused,
+// or already persisted to ref itself
+func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []model.WayInterval {
+	return nil
+}
+
+// records an exclusive claim on contiguous cache ways for ref on cacheId
+func (l *AllocationLedger) ReserveWays(ref model.ComponentRef, cacheId string, iv model.WayInterval) error {
+	return nil
+}
+
+// reserves one class of service from the shared device pool and names it via ClassNamer
+func (l *AllocationLedger) ReserveClass(ref model.ComponentRef) (model.ClosId, error) {
+	return model.ClassUnset, nil
+}
+
+// TODO: understand if this is needed
+// RollbackComponent rolls back any claims (CPUs, ways, classes) made by ref in this pass.
+func (l *AllocationLedger) RollbackComponent(ref model.ComponentRef) {
+	for cpu, holder := range l.reservedCpus {
+		if holder == ref {
+			delete(l.reservedCpus, cpu)
+		}
+	}
 }
