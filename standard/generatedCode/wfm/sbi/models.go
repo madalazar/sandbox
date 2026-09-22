@@ -120,39 +120,39 @@ func (e DeviceCapabilitiesManifestPropertiesCpusArchitecture) Valid() bool {
 	}
 }
 
-// Defines values for DeviceCapabilitiesManifestPropertiesCpusKindsClass.
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusClass.
 const (
-	DeviceCapabilitiesManifestPropertiesCpusKindsClassEfficiency  DeviceCapabilitiesManifestPropertiesCpusKindsClass = "efficiency"
-	DeviceCapabilitiesManifestPropertiesCpusKindsClassLowPower    DeviceCapabilitiesManifestPropertiesCpusKindsClass = "low-power"
-	DeviceCapabilitiesManifestPropertiesCpusKindsClassPerformance DeviceCapabilitiesManifestPropertiesCpusKindsClass = "performance"
+	DeviceCapabilitiesManifestPropertiesCpusClassEfficiency  DeviceCapabilitiesManifestPropertiesCpusClass = "efficiency"
+	DeviceCapabilitiesManifestPropertiesCpusClassLowPower    DeviceCapabilitiesManifestPropertiesCpusClass = "low-power"
+	DeviceCapabilitiesManifestPropertiesCpusClassPerformance DeviceCapabilitiesManifestPropertiesCpusClass = "performance"
 )
 
-// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusKindsClass enum.
-func (e DeviceCapabilitiesManifestPropertiesCpusKindsClass) Valid() bool {
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusClass enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusClass) Valid() bool {
 	switch e {
-	case DeviceCapabilitiesManifestPropertiesCpusKindsClassEfficiency:
+	case DeviceCapabilitiesManifestPropertiesCpusClassEfficiency:
 		return true
-	case DeviceCapabilitiesManifestPropertiesCpusKindsClassLowPower:
+	case DeviceCapabilitiesManifestPropertiesCpusClassLowPower:
 		return true
-	case DeviceCapabilitiesManifestPropertiesCpusKindsClassPerformance:
+	case DeviceCapabilitiesManifestPropertiesCpusClassPerformance:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for DeviceCapabilitiesManifestPropertiesCpusKindsType.
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusType.
 const (
-	DeviceCapabilitiesManifestPropertiesCpusKindsTypeIsolated DeviceCapabilitiesManifestPropertiesCpusKindsType = "isolated"
-	DeviceCapabilitiesManifestPropertiesCpusKindsTypeShared   DeviceCapabilitiesManifestPropertiesCpusKindsType = "shared"
+	DeviceCapabilitiesManifestPropertiesCpusTypeIsolated DeviceCapabilitiesManifestPropertiesCpusType = "isolated"
+	DeviceCapabilitiesManifestPropertiesCpusTypeShared   DeviceCapabilitiesManifestPropertiesCpusType = "shared"
 )
 
-// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusKindsType enum.
-func (e DeviceCapabilitiesManifestPropertiesCpusKindsType) Valid() bool {
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusType enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusType) Valid() bool {
 	switch e {
-	case DeviceCapabilitiesManifestPropertiesCpusKindsTypeIsolated:
+	case DeviceCapabilitiesManifestPropertiesCpusTypeIsolated:
 		return true
-	case DeviceCapabilitiesManifestPropertiesCpusKindsTypeShared:
+	case DeviceCapabilitiesManifestPropertiesCpusTypeShared:
 		return true
 	default:
 		return false
@@ -398,24 +398,22 @@ type DeviceCapabilitiesManifest struct {
 	Properties struct {
 		Cpus *[]struct {
 			Architecture *DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-			Cores        float32                                               `json:"cores"`
-			Kinds        *[]struct {
-				// Class Core class (P-core, E-core, etc.)
-				Class *DeviceCapabilitiesManifestPropertiesCpusKindsClass `json:"class,omitempty"`
-				Cores *float32                                            `json:"cores,omitempty"`
 
-				// Frequency Frequency characteristics for this core kind
-				Frequency *struct {
-					// BaseMHz Base CPU frequency in MHz
-					BaseMHz *float32 `json:"baseMHz,omitempty"`
+			// Class Core class (P-core, E-core, etc.)
+			Class *DeviceCapabilitiesManifestPropertiesCpusClass `json:"class,omitempty"`
+			Cores float32                                        `json:"cores"`
 
-					// MaxMHz Maximum achievable CPU frequency in MHz
-					MaxMHz *float32 `json:"maxMHz,omitempty"`
-				} `json:"frequency,omitempty"`
+			// Frequency Frequency characteristics for this core kind
+			Frequency *struct {
+				// BaseMHz Base CPU frequency in MHz
+				BaseMHz *float32 `json:"baseMHz,omitempty"`
 
-				// Type Whether these cores are kernel-isolated
-				Type *DeviceCapabilitiesManifestPropertiesCpusKindsType `json:"type,omitempty"`
-			} `json:"kinds,omitempty"`
+				// MaxMHz Maximum achievable CPU frequency in MHz
+				MaxMHz *float32 `json:"maxMHz,omitempty"`
+			} `json:"frequency,omitempty"`
+
+			// Type Whether these cores are kernel-isolated
+			Type *DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
 		} `json:"cpus,omitempty"`
 		Id                       DeviceId                                                        `json:"id"`
 		Interfaces               *[]DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
@@ -437,11 +435,11 @@ type DeviceCapabilitiesManifestKind string
 // DeviceCapabilitiesManifestPropertiesCpusArchitecture defines model for DeviceCapabilitiesManifest.Properties.Cpus.Architecture.
 type DeviceCapabilitiesManifestPropertiesCpusArchitecture string
 
-// DeviceCapabilitiesManifestPropertiesCpusKindsClass Core class (P-core, E-core, etc.)
-type DeviceCapabilitiesManifestPropertiesCpusKindsClass string
+// DeviceCapabilitiesManifestPropertiesCpusClass Core class (P-core, E-core, etc.)
+type DeviceCapabilitiesManifestPropertiesCpusClass string
 
-// DeviceCapabilitiesManifestPropertiesCpusKindsType Whether these cores are kernel-isolated
-type DeviceCapabilitiesManifestPropertiesCpusKindsType string
+// DeviceCapabilitiesManifestPropertiesCpusType Whether these cores are kernel-isolated
+type DeviceCapabilitiesManifestPropertiesCpusType string
 
 // DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes defines model for DeviceCapabilitiesManifest.Properties.SupportedDeploymentTypes.
 type DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes string
