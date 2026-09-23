@@ -84,6 +84,20 @@ const (
 	ApplicationPackageStatusStateUNSTAGED  ApplicationPackageStatusState = "UNSTAGED"
 )
 
+// Defines values for CacheAllocation.
+const (
+	CacheAllocationExclusive CacheAllocation = "exclusive"
+	CacheAllocationShared    CacheAllocation = "shared"
+)
+
+// Defines values for CacheLevel.
+const (
+	L1d CacheLevel = "L1d"
+	L1i CacheLevel = "L1i"
+	L2  CacheLevel = "L2"
+	L3  CacheLevel = "L3"
+)
+
 // Defines values for ConfigurationSchemaDataType.
 const (
 	Boolean ConfigurationSchemaDataType = "boolean"
@@ -101,8 +115,8 @@ const (
 
 // Defines values for CpuType.
 const (
-	Isolated CpuType = "isolated"
-	Shared   CpuType = "shared"
+	CpuTypeIsolated CpuType = "isolated"
+	CpuTypeShared   CpuType = "shared"
 )
 
 // Defines values for DeploymentExecutionProfileType.
@@ -474,6 +488,24 @@ type ApplicationPackageStatus struct {
 // ApplicationPackageStatusState State of the application package
 type ApplicationPackageStatusState string
 
+// Cache Cache requirement or capability
+type Cache struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation CacheAllocation `json:"allocation" yaml:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level CacheLevel `json:"level" yaml:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size" yaml:"size"`
+}
+
+// CacheAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type CacheAllocation string
+
+// CacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type CacheLevel string
+
 // ComposeApplicationDeploymentProfileComponent Compose Application Deployment Profile Component
 type ComposeApplicationDeploymentProfileComponent struct {
 	// Name Name of the component
@@ -833,7 +865,9 @@ type PaginationMetadata struct {
 
 // RequiredResources defines model for RequiredResources.
 type RequiredResources struct {
-	Cpu        *[]Cpu `json:"cpu" yaml:"cpu"`
+	// Cache Cache requirements
+	Cache      *[]Cache `json:"cache" yaml:"cache"`
+	Cpu        *[]Cpu   `json:"cpu" yaml:"cpu"`
 	Interfaces *[]struct {
 		// Type Interface type (e.g., ethernet, bluetooth)
 		Type *string `json:"type" yaml:"type"`
