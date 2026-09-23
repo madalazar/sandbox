@@ -5,24 +5,24 @@
 # This script updates capabilities.json properties.cpus.
 # CPU data is grouped by host topology.
 #
-# properties.cpus contains one host CPU object with:
-# 1) top-level architecture
-#    - Derived from uname -m and mapped to API values:
-#      x86_64/amd64 -> amd64, aarch64/arm64 -> arm64, arm* -> arm.
+# properties.cpus contains an array of CPU objects grouped by core type + class:
+# 1) cores
+#    - Number of physical cores discovered for this core type and class after SMT sibling collapse.
 #
-# 2) top-level cores
-#    - Total physical cores discovered after SMT sibling collapse.
-#
-# 3) kinds[] grouped by core type + class
-#    - Derived from /sys/devices/system/cpu/isolated.
-#    - CPUs listed there are marked type=isolated; all others are type=shared.
-#
-# 4) cpu class (performance/efficiency/low-power)
+# 2) class (performance/efficiency/low-power)
 #    - Uses cpuinfo_max_freq per selected physical CPU.
 #    - Unique max frequencies are sorted high-to-low.
 #    - Highest tier => performance.
 #    - Lowest tier => low-power only when 3+ distinct tiers exist, otherwise efficiency.
 #    - Any middle tier => efficiency.
+#
+# 3) type
+#    - Derived from /sys/devices/system/cpu/isolated.
+#    - CPUs listed there are marked type=isolated; all others are type=shared.
+#
+# 4) architecture
+#    - Derived from uname -m and mapped to API values:
+#      x86_64/amd64 -> amd64, aarch64/arm64 -> arm64, arm* -> arm.
 #
 # Physical cores only:
 # - SMT/Hyperthread siblings are collapsed by reading
@@ -104,33 +104,35 @@ _count_and_group_cores() {
   fi
 }
 
-# Convert a "type|class" core-count associative array into a deterministically
-# ordered JSON array of objects containing cores, class, and type.
-_build_cpu_kinds_json() {
+# Convert a "type|class" core-count associative array and architecture into a deterministically
+# ordered JSON array of CPU capability objects containing cores, class, type, and architecture.
+_build_cpus_json() {
   local -n kind_counts_ref="$1"
+  local cpu_arch="$2"
   local -a sorted_kind_keys=()
   local kind_key
   while IFS= read -r kind_key; do
     [[ -n "$kind_key" ]] && sorted_kind_keys+=("$kind_key")
   done < <(printf '%s\n' "${!kind_counts_ref[@]}" | sort)
 
-  local kinds_json='[]'
+  local cpus_json='[]'
   local cpu_type cpu_class
   for kind_key in "${sorted_kind_keys[@]}"; do
     IFS='|' read -r cpu_type cpu_class <<< "$kind_key"
 
-    if ! kinds_json="$(jq -c \
+    if ! cpus_json="$(jq -c \
       --argjson cores "${kind_counts_ref[$kind_key]}" \
       --arg class "$cpu_class" \
       --arg type "$cpu_type" \
-      '. + [{cores: $cores, class: $class, type: $type}]' \
-      <<< "$kinds_json")"; then
-      echo "ERROR: Failed to construct CPU kind JSON" >&2
+      --arg architecture "$cpu_arch" \
+      '. + [{cores: $cores, class: $class, type: $type, architecture: $architecture}]' \
+      <<< "$cpus_json")"; then
+      echo "ERROR: Failed to construct CPU capabilities JSON" >&2
       return 1
     fi
   done
 
-  printf '%s\n' "$kinds_json"
+  printf '%s\n' "$cpus_json"
 }
 
 update_cpu_capabilities() {
@@ -146,8 +148,9 @@ update_cpu_capabilities() {
   fi
 
   # Count physical cores by scheduling type and CPU class.
-  # shellcheck disable=SC2034  # Arrays are consumed through namerefs.
+  # shellcheck disable=SC2034  # core_count_by_kind and total_cores are populated/consumed via namerefs.
   declare -A core_count_by_kind=()
+  # shellcheck disable=SC2034
   local total_cores=0
   _count_and_group_cores "$topology_json" core_count_by_kind total_cores || return 1
 
@@ -156,24 +159,8 @@ update_cpu_capabilities() {
     return 1
   fi
 
-  local cpu_kinds_json
-  cpu_kinds_json="$(_build_cpu_kinds_json core_count_by_kind)" || return 1
-
-  local cpu_object_json
-  if ! cpu_object_json="$(
-    jq -cn \
-      --argjson cores "$total_cores" \
-      --arg architecture "$cpu_arch" \
-      --argjson kinds "$cpu_kinds_json" \
-      '{
-        cores: $cores,
-        architecture: $architecture,
-        kinds: $kinds
-      }'
-  )"; then
-    echo "ERROR: Failed to construct CPU capabilities JSON" >&2
-    return 1
-  fi
+  local cpus_json
+  cpus_json="$(_build_cpus_json core_count_by_kind "$cpu_arch")" || return 1
 
   local tmp_file
   if ! tmp_file="$(mktemp "${capabilities_file}.tmp.XXXXXX")"; then
@@ -181,9 +168,9 @@ update_cpu_capabilities() {
     return 1
   fi
 
-  if ! jq --argjson cpu "$cpu_object_json" '
+  if ! jq --argjson cpus "$cpus_json" '
     if (.properties | type) == "object" and (.properties.cpus | type) == "array" then
-      .properties.cpus = [$cpu]
+      .properties.cpus = $cpus
     else
       error("Refusing CPU update: properties.cpus must be an array")
     end
