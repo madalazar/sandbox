@@ -427,6 +427,10 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 		deploymentRef.DeploymentId,
 		deployment.Spec.DeploymentProfile.Components,
 	)
+	ss.logDeploymentProfileCacheRequirements(
+		deploymentRef.DeploymentId,
+		deployment.Spec.DeploymentProfile.Components,
+	)
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
 
@@ -613,6 +617,7 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		// Convert YAML maps to JSON-compatible format
 		jsonCompatible := convertYAMLToJSON(yamlInterface)
 		ss.logDeploymentCPURequirementsFromRawYAML(deploymentId, jsonCompatible)
+		ss.logDeploymentCacheRequirementsFromRawYAML(deploymentId, jsonCompatible)
 
 		// Convert to JSON (which will be properly unmarshaled by UnmarshalJSON())
 		jsonData, err := json.Marshal(jsonCompatible)
@@ -637,6 +642,10 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		}
 
 		ss.logDeploymentProfileCPURequirements(
+			deploymentId,
+			deployment.Spec.DeploymentProfile.Components,
+		)
+		ss.logDeploymentProfileCacheRequirements(
 			deploymentId,
 			deployment.Spec.DeploymentProfile.Components,
 		)
@@ -669,6 +678,30 @@ func (ss *StateSyncer) logDeploymentProfileCPURequirements(
 	}
 
 	ss.logCPURequirementsByComponent(deploymentID, rawComponents, "typed profile")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logDeploymentProfileCacheRequirements(
+	deploymentID string,
+	components []sbi.AppDeploymentProfile_Components_Item,
+) {
+	componentJSON, err := json.Marshal(components)
+	if err != nil {
+		ss.log.Errorw("Failed to marshal deployment profile components for cache logging",
+			"deploymentId", deploymentID,
+			"error", err)
+		return
+	}
+
+	var rawComponents []any
+	if err := json.Unmarshal(componentJSON, &rawComponents); err != nil {
+		ss.log.Errorw("Failed to parse deployment profile components for cache logging",
+			"deploymentId", deploymentID,
+			"error", err)
+		return
+	}
+
+	ss.logCacheRequirementsByComponent(deploymentID, rawComponents, "typed profile")
 }
 
 func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
@@ -705,6 +738,43 @@ func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
 	}
 
 	ss.logCPURequirementsByComponent(deploymentID, components, "raw YAML")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logDeploymentCacheRequirementsFromRawYAML(
+	deploymentID string,
+	rawManifest any,
+) {
+	manifestObj, ok := rawManifest.(map[string]any)
+	if !ok {
+		ss.log.Debugw("Raw deployment manifest is not an object",
+			"deploymentId", deploymentID,
+			"type", fmt.Sprintf("%T", rawManifest))
+		return
+	}
+
+	specObj, ok := manifestObj["spec"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No spec found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	profileObj, ok := specObj["deploymentProfile"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No deploymentProfile found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	components, ok := profileObj["components"].([]any)
+	if !ok {
+		ss.log.Debugw("No deployment profile components found in raw deployment",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	ss.logCacheRequirementsByComponent(deploymentID, components, "raw YAML")
 }
 
 func (ss *StateSyncer) logCPURequirementsByComponent(
@@ -764,6 +834,56 @@ func (ss *StateSyncer) logCPURequirementsByComponent(
 				"cores", cpuObj["cores"],
 				"class", cpuObj["class"],
 				"type", cpuObj["type"])
+		}
+	}
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func (ss *StateSyncer) logCacheRequirementsByComponent(
+	deploymentID string,
+	components []any,
+	source string,
+) {
+	for componentIndex, componentItem := range components {
+		component, ok := componentItem.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		componentName, _ := component["name"].(string)
+		resources, _ := component["requiredResources"].(map[string]any)
+		if resources == nil {
+			if properties, ok := component["properties"].(map[string]any); ok {
+				resources, _ = properties["requiredResources"].(map[string]any)
+			}
+		}
+		if resources == nil {
+			resources, _ = component["resourceRequirements"].(map[string]any)
+		}
+		if resources == nil {
+			continue
+		}
+
+		cacheItems, ok := resources["cache"].([]any)
+		if !ok || len(cacheItems) == 0 {
+			continue
+		}
+
+		for cacheIndex, cacheItem := range cacheItems {
+			cacheObj, ok := cacheItem.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			ss.log.Infow("Parsed deployment cache requirement",
+				"deploymentId", deploymentID,
+				"source", source,
+				"component", componentName,
+				"componentIndex", componentIndex,
+				"cacheIndex", cacheIndex,
+				"level", cacheObj["level"],
+				"allocation", cacheObj["allocation"],
+				"size", cacheObj["size"])
 		}
 	}
 }
