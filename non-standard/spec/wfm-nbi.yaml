@@ -1037,8 +1037,8 @@ components:
           x-oapi-codegen-extra-tags:
             json: "memory"
             yaml: "memory"
-          description: Required memory (e.g., "1024Mi")
-          type: string
+          $ref: '#/components/schemas/Memory'
+          description: Required memory and optional bandwidth allocation
         peripherals:
           # x-go-field-tags: 'json:"peripherals" yaml:"peripherals"'
           x-oapi-codegen-extra-tags:
@@ -1079,6 +1079,47 @@ components:
             $ref: '#/components/schemas/Cache'
           description: Cache requirements
       type: object
+
+    MemoryBandwidthAllocation:
+      type: object
+      description: Memory bandwidth allocation requested by a workload
+      required: [unit, value]
+      properties:
+        unit:
+          # x-go-field-tags: 'json:"unit" yaml:"unit"'
+          x-oapi-codegen-extra-tags:
+            json: "unit"
+            yaml: "unit"
+          type: string
+          enum: [percent, MBps]
+          description: Unit for memory bandwidth capping
+        value:
+          # x-go-field-tags: 'json:"value" yaml:"value"'
+          x-oapi-codegen-extra-tags:
+            json: "value"
+            yaml: "value"
+          type: integer
+          description: Requested bandwidth cap in the selected unit
+
+    Memory:
+      type: object
+      description: Memory requirement for a deployment profile or component
+      required: [size]
+      properties:
+        size:
+          # x-go-field-tags: 'json:"size" yaml:"size"'
+          x-oapi-codegen-extra-tags:
+            json: "size"
+            yaml: "size"
+          type: string
+          description: Required memory size (e.g., "1Gi")
+        bandwidthAllocation:
+          # x-go-field-tags: 'json:"bandwidthAllocation" yaml:"bandwidthAllocation"'
+          x-oapi-codegen-extra-tags:
+            json: "bandwidthAllocation"
+            yaml: "bandwidthAllocation"
+          $ref: '#/components/schemas/MemoryBandwidthAllocation'
+          description: Optional memory bandwidth capping
 
     Cache:
       type: object
