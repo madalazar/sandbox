@@ -748,6 +748,9 @@ components:
               - $ref: '#/components/schemas/helmApplicationDeploymentProfileComponent'
               - $ref: '#/components/schemas/composeApplicationDeploymentProfileComponent'
           description: Components of the deployment profile
+          requiredResources:
+            $ref: '#/components/schemas/requiredResources'
+            description: Required resources for this deployment profile
     appParameterTarget:
       type: object
       description: Application Parameter Target
