@@ -2,7 +2,7 @@
 # modules/cpu-topology.sh - Shared CPU topology helpers
 #
 # Provides three layers:
-#   1. Pure helpers  — arch mapping, cpuset parsing, freq classification, lstopo classification
+#   1. Pure helpers  — arch mapping, cpuset parsing, freq classification, sysfs devices classification
 #   2. Cache builder — build_cpu_topology: full sysfs inspection → TSV file
 #   3. JSON reader   — read_cpu_topology_as_json: persisted TSV → JSON array
 #
@@ -221,138 +221,40 @@ classify_cpu_frequency_tier() {
   fi
 }
 
-# Map one parsed hwloc CPU kind to a Margo CPU class.
-classify_lstopo_cpu_kind() {
-  local core_type="$1"
-  local efficiency="$2"
-  local kind_count="$3"
-  local max_efficiency="$4"
-  local min_efficiency="$5"
-
-  if [[ "$core_type" == "IntelCore" ]]; then
-    echo "performance"
-  elif [[ "$core_type" == "IntelAtom" ]]; then
-    if ((kind_count >= 3 && efficiency == min_efficiency)); then
-      echo "low-power"
-    else
-      echo "efficiency"
-    fi
-  elif ((efficiency == max_efficiency)); then
-    echo "performance"
-  elif ((kind_count >= 3 && efficiency == min_efficiency)); then
-    echo "low-power"
-  else
-    echo "efficiency"
-  fi
-}
-
-# Expand an hwloc cpuset into CPU IDs associated with one class.
-# Cpuset words are comma-separated, most-significant first.
-expand_lstopo_cpuset() {
-  local cpuset="$1"
-  local cpu_class="$2"
-  local -n result_ref="$3"
-  local -a words=()
-  IFS=',' read -ra words <<< "$cpuset"
-
-  local found_any=false
-  local word_index=0
-  local array_index word value bit cpu_id
-  for ((array_index = ${#words[@]} - 1; array_index >= 0; array_index--)); do
-    word="${words[$array_index]}"
-    if [[ -n "$word" ]]; then
-      value=$((word))
-      for ((bit = 0; bit < 32; bit++)); do
-        if (((value >> bit) & 1)); then
-          cpu_id=$((word_index * 32 + bit))
-          # shellcheck disable=SC2034  # Assignment is through a nameref.
-          result_ref["$cpu_id"]="$cpu_class"
-          found_any=true
-        fi
-      done
-    fi
-    word_index=$((word_index + 1))
-  done
-
-  [[ "$found_any" == true ]]
-}
-
-# Classify physical CPU cores by querying lstopo -v (hwloc).
+# Classify physical CPU cores by querying sysfs PMU device cpu sets:
+#   /sys/devices/cpu_core/cpus      -> performance
+#   /sys/devices/cpu_atom/cpus      -> efficiency (standard E-cores, may include LPE on older kernels)
+#   /sys/devices/cpu_lowpower/cpus  -> low-power (low-power E-cores, if supported by kernel)
 #
-# Reads "CPU kind #N efficiency E cpuset 0x..." blocks from lstopo output and
-# maps each CPU ID to a Margo class string (performance / efficiency / low-power).
-#
-# Classification rules (per CPU kind, sorted by efficiency value):
-#   Intel CoreType="IntelCore"             → performance
-#   Intel CoreType="IntelAtom"  (top Atom) → efficiency
-#   Intel CoreType="IntelAtom"  (low Atom, only when ≥3 kinds) → low-power
-#   Generic: highest efficiency            → performance
-#   Generic: lowest efficiency (≥3 kinds)  → low-power
-#   Generic: lowest efficiency (2 kinds)   → efficiency
-#   Generic: middle efficiency             → efficiency
-#
-# Usage: classify_cores_via_lstopo result_assoc_array_name
-# Returns 0 on success, 1 if lstopo is unavailable or output is unparseable.
-classify_cores_via_lstopo() {
-  local -n _lcr="$1"   # caller's associative array: cpu_id → class
-
-  command -v lstopo >/dev/null 2>&1 || return 1
-
-  local lstopo_out
-  lstopo_out="$(lstopo -v --no-io 2>/dev/null)" || return 1
-
-  # --- Phase 1: collect CPU kind metadata ---------------------------------
-  declare -A kind_efficiency=()
-  declare -A kind_cpuset=()
-  declare -A kind_core_type=()
-  local current_kind="" in_kind=0
-
-  while IFS= read -r line; do
-    # Match: "CPU kind #N efficiency E cpuset 0x..."
-    if [[ "$line" =~ ^CPU[[:space:]]kind[[:space:]]#([0-9]+)[[:space:]]efficiency[[:space:]]([0-9]+)[[:space:]]cpuset[[:space:]]([^[:space:]]+) ]]; then
-      current_kind="${BASH_REMATCH[1]}"
-      kind_efficiency["$current_kind"]="${BASH_REMATCH[2]}"
-      kind_cpuset["$current_kind"]="${BASH_REMATCH[3]}"
-      kind_core_type["$current_kind"]=""
-      in_kind=1
-    # Match: indented "CoreType = "IntelCore"" or "info CoreType = "IntelCore""
-    elif [[ $in_kind -eq 1 && "$line" =~ CoreType[[:space:]]*=[[:space:]]*\"([^\"]+)\" ]]; then
-      kind_core_type["$current_kind"]="${BASH_REMATCH[1]}"
-    # Non-indented line that is not a CPU kind line → exit kind context
-    elif [[ $in_kind -eq 1 && -n "$line" && ! "$line" =~ ^[[:space:]] ]]; then
-      in_kind=0
-      current_kind=""
-    fi
-  done <<< "$lstopo_out"
-
-  local kind_count=${#kind_efficiency[@]}
-  [[ $kind_count -eq 0 ]] && return 1
-
-  # --- Phase 2: determine class per kind ----------------------------------
-  local max_efficiency=0 min_efficiency=999999
-  local kind_id efficiency
-  for kind_id in "${!kind_efficiency[@]}"; do
-    efficiency="${kind_efficiency[$kind_id]}"
-    if ((efficiency > max_efficiency)); then
-      max_efficiency=$efficiency
-    fi
-    if ((efficiency < min_efficiency)); then
-      min_efficiency=$efficiency
-    fi
-  done
-
-  declare -A kind_class=()
-  for kind_id in "${!kind_efficiency[@]}"; do
-    kind_class["$kind_id"]="$(classify_lstopo_cpu_kind \
-      "${kind_core_type[$kind_id]}" "${kind_efficiency[$kind_id]}" \
-      "$kind_count" "$max_efficiency" "$min_efficiency")"
-  done
-
-  # --- Phase 3: expand cpusets → cpu_id → class ---------------------------
+# Usage: classify_cores_via_sysfs_devices result_assoc_array_name
+# Returns 0 on success (at least one device file found & parsed), 1 if unavailable.
+classify_cores_via_sysfs_devices() {
+  local -n _sysfs_classes_ref="$1"
   local found_any=0
-  for kind_id in "${!kind_cpuset[@]}"; do
-    expand_lstopo_cpuset \
-      "${kind_cpuset[$kind_id]}" "${kind_class[$kind_id]}" _lcr && found_any=1
+
+  local entry file class range_str
+  local -a pmu_mappings=(
+    "/sys/devices/cpu_core/cpus:performance"
+    "/sys/devices/cpu_atom/cpus:efficiency"
+    "/sys/devices/cpu_lowpower/cpus:low-power"
+  )
+
+  for entry in "${pmu_mappings[@]}"; do
+    file="${entry%%:*}"
+    class="${entry#*:}"
+    if [[ -r "$file" ]]; then
+      range_str="$(tr -d '[:space:]' < "$file" 2>/dev/null || true)"
+      if [[ -n "$range_str" ]]; then
+        declare -A parsed_cpus=()
+        mark_cpu_set_from_range_list "$range_str" parsed_cpus
+        local cpu_id
+        for cpu_id in "${!parsed_cpus[@]}"; do
+          # shellcheck disable=SC2034  # Assignment is through a nameref.
+          _sysfs_classes_ref["$cpu_id"]="$class"
+          found_any=1
+        done
+      fi
+    fi
   done
 
   [[ $found_any -eq 1 ]]
@@ -452,17 +354,17 @@ build_cpu_topology() {
 
   local cpu_id
 
-  # ---- class classification: lstopo (authoritative) or max-freq (fallback) --
-  # lstopo reads CPUID/MIDR registers and emits CPU kinds with efficiency values
-  # and optional CoreType attributes (IntelCore/IntelAtom on hybrid Intel).
-  # Max-freq is used as a fallback when lstopo is unavailable.
-  declare -A lstopo_classes=()
-  local use_lstopo=0
-  if classify_cores_via_lstopo lstopo_classes; then
-    use_lstopo=1
-    echo "[INFO] CPU class: lstopo classification used ($(command -v lstopo))"
+  # ---- class classification: /sys/devices (primary) or max-freq (fallback) --
+  # Checks /sys/devices/cpu_core/cpus (performance), /sys/devices/cpu_atom/cpus
+  # (efficiency), and /sys/devices/cpu_lowpower/cpus (low-power).
+  # Max-freq is used as a fallback when sysfs device files are not present.
+  declare -A sysfs_classes=()
+  local use_sysfs=0
+  if classify_cores_via_sysfs_devices sysfs_classes; then
+    use_sysfs=1
+    echo "[INFO] CPU class: /sys/devices classification used"
   else
-    echo "[INFO] CPU class: lstopo unavailable or single-kind — using max-freq fallback"
+    echo "[INFO] CPU class: /sys/devices unavailable — using max-freq fallback"
   fi
 
   # Frequency data — always collected as fallback / cross-check
@@ -510,8 +412,8 @@ build_cpu_topology() {
       local ctype="shared"
       [[ -n "${isolated_physical_cpus[$cpu_id]:-}" ]] && ctype="isolated"
       local class
-      if [[ $use_lstopo -eq 1 && -n "${lstopo_classes[$cpu_id]:-}" ]]; then
-        class="${lstopo_classes[$cpu_id]}"
+      if [[ $use_sysfs -eq 1 && -n "${sysfs_classes[$cpu_id]:-}" ]]; then
+        class="${sysfs_classes[$cpu_id]}"
       else
         class="$(classify_cpu_frequency_tier "${cpu_frequencies[$cpu_id]}" sorted_frequencies)"
       fi
