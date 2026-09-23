@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/database"
@@ -210,7 +211,11 @@ func (da *DeviceClientSettings) ReportCapabilities(
 	ctx context.Context,
 	capabilities sbi.DeviceCapabilitiesManifest,
 ) error {
-	da.log.Infow("Starting capabilities reporting", "deviceClientId", da.deviceClientId)
+	da.log.Infow(
+		"Starting capabilities reporting",
+		"deviceClientId", da.deviceClientId,
+		"cpu", summarizeCapabilitiesCPU(capabilities),
+	)
 	err := da.apiClient.ReportCapabilities(ctx, da.deviceClientId, capabilities)
 	if err != nil {
 		da.log.Errorw(
@@ -225,6 +230,48 @@ func (da *DeviceClientSettings) ReportCapabilities(
 
 	da.log.Infow("Capabilities reported successfully", "deviceClientId", da.deviceClientId)
 	return nil
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func summarizeCapabilitiesCPU(capabilities sbi.DeviceCapabilitiesManifest) string {
+	cpus := capabilities.Properties.Cpus
+	if cpus == nil || len(*cpus) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, len(*cpus))
+	for cpuIndex, cpu := range *cpus {
+		architecture := "<nil>"
+		if cpu.Architecture != nil {
+			architecture = string(*cpu.Architecture)
+		}
+
+		cpuClass := "<nil>"
+		if cpu.Class != nil {
+			cpuClass = string(*cpu.Class)
+		}
+
+		cpuType := "<nil>"
+		if cpu.Type != nil {
+			cpuType = string(*cpu.Type)
+		}
+
+		baseMHz := "<nil>"
+		maxMHz := "<nil>"
+		if cpu.Frequency != nil {
+			if cpu.Frequency.BaseMHz != nil {
+				baseMHz = fmt.Sprintf("%g", *cpu.Frequency.BaseMHz)
+			}
+			if cpu.Frequency.MaxMHz != nil {
+				maxMHz = fmt.Sprintf("%g", *cpu.Frequency.MaxMHz)
+			}
+		}
+
+		parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%g, class=%s, frequency={baseMHz=%s, maxMHz=%s}, type=%s, architecture=%s}",
+			cpuIndex, cpu.Cores, cpuClass, baseMHz, maxMHz, cpuType, architecture))
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 func (da *DeviceClientSettings) IsOnboarded() (bool, error) {

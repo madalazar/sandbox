@@ -259,6 +259,31 @@ append_profile_required_resources() {
   return 0
 }
 
+append_component_required_resources_block() {
+  local required_resources_json="$1"
+  local output_file="$2"
+
+  if [ -z "$required_resources_json" ] || [ "$required_resources_json" = "null" ] || [ "$required_resources_json" = "{}" ]; then
+    return 0
+  fi
+
+  local has_required_resources
+  if ! has_required_resources=$(echo "$required_resources_json" | yq eval -r '((type == "!!map") and (length > 0))' - 2>/dev/null); then
+    return 1
+  fi
+
+  if [ "$has_required_resources" != "true" ]; then
+    return 0
+  fi
+
+  echo "        requiredResources:" >> "$output_file"
+  if ! echo "$required_resources_json" | yq eval -P '.' - | sed 's/^/          /' >> "$output_file"; then
+    return 1
+  fi
+
+  return 0
+}
+
 extract_profile_component_kv() {
   local margo_file="$1"
   local target_profile_type="$2"
@@ -278,6 +303,7 @@ extract_profile_component_kv() {
         | "COMPONENT_NAME:" + ($c.name // "")
           + "\nREPOSITORY:" + ($c.properties.repository // $c.repository // "")
           + "\nREVISION:" + (($c.properties.revision // $c.revision // "0.1.0") | tostring)
+          + "\nREQUIRED_RESOURCES_JSON:" + (($c.requiredResources // {}) | to_json(0))
       ' "$margo_file"
       ;;
     compose)
@@ -286,6 +312,7 @@ extract_profile_component_kv() {
           | map(select((.type // "") == strenv(PROFILE_WANTED)))
           | .[0].components // [])[] as $c
         | "COMPONENT_NAME:" + ($c.name // "")
+            + "\nREQUIRED_RESOURCES_JSON:" + (($c.requiredResources // {}) | to_json(0))
           + "\nPACKAGE_LOCATION:" + ($c.properties.packageLocation // $c.packageLocation // "")
       ' "$margo_file"
       ;;
@@ -330,6 +357,7 @@ EOF
     local current_name=""
     local current_repo=""
     local current_rev="0.1.0"
+    local current_required_resources_json="{}"
     local profile_components_kv
 
     if ! profile_components_kv=$(extract_profile_component_kv "$margo_file" "$target_profile_type" "helm"); then
@@ -347,6 +375,9 @@ EOF
           ;;
         REVISION)
           current_rev="$value"
+          ;;
+        REQUIRED_RESOURCES_JSON)
+          current_required_resources_json="$value"
           if [ -n "$current_name" ] && [ -n "$current_repo" ]; then
             selected_profile_components+=("$current_name")
             cat >> "$output_file" <<COMPONENT
@@ -357,9 +388,14 @@ EOF
           wait: true
           timeout: 5m
 COMPONENT
+            if ! append_component_required_resources_block "$current_required_resources_json" "$output_file"; then
+              echo "❌ Failed to append component requiredResources for '$current_name'" >&2
+              return 1
+            fi
             current_name=""
             current_repo=""
             current_rev="0.1.0"
+            current_required_resources_json="{}"
           fi
           ;;
       esac
@@ -426,6 +462,7 @@ EOF
 
   if grep -q "components:" "$margo_file"; then
     local current_name=""
+    local current_required_resources_json="{}"
     local profile_components_kv
 
     if ! profile_components_kv=$(extract_profile_component_kv "$margo_file" "$target_profile_type" "compose"); then
@@ -437,6 +474,7 @@ EOF
       case "$key" in
         COMPONENT_NAME)
           current_name="$value"
+          current_required_resources_json="{}"
           if [ -n "$current_name" ]; then
             selected_profile_components+=("$current_name")
           fi
@@ -448,8 +486,16 @@ EOF
         properties:
           packageLocation: ${value}
 COMPONENT
+            if ! append_component_required_resources_block "$current_required_resources_json" "$output_file"; then
+              echo "❌ Failed to append component requiredResources for '$current_name'" >&2
+              return 1
+            fi
             current_name=""
+            current_required_resources_json="{}"
           fi
+          ;;
+        REQUIRED_RESOURCES_JSON)
+          current_required_resources_json="$value"
           ;;
       esac
     done <<< "$profile_components_kv"

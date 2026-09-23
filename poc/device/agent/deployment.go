@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -455,6 +456,15 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		// Get compose content from package location
 		dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(composeComp))
+		dm.log.Infow(
+			"compose component requiredResources",
+			"appId",
+			deploymentId,
+			"componentName",
+			composeComp.Name,
+			"requiredResources",
+			dm.extractComponentRequiredResources(component),
+		)
 
 		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(composeComp.Name), deploymentId[:8])
@@ -786,6 +796,38 @@ func (dm *DeploymentManager) extractComponentNames(
 
 func GetAddress[T any](a T) *T {
 	return &a
+}
+
+// TODO: this is just a method used for logging purposes. To be removed once the
+// implementation is added
+// extractComponentRequiredResources reads requiredResources from the raw component JSON.
+// The generated compose component type does not currently include this field.
+func (dm *DeploymentManager) extractComponentRequiredResources(
+	component sbi.AppDeploymentProfile_Components_Item,
+) map[string]interface{} {
+	raw, err := component.MarshalJSON()
+	if err != nil {
+		dm.log.Debugw("failed to marshal component JSON", "error", err)
+		return nil
+	}
+
+	var componentMap map[string]interface{}
+	if err := json.Unmarshal(raw, &componentMap); err != nil {
+		dm.log.Debugw("failed to unmarshal component JSON", "error", err)
+		return nil
+	}
+
+	if resources, ok := componentMap["requiredResources"].(map[string]interface{}); ok {
+		return resources
+	}
+
+	if properties, ok := componentMap["properties"].(map[string]interface{}); ok {
+		if resources, ok := properties["requiredResources"].(map[string]interface{}); ok {
+			return resources
+		}
+	}
+
+	return nil
 }
 
 // Helper function to convert parameters to environment variables

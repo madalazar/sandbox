@@ -120,6 +120,45 @@ func (e DeviceCapabilitiesManifestPropertiesCpusArchitecture) Valid() bool {
 	}
 }
 
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusClass.
+const (
+	DeviceCapabilitiesManifestPropertiesCpusClassEfficiency  DeviceCapabilitiesManifestPropertiesCpusClass = "efficiency"
+	DeviceCapabilitiesManifestPropertiesCpusClassLowPower    DeviceCapabilitiesManifestPropertiesCpusClass = "low-power"
+	DeviceCapabilitiesManifestPropertiesCpusClassPerformance DeviceCapabilitiesManifestPropertiesCpusClass = "performance"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusClass enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusClass) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCpusClassEfficiency:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusClassLowPower:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusClassPerformance:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusType.
+const (
+	DeviceCapabilitiesManifestPropertiesCpusTypeIsolated DeviceCapabilitiesManifestPropertiesCpusType = "isolated"
+	DeviceCapabilitiesManifestPropertiesCpusTypeShared   DeviceCapabilitiesManifestPropertiesCpusType = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusType enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusType) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCpusTypeIsolated:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusTypeShared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes.
 const (
 	DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypesCompose DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes = "compose"
@@ -231,6 +270,45 @@ func (e AppDeploymentProfileType) Valid() bool {
 	}
 }
 
+// Defines values for CpuClass.
+const (
+	CpuClassEfficiency  CpuClass = "efficiency"
+	CpuClassLowPower    CpuClass = "low-power"
+	CpuClassPerformance CpuClass = "performance"
+)
+
+// Valid indicates whether the value is a known member of the CpuClass enum.
+func (e CpuClass) Valid() bool {
+	switch e {
+	case CpuClassEfficiency:
+		return true
+	case CpuClassLowPower:
+		return true
+	case CpuClassPerformance:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CpuType.
+const (
+	CpuTypeIsolated CpuType = "isolated"
+	CpuTypeShared   CpuType = "shared"
+)
+
+// Valid indicates whether the value is a known member of the CpuType enum.
+func (e CpuType) Valid() bool {
+	switch e {
+	case CpuTypeIsolated:
+		return true
+	case CpuTypeShared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PostApiV1OnboardingJSONBodyKind.
 const (
 	OnboardingRequest PostApiV1OnboardingJSONBodyKind = "OnboardingRequest"
@@ -320,7 +398,22 @@ type DeviceCapabilitiesManifest struct {
 	Properties struct {
 		Cpus *[]struct {
 			Architecture *DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-			Cores        float32                                               `json:"cores"`
+
+			// Class Core class (P-core, E-core, etc.)
+			Class *DeviceCapabilitiesManifestPropertiesCpusClass `json:"class,omitempty"`
+			Cores float32                                        `json:"cores"`
+
+			// Frequency Frequency characteristics for this core kind
+			Frequency *struct {
+				// BaseMHz Base CPU frequency in MHz
+				BaseMHz *float32 `json:"baseMHz,omitempty"`
+
+				// MaxMHz Maximum achievable CPU frequency in MHz
+				MaxMHz *float32 `json:"maxMHz,omitempty"`
+			} `json:"frequency,omitempty"`
+
+			// Type Whether these cores are kernel-isolated
+			Type *DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
 		} `json:"cpus,omitempty"`
 		Id                       DeviceId                                                        `json:"id"`
 		Interfaces               *[]DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
@@ -341,6 +434,12 @@ type DeviceCapabilitiesManifestKind string
 
 // DeviceCapabilitiesManifestPropertiesCpusArchitecture defines model for DeviceCapabilitiesManifest.Properties.Cpus.Architecture.
 type DeviceCapabilitiesManifestPropertiesCpusArchitecture string
+
+// DeviceCapabilitiesManifestPropertiesCpusClass Core class (P-core, E-core, etc.)
+type DeviceCapabilitiesManifestPropertiesCpusClass string
+
+// DeviceCapabilitiesManifestPropertiesCpusType Whether these cores are kernel-isolated
+type DeviceCapabilitiesManifestPropertiesCpusType string
 
 // DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes defines model for DeviceCapabilitiesManifest.Properties.SupportedDeploymentTypes.
 type DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes string
@@ -485,7 +584,34 @@ type ComposeApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+
+	// RequiredResources Required resources for this component
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
 }
+
+// Cpu CPU requirement for a workload or deployment profile
+type Cpu struct {
+	// Architectures Supported CPU architectures
+	Architectures *[]string `json:"architectures,omitempty"`
+
+	// Class Core class required by the workload
+	Class *CpuClass `json:"class,omitempty"`
+
+	// Cores Required CPU cores
+	Cores *float32 `json:"cores,omitempty"`
+
+	// Name Name of the container this CPU requirement applies to
+	Name *string `json:"name,omitempty"`
+
+	// Type Whether requested cores must be isolated or can be shared
+	Type *CpuType `json:"type,omitempty"`
+}
+
+// CpuClass Core class required by the workload
+type CpuClass string
+
+// CpuType Whether requested cores must be isolated or can be shared
+type CpuType string
 
 // HelmApplicationDeploymentProfileComponent Helm Application Deployment Profile Component
 type HelmApplicationDeploymentProfileComponent struct {
@@ -504,6 +630,21 @@ type HelmApplicationDeploymentProfileComponent struct {
 		// Wait Wait for the component to be ready
 		Wait *bool `json:"wait,omitempty"`
 	} `json:"properties"`
+
+	// RequiredResources Required resources for this component
+	RequiredResources *RequiredResources `json:"requiredResources,omitempty"`
+}
+
+// RequiredResources Required resources for a deployment profile
+type RequiredResources struct {
+	// Cpu CPU requirements for the deployment profile
+	Cpu *[]Cpu `json:"cpu,omitempty"`
+
+	// Memory Required memory for the deployment profile
+	Memory *string `json:"memory,omitempty"`
+
+	// Storage Required storage for the deployment profile
+	Storage *string `json:"storage,omitempty"`
 }
 
 // GetApiV1ClientsClientIdBundlesDigestParams defines parameters for GetApiV1ClientsClientIdBundlesDigest.
