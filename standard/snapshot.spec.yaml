@@ -537,6 +537,34 @@ components:
                     type: string
                     enum: [isolated, shared]
                     description: Whether these cores are kernel-isolated
+            cache:
+              type: array
+              items:
+                type: object
+                required: [level, size, allocationTypes]
+                properties:
+                  level:
+                    type: string
+                    enum: [L3, L2, L1d, L1i]
+                    description: >
+                      Cache level.
+                      L3 = Level 3 Cache, L2 = Level 2 Cache,
+                      L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+                  size:
+                    type: string
+                    description: >
+                      Minimum required cache amount. Value is given in binary units
+                      (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+                  allocationTypes:
+                    type: array
+                    items:
+                      type: string
+                      enum: [exclusive, shared]
+                    description: >
+                      Cache allocation types supported by the device.
+                      exclusive = device supports dedicated cache partitioning,
+                      shared = device supports shared cache access.
+              description: Cache resources available on the device
             memory:
               type: string
             storage:
@@ -792,6 +820,11 @@ components:
           items:
             $ref: '#/components/schemas/DeploymentCpuRequirement'
           description: CPU elements specifying the CPU requirements for the deployment.
+        cache:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentCacheRequirement'
+          description: Cache resources available on the device
         memory:
           type: string
           description: >-
@@ -830,6 +863,30 @@ components:
           type: string
           enum: [isolated, shared]
           description: Whether requested cores must be isolated or can be shared
+    DeploymentCacheRequirement:
+      type: object
+      description: Cache requirement or capability
+      required: [level, allocation]
+      properties:
+        level:
+          type: string
+          enum: [L3, L2, L1d, L1i]
+          description: >
+            Cache level.
+            L3 = Level 3 Cache, L2 = Level 2 Cache,
+            L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+        allocation:
+          type: string
+          enum: [exclusive, shared]
+          description: >
+            Cache allocation type.
+            exclusive = dedicated cache partition (requires hardware CAT support),
+            shared = shared cache access.
+        size:
+          type: string
+          description: >
+            Minimum required cache amount. Value is given in binary units
+            (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.

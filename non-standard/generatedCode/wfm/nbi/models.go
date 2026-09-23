@@ -252,6 +252,48 @@ func (e ConfigurationSchemaDataType) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentCacheRequirementAllocation.
+const (
+	DeploymentCacheRequirementAllocationExclusive DeploymentCacheRequirementAllocation = "exclusive"
+	DeploymentCacheRequirementAllocationShared    DeploymentCacheRequirementAllocation = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCacheRequirementAllocation enum.
+func (e DeploymentCacheRequirementAllocation) Valid() bool {
+	switch e {
+	case DeploymentCacheRequirementAllocationExclusive:
+		return true
+	case DeploymentCacheRequirementAllocationShared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeploymentCacheRequirementLevel.
+const (
+	L1d DeploymentCacheRequirementLevel = "L1d"
+	L1i DeploymentCacheRequirementLevel = "L1i"
+	L2  DeploymentCacheRequirementLevel = "L2"
+	L3  DeploymentCacheRequirementLevel = "L3"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCacheRequirementLevel enum.
+func (e DeploymentCacheRequirementLevel) Valid() bool {
+	switch e {
+	case L1d:
+		return true
+	case L1i:
+		return true
+	case L2:
+		return true
+	case L3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentCpuRequirementArchitectures.
 const (
 	Amd64   DeploymentCpuRequirementArchitectures = "amd64"
@@ -302,16 +344,16 @@ func (e DeploymentCpuRequirementClass) Valid() bool {
 
 // Defines values for DeploymentCpuRequirementType.
 const (
-	Isolated DeploymentCpuRequirementType = "isolated"
-	Shared   DeploymentCpuRequirementType = "shared"
+	DeploymentCpuRequirementTypeIsolated DeploymentCpuRequirementType = "isolated"
+	DeploymentCpuRequirementTypeShared   DeploymentCpuRequirementType = "shared"
 )
 
 // Valid indicates whether the value is a known member of the DeploymentCpuRequirementType enum.
 func (e DeploymentCpuRequirementType) Valid() bool {
 	switch e {
-	case Isolated:
+	case DeploymentCpuRequirementTypeIsolated:
 		return true
-	case Shared:
+	case DeploymentCpuRequirementTypeShared:
 		return true
 	default:
 		return false
@@ -806,6 +848,9 @@ type ApplicationPackageStatusState string
 
 // CapacityRequirements Minimum device capacity required by the deployment profile.
 type CapacityRequirements struct {
+	// Cache Cache requirements
+	Cache *[]DeploymentCacheRequirement `json:"cache" yaml:"cache"`
+
 	// Cpu CPU elements specifying the CPU requirements for the deployment.
 	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
@@ -884,6 +929,24 @@ type ContextualInfo struct {
 	// Message Message of the contextual information
 	Message *string `json:"message,omitempty"`
 }
+
+// DeploymentCacheRequirement Cache requirement or capability
+type DeploymentCacheRequirement struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation DeploymentCacheRequirementAllocation `json:"allocation" yaml:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level DeploymentCacheRequirementLevel `json:"level" yaml:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size" yaml:"size"`
+}
+
+// DeploymentCacheRequirementAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type DeploymentCacheRequirementAllocation string
+
+// DeploymentCacheRequirementLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type DeploymentCacheRequirementLevel string
 
 // DeploymentCpuRequirement CPU element specifying the CPU requirements for the deployment.
 type DeploymentCpuRequirement struct {

@@ -124,7 +124,8 @@ func (da *DeviceClientSettings) ReportCapabilities(
 ) error {
 	da.log.Infow("Starting capabilities reporting",
 		"deviceClientId", capabilities.Properties.Id,
-		"cpu", summarizeCapabilitiesCPU(capabilities))
+		"cpu", summarizeCapabilitiesCPU(capabilities),
+		"cache", summarizeCapabilitiesCache(capabilities))
 	err := da.apiClient.ReportCapabilities(ctx, capabilities.Properties.Id, capabilities)
 	if err != nil {
 		if pd, ok := sbi.AsProblemDetail(err); ok {
@@ -181,6 +182,36 @@ func summarizeCapabilitiesCPU(capabilities sbi.DeviceCapabilitiesManifest) strin
 
 		parts = append(parts, fmt.Sprintf("cpu[%d]={cores=%g, class=%s, frequency={baseMHz=%s, maxMHz=%s}, type=%s, architecture=%s}",
 			cpuIndex, cpu.Cores, cpuClass, baseMHz, maxMHz, cpuType, architecture))
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func summarizeCapabilitiesCache(capabilities sbi.DeviceCapabilitiesManifest) string {
+	caches := capabilities.Properties.Cache
+	if caches == nil || len(*caches) == 0 {
+		return "none"
+	}
+
+	parts := make([]string, 0, len(*caches))
+	for cacheIndex, cache := range *caches {
+		size := cache.Size
+		if size == "" {
+			size = "<empty>"
+		}
+
+		allocationTypes := "none"
+		if len(cache.AllocationTypes) > 0 {
+			allocations := make([]string, 0, len(cache.AllocationTypes))
+			for _, allocationType := range cache.AllocationTypes {
+				allocations = append(allocations, string(allocationType))
+			}
+			allocationTypes = strings.Join(allocations, "|")
+		}
+
+		parts = append(parts, fmt.Sprintf("cache[%d]={level=%s, allocationTypes=[%s], size=%s}",
+			cacheIndex, cache.Level, allocationTypes, size))
 	}
 
 	return strings.Join(parts, "; ")

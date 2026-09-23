@@ -38,6 +38,26 @@
             }
 
         ],
+         "cache": [
+            {
+                "level": "L3",
+                "cacheId": "0",
+                "size": "115200KB",
+                "allocationTypes": [
+                    "shared",
+                    "exclusive"
+                ]
+            },
+            {
+                "level": "L3",
+                "cacheId": "1",
+                "size": "115200KB",
+                "allocationTypes": [
+                    "shared",
+                    "exclusive"
+                ]
+            }
+        ],
         "memory": "59Gi",
         "storage": "1862Gi",
         "peripherals": [

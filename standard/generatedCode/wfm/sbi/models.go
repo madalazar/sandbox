@@ -40,6 +40,48 @@ func (e ComponentStatusState) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentCacheRequirementAllocation.
+const (
+	DeploymentCacheRequirementAllocationExclusive DeploymentCacheRequirementAllocation = "exclusive"
+	DeploymentCacheRequirementAllocationShared    DeploymentCacheRequirementAllocation = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCacheRequirementAllocation enum.
+func (e DeploymentCacheRequirementAllocation) Valid() bool {
+	switch e {
+	case DeploymentCacheRequirementAllocationExclusive:
+		return true
+	case DeploymentCacheRequirementAllocationShared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeploymentCacheRequirementLevel.
+const (
+	DeploymentCacheRequirementLevelL1d DeploymentCacheRequirementLevel = "L1d"
+	DeploymentCacheRequirementLevelL1i DeploymentCacheRequirementLevel = "L1i"
+	DeploymentCacheRequirementLevelL2  DeploymentCacheRequirementLevel = "L2"
+	DeploymentCacheRequirementLevelL3  DeploymentCacheRequirementLevel = "L3"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCacheRequirementLevel enum.
+func (e DeploymentCacheRequirementLevel) Valid() bool {
+	switch e {
+	case DeploymentCacheRequirementLevelL1d:
+		return true
+	case DeploymentCacheRequirementLevelL1i:
+		return true
+	case DeploymentCacheRequirementLevelL2:
+		return true
+	case DeploymentCacheRequirementLevelL3:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentCpuRequirementArchitectures.
 const (
 	DeploymentCpuRequirementArchitecturesAmd64   DeploymentCpuRequirementArchitectures = "amd64"
@@ -130,6 +172,48 @@ func (e DeploymentStatusManifestStatusState) Valid() bool {
 	case DeploymentStatusManifestStatusStateRemoved:
 		return true
 	case DeploymentStatusManifestStatusStateRemoving:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCacheAllocationTypes.
+const (
+	DeviceCapabilitiesManifestPropertiesCacheAllocationTypesExclusive DeviceCapabilitiesManifestPropertiesCacheAllocationTypes = "exclusive"
+	DeviceCapabilitiesManifestPropertiesCacheAllocationTypesShared    DeviceCapabilitiesManifestPropertiesCacheAllocationTypes = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCacheAllocationTypes enum.
+func (e DeviceCapabilitiesManifestPropertiesCacheAllocationTypes) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCacheAllocationTypesExclusive:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheAllocationTypesShared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCacheLevel.
+const (
+	DeviceCapabilitiesManifestPropertiesCacheLevelL1d DeviceCapabilitiesManifestPropertiesCacheLevel = "L1d"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL1i DeviceCapabilitiesManifestPropertiesCacheLevel = "L1i"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL2  DeviceCapabilitiesManifestPropertiesCacheLevel = "L2"
+	DeviceCapabilitiesManifestPropertiesCacheLevelL3  DeviceCapabilitiesManifestPropertiesCacheLevel = "L3"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCacheLevel enum.
+func (e DeviceCapabilitiesManifestPropertiesCacheLevel) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL1d:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL1i:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL2:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCacheLevelL3:
 		return true
 	default:
 		return false
@@ -372,6 +456,9 @@ func (e AppDeploymentProfileType) Valid() bool {
 
 // CapacityRequirements Minimum device capacity required by the deployment profile.
 type CapacityRequirements struct {
+	// Cache Cache resources available on the device
+	Cache *[]DeploymentCacheRequirement `json:"cache,omitempty"`
+
 	// Cpu CPU elements specifying the CPU requirements for the deployment.
 	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
@@ -410,6 +497,24 @@ type DeploymentBundleRef struct {
 	// Url Content-addressable retrieval endpoint of the form /api/v1/bundles/{digest} where {digest} equals bundle.digest.
 	Url *string `json:"url,omitempty"`
 }
+
+// DeploymentCacheRequirement Cache requirement or capability
+type DeploymentCacheRequirement struct {
+	// Allocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+	Allocation DeploymentCacheRequirementAllocation `json:"allocation"`
+
+	// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+	Level DeploymentCacheRequirementLevel `json:"level"`
+
+	// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+	Size *string `json:"size,omitempty"`
+}
+
+// DeploymentCacheRequirementAllocation Cache allocation type. exclusive = dedicated cache partition (requires hardware CAT support), shared = shared cache access.
+type DeploymentCacheRequirementAllocation string
+
+// DeploymentCacheRequirementLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type DeploymentCacheRequirementLevel string
 
 // DeploymentCpuRequirement CPU element specifying the CPU requirements for the deployment.
 type DeploymentCpuRequirement struct {
@@ -478,6 +583,17 @@ type DeviceCapabilitiesManifest struct {
 	// Labels Optional supplier-defined key/value pair metadata used for device matching via eligibilityRules label selectors. Values MUST be a string, number, boolean, or an array of strings or numbers. Margo does not assign semantics to any particular label key or value. Label keys are case-sensitive. Implementations SHOULD use stable, collision-resistant label names, prefixing with an organization domain is recommended.
 	Labels     *map[string]DeviceCapabilitiesManifest_Labels_AdditionalProperties `json:"labels,omitempty"`
 	Properties struct {
+		// Cache Cache resources available on the device
+		Cache *[]struct {
+			// AllocationTypes Cache allocation types supported by the device. exclusive = device supports dedicated cache partitioning, shared = device supports shared cache access.
+			AllocationTypes []DeviceCapabilitiesManifestPropertiesCacheAllocationTypes `json:"allocationTypes"`
+
+			// Level Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+			Level DeviceCapabilitiesManifestPropertiesCacheLevel `json:"level"`
+
+			// Size Minimum required cache amount. Value is given in binary units (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+			Size string `json:"size"`
+		} `json:"cache,omitempty"`
 		Cpus *[]struct {
 			Architecture *DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
 
@@ -530,6 +646,12 @@ type DeviceCapabilitiesManifestLabels4 = []float32
 type DeviceCapabilitiesManifest_Labels_AdditionalProperties struct {
 	union json.RawMessage
 }
+
+// DeviceCapabilitiesManifestPropertiesCacheAllocationTypes defines model for DeviceCapabilitiesManifest.Properties.Cache.AllocationTypes.
+type DeviceCapabilitiesManifestPropertiesCacheAllocationTypes string
+
+// DeviceCapabilitiesManifestPropertiesCacheLevel Cache level. L3 = Level 3 Cache, L2 = Level 2 Cache, L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+type DeviceCapabilitiesManifestPropertiesCacheLevel string
 
 // DeviceCapabilitiesManifestPropertiesCpusArchitecture defines model for DeviceCapabilitiesManifest.Properties.Cpus.Architecture.
 type DeviceCapabilitiesManifestPropertiesCpusArchitecture string

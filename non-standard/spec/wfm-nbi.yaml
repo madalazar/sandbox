@@ -1445,6 +1445,15 @@ components:
           items:
             $ref: '#/components/schemas/DeploymentCpuRequirement'
           description: CPU elements specifying the CPU requirements for the deployment.
+        cache:
+          # x-go-field-tags: 'json:"cache" yaml:"cache"'
+          x-oapi-codegen-extra-tags:
+            json: "cache"
+            yaml: "cache"
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentCacheRequirement'
+          description: Cache requirements
         memory:
           type: string
           description: >-
@@ -1545,6 +1554,42 @@ components:
           $ref: '#/components/schemas/Selector'
           description: Selector evaluated against array elements. Required for the `ContainsAll` or `ContainsAny` operator.
     
+    DeploymentCacheRequirement:
+      type: object
+      description: Cache requirement or capability
+      required: [level, allocation]
+      properties:
+        level:
+          # x-go-field-tags: 'json:"level" yaml:"level"'
+          x-oapi-codegen-extra-tags:
+            json: "level"
+            yaml: "level"
+          type: string
+          enum: [L3, L2, L1d, L1i]
+          description: >
+            Cache level.
+            L3 = Level 3 Cache, L2 = Level 2 Cache,
+            L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+        allocation:
+          # x-go-field-tags: 'json:"allocation" yaml:"allocation"'
+          x-oapi-codegen-extra-tags:
+            json: "allocation"
+            yaml: "allocation"
+          type: string
+          enum: [exclusive, shared]
+          description: >
+            Cache allocation type.
+            exclusive = dedicated cache partition (requires hardware CAT support),
+            shared = shared cache access.
+        size:
+          # x-go-field-tags: 'json:"size" yaml:"size"'
+          x-oapi-codegen-extra-tags:
+            json: "size"
+            yaml: "size"
+          type: string
+          description: >
+            Minimum required cache amount. Value is given in binary units
+            (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
 
     # Common Schemas
     ContextualInfo:
