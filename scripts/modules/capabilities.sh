@@ -43,8 +43,8 @@ _validate_capabilities_update_inputs() {
     return 1
   fi
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "ERROR: jq is required to update capabilities.json" >&2
+  if ! command -v yq >/dev/null 2>&1; then
+    echo "ERROR: yq is required to update capabilities.json" >&2
     return 1
   fi
 }
@@ -96,7 +96,7 @@ _count_and_group_cores() {
     local kind_key="${cpu_type}|${cpu_class}"
     core_counts_ref["$kind_key"]=$(( ${core_counts_ref["$kind_key"]:-0} + 1 ))
     total_cores_ref=$((total_cores_ref + 1))
-  done < <(jq -r '.[] | [.id, .class, .type] | @tsv' <<< "$topology_json")
+  done < <(yq eval -r '.[] | [.id, .class, .type] | @tsv' <<< "$topology_json")
 
   if [[ "$total_cores_ref" -le 0 ]]; then
     echo "ERROR: CPU topology contains no physical cores" >&2
@@ -115,24 +115,24 @@ _build_cpus_json() {
     [[ -n "$kind_key" ]] && sorted_kind_keys+=("$kind_key")
   done < <(printf '%s\n' "${!kind_counts_ref[@]}" | sort)
 
-  local cpus_json='[]'
+  # Single-pass assembly: collect JSON objects in a Bash array and format with yq in one pass.
+  # NOTE: Direct string interpolation into JSON without escaping is vulnerable to
+  # escaping/syntax issues if variable values ever contain characters like '"', '$', or '\'.
+  local -a items=()
   local cpu_type cpu_class
   for kind_key in "${sorted_kind_keys[@]}"; do
     IFS='|' read -r cpu_type cpu_class <<< "$kind_key"
-
-    if ! cpus_json="$(jq -c \
-      --argjson cores "${kind_counts_ref[$kind_key]}" \
-      --arg class "$cpu_class" \
-      --arg type "$cpu_type" \
-      --arg architecture "$cpu_arch" \
-      '. + [{cores: $cores, class: $class, type: $type, architecture: $architecture}]' \
-      <<< "$cpus_json")"; then
-      echo "ERROR: Failed to construct CPU capabilities JSON" >&2
-      return 1
-    fi
+    local cores="${kind_counts_ref[$kind_key]}"
+    items+=("{\"cores\":$cores,\"class\":\"$cpu_class\",\"type\":\"$cpu_type\",\"architecture\":\"$cpu_arch\"}")
   done
 
-  printf '%s\n' "$cpus_json"
+  local json_raw
+  json_raw="$(IFS=,; echo "[${items[*]}]")"
+
+  if ! yq eval -o=json -I=0 '.' - <<< "$json_raw"; then
+    echo "ERROR: Failed to construct CPU capabilities JSON" >&2
+    return 1
+  fi
 }
 
 update_cpu_capabilities() {
@@ -168,13 +168,13 @@ update_cpu_capabilities() {
     return 1
   fi
 
-  if ! jq --argjson cpus "$cpus_json" '
-    if (.properties | type) == "object" and (.properties.cpus | type) == "array" then
-      .properties.cpus = $cpus
-    else
-      error("Refusing CPU update: properties.cpus must be an array")
-    end
-  ' "$capabilities_file" > "$tmp_file"; then
+  if ! yq eval -e '((.properties | type) == "!!map") and ((.properties.cpus | type) == "!!seq")' - < "$capabilities_file" >/dev/null 2>&1; then
+    rm -f "$tmp_file"
+    echo "ERROR: Refusing CPU update: properties.cpus must be an array in $capabilities_file" >&2
+    return 1
+  fi
+
+  if ! CPUS_JSON="$cpus_json" yq eval -o=json -P '.properties.cpus = env(CPUS_JSON)' - < "$capabilities_file" > "$tmp_file"; then
     rm -f "$tmp_file"
     echo "ERROR: Failed to update properties.cpus in $capabilities_file" >&2
     return 1
