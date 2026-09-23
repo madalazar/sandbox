@@ -443,8 +443,8 @@ build_cpu_topology() {
 read_cpu_topology_as_json() {
   local cache_file="${1:-$CPU_TOPOLOGY_CACHE_FILE}"
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "[ERROR] jq is required to serialize CPU topology" >&2
+  if ! command -v yq >/dev/null 2>&1; then
+    echo "[ERROR] yq is required to serialize CPU topology" >&2
     return 1
   fi
   if [[ ! -f "$cache_file" ]]; then
@@ -456,19 +456,23 @@ read_cpu_topology_as_json() {
     return 1
   fi
 
-  local topology_json='[]'
+  # Single-pass assembly: collect JSON objects in a Bash array and pass them
+  # to yq in one pass instead of spawning yq per core line.
+  # NOTE: Direct string interpolation into JSON without escaping is vulnerable to
+  # escaping/syntax issues if variable values ever contain characters like '"', '$', or '\'.
+  local -a items=()
   local id arch class type
   while IFS=$'\t' read -r id arch class type; do
     [[ "$id" =~ ^[0-9]+$ ]] || continue
-    topology_json="$(jq -c \
-      --argjson id "$id" \
-      --arg architecture "$arch" \
-      --arg class "$class" \
-      --arg type "$type" \
-      '. + [{id: $id, architecture: $architecture, class: $class, type: $type}]' \
-      <<< "$topology_json")" || return 1
+    items+=("{\"id\":$id,\"architecture\":\"$arch\",\"class\":\"$class\",\"type\":\"$type\"}")
   done < "$cache_file"
 
-  printf '%s\n' "$topology_json"
+  local json_raw
+  json_raw="$(IFS=,; echo "[${items[*]}]")"
+
+  if ! yq eval -o=json -I=0 '.' - <<< "$json_raw"; then
+    echo "[ERROR] failed to serialize CPU topology JSON" >&2
+    return 1
+  fi
 }
 
