@@ -466,8 +466,8 @@ build_cache_topology() {
 read_cache_topology_as_json() {
   local cache_file="${1:-$CACHE_TOPOLOGY_CACHE_FILE}"
 
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "[ERROR] jq is required to serialize cache topology" >&2
+  if ! command -v yq >/dev/null 2>&1; then
+    echo "[ERROR] yq is required to serialize cache topology" >&2
     return 1
   fi
   if [[ ! -f "$cache_file" ]]; then
@@ -479,7 +479,7 @@ read_cache_topology_as_json() {
     return 1
   fi
 
-  local topology_json='[]'
+  local -a items=()
   local line_number=0
   local record_count=0
   local level cache_id allocation_types size_token ways way_size_kib cores
@@ -505,23 +505,21 @@ read_cache_topology_as_json() {
     fi
     seen_instances["$instance_key"]=1
 
-    topology_json="$(jq -c \
-      --arg level "$level" \
-      --arg id "$cache_id" \
-      --arg allocation_types "$allocation_types" \
-      --argjson size_kib "$size_kib" \
-      --argjson ways "$ways" \
-      --argjson way_size_kib "$way_size_kib" \
-      --arg cores "$cores" \
-      '. + [{
-        level: $level,
-        id: $id,
-        allocationTypes: ($allocation_types | split(",")),
-        sizeKiB: $size_kib,
-        ways: $ways,
-        waySizeKiB: $way_size_kib,
-        cores: $cores
-      }]' <<< "$topology_json")" || return 1
+    local types_json="["
+    local first=1
+    local mode
+    IFS=',' read -ra type_arr <<< "$allocation_types"
+    for mode in "${type_arr[@]}"; do
+      if (( first == 1 )); then
+        types_json+="\"$mode\""
+        first=0
+      else
+        types_json+=",\"$mode\""
+      fi
+    done
+    types_json+="]"
+
+    items+=("{\"level\":\"$level\",\"id\":\"$cache_id\",\"allocationTypes\":$types_json,\"sizeKiB\":$size_kib,\"ways\":$ways,\"waySizeKiB\":$way_size_kib,\"cores\":\"$cores\"}")
     record_count=$((record_count + 1))
   done < "$cache_file"
 
@@ -530,5 +528,11 @@ read_cache_topology_as_json() {
     return 1
   fi
 
-  printf '%s\n' "$topology_json"
+  local json_raw
+  json_raw="$(IFS=,; echo "[${items[*]}]")"
+
+  if ! yq eval -o=json -I=0 '.' - <<< "$json_raw"; then
+    echo "[ERROR] failed to serialize cache topology JSON" >&2
+    return 1
+  fi
 }
