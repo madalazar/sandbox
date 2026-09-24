@@ -3,7 +3,7 @@
 #
 # Provides:
 #   - Cache discovery from sysfs (with lstopo fallback)
-#   - Cache way and allocation mode detection from resctrl info
+#   - Cache way and allocation mode detection from resctrl (with pqos fallback)
 #   - Cache topology TSV and JSON serialization
 #
 # Globals populated by cache discovery:
@@ -171,7 +171,7 @@ _discover_cache_topology() {
     _cache_topology_debug "parsed cache key=${instance_key} cores=${cores:-<empty>}"
   done <<< "$discovered_instances"
 
-  # Populate _CACHE_TOPOLOGY_WAYS if resctrl is available
+  # Populate _CACHE_TOPOLOGY_WAYS if resctrl or pqos is available
   declare -gA _CACHE_TOPOLOGY_WAYS=() _CACHE_TOPOLOGY_WAY_SIZE_KIB=()
   local ways
   ways="$(_get_cache_ways_for_level L3 2>/dev/null || true)"
@@ -183,7 +183,8 @@ _discover_cache_topology() {
   for instance_key in "${!_CACHE_TOPOLOGY_INSTANCES[@]}"; do
     local size_kib_from_key="${instance_key##*|}"
     if [[ "$size_kib_from_key" =~ ^[0-9]+$ ]] && (( size_kib_from_key > 0 )); then
-      local way_size=$(( (size_kib_from_key + ways/2) / ways ))  # round to nearest
+      local way_size
+      way_size="$(_get_cache_way_size_kib_for_level L3 "$size_kib_from_key" "$ways" 2>/dev/null || true)"
       _CACHE_TOPOLOGY_WAYS["$instance_key"]="$ways"
       _CACHE_TOPOLOGY_WAY_SIZE_KIB["$instance_key"]="$way_size"
     fi
@@ -217,7 +218,7 @@ _count_bits_in_hex() {
 }
 
 # Get the number of cache ways for a level from resctrl cbm_mask.
-_get_cache_ways_for_level() {
+_get_cache_ways_from_resctrl() {
   local level="$1"
   local info_dir="$CACHE_RESCTRL_ROOT/info/${level}"
   [[ -r "$info_dir/cbm_mask" ]] || { echo 0; return 1; }
@@ -227,6 +228,128 @@ _get_cache_ways_for_level() {
   [[ -z "$mask" ]] && { echo 0; return 1; }
 
   _count_bits_in_hex "$mask"
+}
+
+_PQOS_CAPABILITIES_OUTPUT=""
+_PQOS_CHECKED=0
+
+_get_pqos_capabilities() {
+  if (( _PQOS_CHECKED == 1 )); then
+    printf '%s\n' "$_PQOS_CAPABILITIES_OUTPUT"
+    [[ -n "$_PQOS_CAPABILITIES_OUTPUT" ]] && return 0 || return 1
+  fi
+
+  _PQOS_CHECKED=1
+  if ! command -v pqos >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local output
+  output="$(pqos -D 2>/dev/null || true)"
+  if [[ -n "$output" ]]; then
+    _PQOS_CAPABILITIES_OUTPUT="$output"
+    printf '%s\n' "$_PQOS_CAPABILITIES_OUTPUT"
+    return 0
+  fi
+  return 1
+}
+
+# Get the number of cache ways for a level from pqos capabilities.
+_get_cache_ways_from_pqos() {
+  local level="$1"
+  local pqos_out
+  pqos_out="$(_get_pqos_capabilities)" || { echo 0; return 1; }
+
+  local ways
+  ways="$(awk -v lvl="${level} Cache" '
+    $0 ~ lvl { in_lvl=1; next }
+    in_lvl && /^[[:space:]]*[A-Za-z0-9]/ && $0 !~ /^[[:space:]]*(Num|Way|Line|Total)/ { in_lvl=0 }
+    in_lvl && /Num ways:/ { print $3; exit }
+  ' <<< "$pqos_out")"
+
+  if [[ -z "$ways" ]]; then
+    ways="$(awk -v lvl="${level} CAT" '
+      $0 ~ lvl { in_lvl=1; next }
+      in_lvl && /^[[:space:]]*[A-Za-z0-9]/ && $0 !~ /^[[:space:]]*(CDP|Non-|I\/O|Num|Way|Ways|Min|Max)/ { in_lvl=0 }
+      in_lvl && /Max CBM bits:/ { print $4; exit }
+    ' <<< "$pqos_out")"
+  fi
+
+  [[ "$ways" =~ ^[0-9]+$ ]] || ways=0
+  echo "$ways"
+}
+
+# Get the number of cache ways for a level (resctrl with pqos fallback).
+_get_cache_ways_for_level() {
+  local level="$1"
+  local ways
+  ways="$(_get_cache_ways_from_resctrl "$level" 2>/dev/null || true)"
+  if [[ "$ways" =~ ^[0-9]+$ ]] && (( ways > 0 )); then
+    echo "$ways"
+    return 0
+  fi
+
+  _get_cache_ways_from_pqos "$level"
+}
+
+# Get the cache way size in KiB for a level from resctrl (computed from cache size and ways).
+_get_cache_way_size_kib_from_resctrl() {
+  local level="$1"
+  local size_kib="$2"
+  local ways="$3"
+
+  local way_size=0
+  if [[ "$size_kib" =~ ^[0-9]+$ ]] && (( size_kib > 0 )) &&
+     [[ "$ways" =~ ^[0-9]+$ ]] && (( ways > 0 )); then
+    way_size="$(( (size_kib + ways/2) / ways ))"
+  fi
+
+  echo "$way_size"
+}
+
+# Get the cache way size in KiB for a level from pqos capabilities.
+_get_cache_way_size_kib_from_pqos() {
+  local level="$1"
+  local pqos_out
+  pqos_out="$(_get_pqos_capabilities)" || { echo 0; return 1; }
+
+  local way_size_bytes
+  way_size_bytes="$(awk -v lvl="${level} Cache" '
+    $0 ~ lvl { in_lvl=1; next }
+    in_lvl && /^[[:space:]]*[A-Za-z0-9]/ && $0 !~ /^[[:space:]]*(Num|Way|Line|Total)/ { in_lvl=0 }
+    in_lvl && /Way size:/ { print $3; exit }
+  ' <<< "$pqos_out")"
+
+  if [[ -z "$way_size_bytes" ]]; then
+    way_size_bytes="$(awk -v lvl="${level} CAT" '
+      $0 ~ lvl { in_lvl=1; next }
+      in_lvl && /^[[:space:]]*[A-Za-z0-9]/ && $0 !~ /^[[:space:]]*(CDP|Non-|I\/O|Num|Way|Ways|Min|Max)/ { in_lvl=0 }
+      in_lvl && /Way size:/ { print $3; exit }
+    ' <<< "$pqos_out")"
+  fi
+
+  local way_size_kib=0
+  if [[ "$way_size_bytes" =~ ^[0-9]+$ ]] && (( way_size_bytes > 0 )); then
+    way_size_kib="$(( way_size_bytes / 1024 ))"
+  fi
+
+  echo "$way_size_kib"
+}
+
+# Get the cache way size in KiB for a level (resctrl with pqos fallback).
+_get_cache_way_size_kib_for_level() {
+  local level="$1"
+  local size_kib="${2:-}"
+  local ways="${3:-}"
+
+  local way_size
+  way_size="$(_get_cache_way_size_kib_from_resctrl "$level" "$size_kib" "$ways" 2>/dev/null || true)"
+  if [[ "$way_size" =~ ^[0-9]+$ ]] && (( way_size > 0 )); then
+    echo "$way_size"
+    return 0
+  fi
+
+  _get_cache_way_size_kib_from_pqos "$level"
 }
 
 # Echo allocation modes for a level as a space-separated list.
