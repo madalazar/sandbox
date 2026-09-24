@@ -22,7 +22,7 @@ _build_cpu_topology_json() {
 		return 1
 	}
 
-	jq -c '[.[] | select(.type == "isolated") | {id, class, type}]' <<<"$topology_json"
+	yq eval -o=json -I=0 '[.[] | select(.type == "isolated") | {"id": .id, "class": .class, "type": .type}]' - <<<"$topology_json"
 }
 
 # Print cache topology as a JSON array; write errors to stderr.
@@ -39,14 +39,14 @@ _build_cache_topology_json() {
 		return 1
 	}
 
-	jq -c '[.[] | {
-		level,
-		id: (.id | sub("^L#"; "")),
-		size_kb: .sizeKiB,
-		ways,
-		way_size_kb: .waySizeKiB,
-		cores
-	}]' <<<"$topology_json"
+	yq eval -o=json -I=0 '[.[] | {
+		"level": .level,
+		"id": (.id | sub("^L#", "")),
+		"size_kb": .sizeKiB,
+		"ways": .ways,
+		"way_size_kb": .waySizeKiB,
+		"cores": .cores
+	}]' - <<<"$topology_json"
 }
 
 # Atomically write the combined topology arrays to the host artifact.
@@ -69,12 +69,12 @@ _write_host_topology_json() {
 
 	local base_json='{}'
 	local existing_cores existing_caches existing_clos
-	if [[ -s "$output_file" ]] && jq empty "$output_file" >/dev/null 2>&1; then
+	if [[ -s "$output_file" ]] && yq eval -e '.' - < "$output_file" >/dev/null 2>&1; then
 		base_json="$(<"$output_file")"
 		# generatedAt and other existing fields remain unchanged when topology matches.
-		existing_cores="$(jq -c '.cores // []' <<<"$base_json")" || return 1
-		existing_caches="$(jq -c '.caches // []' <<<"$base_json")" || return 1
-		existing_clos="$(jq -r '.max_clos // 0' <<<"$base_json")" || return 1
+		existing_cores="$(yq eval -o=json -I=0 '.cores // []' - <<<"$base_json")" || return 1
+		existing_caches="$(yq eval -o=json -I=0 '.caches // []' - <<<"$base_json")" || return 1
+		existing_clos="$(yq eval -r '.max_clos // 0' - <<<"$base_json")" || return 1
 		if [[ "$existing_cores" == "$cores_json" && "$existing_caches" == "$caches_json" && "$existing_clos" == "$max_clos" ]]; then
 			echo "[INFO] Host topology unchanged; skipping artifact update: $output_file"
 			return 0
@@ -90,13 +90,17 @@ _write_host_topology_json() {
 		return 1
 	fi
 
-	if ! jq \
-		--arg generated_at "$generated_at" \
-		--argjson cores "$cores_json" \
-		--argjson caches "$caches_json" \
-		--argjson max_clos "$max_clos" \
-		'.schemaVersion //= "v1" | .generatedAt = $generated_at | .cores = $cores | .caches = $caches | .max_clos = $max_clos' \
-		<<<"$base_json" > "$tmp_file"; then
+	if ! GENERATED_AT="$generated_at" \
+		CORES_JSON="$cores_json" \
+		CACHES_JSON="$caches_json" \
+		MAX_CLOS="$max_clos" \
+		yq eval -o=json -P '
+			.schemaVersion = (.schemaVersion // "v1") |
+			.generatedAt = env(GENERATED_AT) |
+			.cores = env(CORES_JSON) |
+			.caches = env(CACHES_JSON) |
+			.max_clos = env(MAX_CLOS)
+		' - <<<"$base_json" > "$tmp_file"; then
 		rm -f "$tmp_file"
 		echo "[ERROR] Failed to serialize host topology JSON" >&2
 		return 1
@@ -122,8 +126,8 @@ generate_topology_artefact() {
 	local max_clos
 	max_clos="$(get_device_max_closids)"
 
-	if ! command -v jq >/dev/null 2>&1; then
-		echo "[ERROR] jq is required to generate host topology JSON" >&2
+	if ! command -v yq >/dev/null 2>&1; then
+		echo "[ERROR] yq is required to generate host topology JSON" >&2
 		return 1
 	fi
 
