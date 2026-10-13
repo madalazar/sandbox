@@ -519,6 +519,24 @@ components:
                   architecture:
                     type: string
                     enum: [amd64, arm64, arm]
+                  class:
+                    type: string
+                    enum: [performance, efficiency, low-power]
+                    description: Core class (P-core, E-core, etc.)
+                  frequency:
+                    type: object
+                    description: Frequency characteristics for this core kind
+                    properties:
+                      maxMHz:
+                        type: number
+                        description: Maximum achievable CPU frequency in MHz
+                      baseMHz:
+                        type: number
+                        description: Base CPU frequency in MHz
+                  type:
+                    type: string
+                    enum: [isolated, shared]
+                    description: Whether these cores are kernel-isolated
             memory:
               type: string
             storage:
@@ -723,6 +741,9 @@ components:
               description: >-
                 Maximum time to wait for component installation to complete.
                 Format is ##m##s (e.g., 5m0s, 8m30s).
+        deviceConstraints:
+          $ref: '#/components/schemas/DeviceConstraints'
+          description: Device constraints specifying the minimum device capabilities and eligibility rules required for the deployment.
     appDeploymentProfile:
       type: object
       description: Application Deployment Profile
@@ -767,8 +788,10 @@ components:
       description: Minimum device capacity required by the deployment profile.
       properties:
         cpu:
-          $ref: '#/components/schemas/DeploymentCpuRequirement'
-          description: CPU element specifying the CPU requirements for the deployment.
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentCpuRequirement'
+          description: CPU elements specifying the CPU requirements for the deployment.
         memory:
           type: string
           description: >-
@@ -796,6 +819,17 @@ components:
             type: string
             enum: [amd64, arm64, arm, riscv64, other]
           description: The CPU architectures supported by the deployment.
+        name:
+          type: string
+          description: Name of the container this CPU requirement applies to
+        class:
+          type: string
+          enum: [performance, efficiency, low-power]
+          description: Core class required by the workload
+        type:
+          type: string
+          enum: [isolated, shared]
+          description: Whether requested cores must be isolated or can be shared
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.

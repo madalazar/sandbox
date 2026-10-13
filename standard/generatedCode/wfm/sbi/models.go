@@ -67,6 +67,45 @@ func (e DeploymentCpuRequirementArchitectures) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentCpuRequirementClass.
+const (
+	DeploymentCpuRequirementClassEfficiency  DeploymentCpuRequirementClass = "efficiency"
+	DeploymentCpuRequirementClassLowPower    DeploymentCpuRequirementClass = "low-power"
+	DeploymentCpuRequirementClassPerformance DeploymentCpuRequirementClass = "performance"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCpuRequirementClass enum.
+func (e DeploymentCpuRequirementClass) Valid() bool {
+	switch e {
+	case DeploymentCpuRequirementClassEfficiency:
+		return true
+	case DeploymentCpuRequirementClassLowPower:
+		return true
+	case DeploymentCpuRequirementClassPerformance:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeploymentCpuRequirementType.
+const (
+	DeploymentCpuRequirementTypeIsolated DeploymentCpuRequirementType = "isolated"
+	DeploymentCpuRequirementTypeShared   DeploymentCpuRequirementType = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCpuRequirementType enum.
+func (e DeploymentCpuRequirementType) Valid() bool {
+	switch e {
+	case DeploymentCpuRequirementTypeIsolated:
+		return true
+	case DeploymentCpuRequirementTypeShared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentStatusManifestStatusState.
 const (
 	DeploymentStatusManifestStatusStateFailed     DeploymentStatusManifestStatusState = "failed"
@@ -112,6 +151,45 @@ func (e DeviceCapabilitiesManifestPropertiesCpusArchitecture) Valid() bool {
 	case DeviceCapabilitiesManifestPropertiesCpusArchitectureArm:
 		return true
 	case DeviceCapabilitiesManifestPropertiesCpusArchitectureArm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusClass.
+const (
+	DeviceCapabilitiesManifestPropertiesCpusClassEfficiency  DeviceCapabilitiesManifestPropertiesCpusClass = "efficiency"
+	DeviceCapabilitiesManifestPropertiesCpusClassLowPower    DeviceCapabilitiesManifestPropertiesCpusClass = "low-power"
+	DeviceCapabilitiesManifestPropertiesCpusClassPerformance DeviceCapabilitiesManifestPropertiesCpusClass = "performance"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusClass enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusClass) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCpusClassEfficiency:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusClassLowPower:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusClassPerformance:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCapabilitiesManifestPropertiesCpusType.
+const (
+	DeviceCapabilitiesManifestPropertiesCpusTypeIsolated DeviceCapabilitiesManifestPropertiesCpusType = "isolated"
+	DeviceCapabilitiesManifestPropertiesCpusTypeShared   DeviceCapabilitiesManifestPropertiesCpusType = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesCpusType enum.
+func (e DeviceCapabilitiesManifestPropertiesCpusType) Valid() bool {
+	switch e {
+	case DeviceCapabilitiesManifestPropertiesCpusTypeIsolated:
+		return true
+	case DeviceCapabilitiesManifestPropertiesCpusTypeShared:
 		return true
 	default:
 		return false
@@ -294,8 +372,8 @@ func (e AppDeploymentProfileType) Valid() bool {
 
 // CapacityRequirements Minimum device capacity required by the deployment profile.
 type CapacityRequirements struct {
-	// Cpu CPU element specifying the CPU requirements for the deployment.
-	Cpu *DeploymentCpuRequirement `json:"cpu,omitempty"`
+	// Cpu CPU elements specifying the CPU requirements for the deployment.
+	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
 	// Memory The minimum amount of memory required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
 	Memory *string `json:"memory,omitempty"`
@@ -338,12 +416,27 @@ type DeploymentCpuRequirement struct {
 	// Architectures The CPU architectures supported by the deployment.
 	Architectures *[]DeploymentCpuRequirementArchitectures `json:"architectures,omitempty"`
 
+	// Class Core class required by the workload
+	Class *DeploymentCpuRequirementClass `json:"class,omitempty"`
+
 	// Cores The required amount of CPU cores. Specified as decimal units of CPU cores (e.g., `0.5` is half a core).
 	Cores float32 `json:"cores"`
+
+	// Name Name of the container this CPU requirement applies to
+	Name *string `json:"name,omitempty"`
+
+	// Type Whether requested cores must be isolated or can be shared
+	Type *DeploymentCpuRequirementType `json:"type,omitempty"`
 }
 
 // DeploymentCpuRequirementArchitectures defines model for DeploymentCpuRequirement.Architectures.
 type DeploymentCpuRequirementArchitectures string
+
+// DeploymentCpuRequirementClass Core class required by the workload
+type DeploymentCpuRequirementClass string
+
+// DeploymentCpuRequirementType Whether requested cores must be isolated or can be shared
+type DeploymentCpuRequirementType string
 
 // DeploymentManifestRef Reference to a deployment manifest with content addressing and integrity verification.
 type DeploymentManifestRef struct {
@@ -387,7 +480,22 @@ type DeviceCapabilitiesManifest struct {
 	Properties struct {
 		Cpus *[]struct {
 			Architecture *DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-			Cores        float32                                               `json:"cores"`
+
+			// Class Core class (P-core, E-core, etc.)
+			Class *DeviceCapabilitiesManifestPropertiesCpusClass `json:"class,omitempty"`
+			Cores float32                                        `json:"cores"`
+
+			// Frequency Frequency characteristics for this core kind
+			Frequency *struct {
+				// BaseMHz Base CPU frequency in MHz
+				BaseMHz *float32 `json:"baseMHz,omitempty"`
+
+				// MaxMHz Maximum achievable CPU frequency in MHz
+				MaxMHz *float32 `json:"maxMHz,omitempty"`
+			} `json:"frequency,omitempty"`
+
+			// Type Whether these cores are kernel-isolated
+			Type *DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
 		} `json:"cpus,omitempty"`
 		Id                       DeviceId                                                        `json:"id"`
 		Interfaces               *[]DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
@@ -425,6 +533,12 @@ type DeviceCapabilitiesManifest_Labels_AdditionalProperties struct {
 
 // DeviceCapabilitiesManifestPropertiesCpusArchitecture defines model for DeviceCapabilitiesManifest.Properties.Cpus.Architecture.
 type DeviceCapabilitiesManifestPropertiesCpusArchitecture string
+
+// DeviceCapabilitiesManifestPropertiesCpusClass Core class (P-core, E-core, etc.)
+type DeviceCapabilitiesManifestPropertiesCpusClass string
+
+// DeviceCapabilitiesManifestPropertiesCpusType Whether these cores are kernel-isolated
+type DeviceCapabilitiesManifestPropertiesCpusType string
 
 // DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes defines model for DeviceCapabilitiesManifest.Properties.SupportedDeploymentTypes.
 type DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes string
@@ -628,6 +742,9 @@ type AppParameterValue struct {
 
 // ApplicationDeploymentProfileComponent A component within a deployment profile. Uses the unified ComponentProperties shape — both Helm and Compose components share the same OCI coordinate structure.
 type ApplicationDeploymentProfileComponent struct {
+	// DeviceConstraints Device constraints specifying the minimum device capabilities and eligibility rules required for the deployment.
+	DeviceConstraints *DeviceConstraints `json:"deviceConstraints,omitempty"`
+
 	// Name Name of the component
 	Name       string `json:"name"`
 	Properties struct {

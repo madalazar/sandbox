@@ -279,6 +279,45 @@ func (e DeploymentCpuRequirementArchitectures) Valid() bool {
 	}
 }
 
+// Defines values for DeploymentCpuRequirementClass.
+const (
+	Efficiency  DeploymentCpuRequirementClass = "efficiency"
+	LowPower    DeploymentCpuRequirementClass = "low-power"
+	Performance DeploymentCpuRequirementClass = "performance"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCpuRequirementClass enum.
+func (e DeploymentCpuRequirementClass) Valid() bool {
+	switch e {
+	case Efficiency:
+		return true
+	case LowPower:
+		return true
+	case Performance:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeploymentCpuRequirementType.
+const (
+	Isolated DeploymentCpuRequirementType = "isolated"
+	Shared   DeploymentCpuRequirementType = "shared"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentCpuRequirementType enum.
+func (e DeploymentCpuRequirementType) Valid() bool {
+	switch e {
+	case Isolated:
+		return true
+	case Shared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeploymentExecutionProfileType.
 const (
 	DeploymentExecutionProfileTypeCompose DeploymentExecutionProfileType = "compose"
@@ -592,6 +631,9 @@ type ApplicationDeploymentOperationStatus string
 
 // ApplicationDeploymentProfileComponent Application Deployment Profile Component
 type ApplicationDeploymentProfileComponent struct {
+	// DeviceConstraints Description of the device capabilties required for this particular application
+	DeviceConstraints *DeviceConstraints `json:"deviceConstraints" yaml:"deviceConstraints"`
+
 	// Name Name of the component
 	Name       string `json:"name" yaml:"name"`
 	Properties struct {
@@ -764,8 +806,8 @@ type ApplicationPackageStatusState string
 
 // CapacityRequirements Minimum device capacity required by the deployment profile.
 type CapacityRequirements struct {
-	// Cpu CPU element specifying the CPU requirements for the deployment.
-	Cpu *DeploymentCpuRequirement `json:"cpu,omitempty"`
+	// Cpu CPU elements specifying the CPU requirements for the deployment.
+	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
 	// Memory The minimum amount of memory required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
 	Memory *string `json:"memory,omitempty"`
@@ -848,12 +890,27 @@ type DeploymentCpuRequirement struct {
 	// Architectures The CPU architectures supported by the deployment.
 	Architectures *[]DeploymentCpuRequirementArchitectures `json:"architectures,omitempty"`
 
+	// Class Core class required by the workload
+	Class *DeploymentCpuRequirementClass `json:"class" yaml:"class"`
+
 	// Cores The required amount of CPU cores. Specified as decimal units of CPU cores (e.g., `0.5` is half a core).
 	Cores float32 `json:"cores"`
+
+	// Name Name of the container this CPU requirement applies to
+	Name *string `json:"name" yaml:"name"`
+
+	// Type Whether requested cores must be isolated or can be shared
+	Type *DeploymentCpuRequirementType `json:"type" yaml:"type"`
 }
 
 // DeploymentCpuRequirementArchitectures defines model for DeploymentCpuRequirement.Architectures.
 type DeploymentCpuRequirementArchitectures string
+
+// DeploymentCpuRequirementClass Core class required by the workload
+type DeploymentCpuRequirementClass string
+
+// DeploymentCpuRequirementType Whether requested cores must be isolated or can be shared
+type DeploymentCpuRequirementType string
 
 // DeploymentExecutionProfile Application Deployment Profile
 type DeploymentExecutionProfile struct {
@@ -898,6 +955,9 @@ type DeploymentParameters map[string]DeploymentParameterValue
 
 // DeploymentProfileComponent Application Deployment Profile Component
 type DeploymentProfileComponent struct {
+	// DeviceConstraints Description of the device capabilties required for this particular component
+	DeviceConstraints *DeviceConstraints `json:"deviceConstraints,omitempty"`
+
 	// Name Name of the component
 	Name       string `json:"name"`
 	Properties struct {

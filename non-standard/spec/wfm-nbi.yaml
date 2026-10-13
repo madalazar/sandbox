@@ -770,6 +770,13 @@ components:
           - repository
           - revision
           type: object
+        deviceConstraints:
+          # x-go-field-tags: 'json:"deviceConstraints" yaml:"deviceConstraints"'
+          x-oapi-codegen-extra-tags:
+            json: "deviceConstraints"
+            yaml: "deviceConstraints"
+          description: Description of the device capabilties required for this particular application
+          $ref: "#/components/schemas/DeviceConstraints"
       required:
       - name
       - properties
@@ -1203,7 +1210,9 @@ components:
             wait:
               type: boolean
               description: Wait for the component to be ready
-
+        deviceConstraints:
+          description: Description of the device capabilties required for this particular component
+          $ref: "#/components/schemas/DeviceConstraints"
 
     DeploymentParameterTarget:
       type: object
@@ -1432,8 +1441,10 @@ components:
       description: Minimum device capacity required by the deployment profile.
       properties:
         cpu:
-          $ref: '#/components/schemas/DeploymentCpuRequirement'
-          description: CPU element specifying the CPU requirements for the deployment.
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentCpuRequirement'
+          description: CPU elements specifying the CPU requirements for the deployment.
         memory:
           type: string
           description: >-
@@ -1461,6 +1472,34 @@ components:
             type: string
             enum: [amd64, arm64, arm, riscv64, other]
           description: The CPU architectures supported by the deployment.
+        class:
+          # x-go-field-tags: 'json:"class" yaml:"class"'
+          x-oapi-codegen-extra-tags:
+            json: "class"
+            yaml: "class"
+          description: Core class required by the workload
+          type: string
+          enum:
+          - performance
+          - efficiency
+          - low-power
+        type:
+          # x-go-field-tags: 'json:"type" yaml:"type"'
+          x-oapi-codegen-extra-tags:
+            json: "type"
+            yaml: "type"
+          description: Whether requested cores must be isolated or can be shared
+          type: string
+          enum:
+          - shared
+          - isolated
+        name:
+          # x-go-field-tags: 'json:"name" yaml:"name"'
+          x-oapi-codegen-extra-tags:
+            json: "name"
+            yaml: "name"
+          description: Name of the container this CPU requirement applies to
+          type: string
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.

@@ -10,38 +10,27 @@ import (
 	clModels "github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 )
 
-func makeDevice(cpus *[]struct {
+type deviceCPU = struct {
 	Architecture *clModels.DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
+	Class        *clModels.DeviceCapabilitiesManifestPropertiesCpusClass        `json:"class,omitempty"`
 	Cores        float32                                                        `json:"cores"`
-}, memory, storage *string,
-) clModels.DeviceCapabilitiesManifest {
-	return clModels.DeviceCapabilitiesManifest{
-		Properties: struct {
-			Cpus *[]struct {
-				Architecture *clModels.DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-				Cores        float32                                                        `json:"cores"`
-			} `json:"cpus,omitempty"`
-			Id                       clModels.DeviceId                                                        `json:"id"`
-			Interfaces               *[]clModels.DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
-			Memory                   *string                                                                  `json:"memory,omitempty"`
-			ModelNumber              string                                                                   `json:"modelNumber"`
-			OtelCollector            *bool                                                                    `json:"otelCollector,omitempty"`
-			Peripherals              *[]clModels.DevicePeripheral                                             `json:"peripherals,omitempty"`
-			SerialNumber             string                                                                   `json:"serialNumber"`
-			Storage                  *string                                                                  `json:"storage,omitempty"`
-			SupportedDeploymentTypes *[]clModels.DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes `json:"supportedDeploymentTypes,omitempty"`
-			SupportedRuntimes        *[]clModels.DeviceCapabilitiesManifestPropertiesSupportedRuntimes        `json:"supportedRuntimes,omitempty"`
-			Vendor                   string                                                                   `json:"vendor"`
-		}{
-			Id:           "device-1",
-			ModelNumber:  "model-x",
-			SerialNumber: "sn-001",
-			Vendor:       "acme",
-			Cpus:         cpus,
-			Memory:       memory,
-			Storage:      storage,
-		},
-	}
+	Frequency    *struct {
+		BaseMHz *float32 `json:"baseMHz,omitempty"`
+		MaxMHz  *float32 `json:"maxMHz,omitempty"`
+	} `json:"frequency,omitempty"`
+	Type *clModels.DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
+}
+
+func makeDevice(cpus *[]deviceCPU, memory, storage *string) clModels.DeviceCapabilitiesManifest {
+	var d clModels.DeviceCapabilitiesManifest
+	d.Properties.Id = "device-1"
+	d.Properties.ModelNumber = "model-x"
+	d.Properties.SerialNumber = "sn-001"
+	d.Properties.Vendor = "acme"
+	d.Properties.Cpus = cpus
+	d.Properties.Memory = memory
+	d.Properties.Storage = storage
+	return d
 }
 
 // ── HasEnoughCPUCores ────────────────────────────────────────────────────────
@@ -50,10 +39,7 @@ func TestHasEnoughCPUCores(t *testing.T) {
 	amd64 := clModels.DeviceCapabilitiesManifestPropertiesCpusArchitectureAmd64
 	arm64 := clModels.DeviceCapabilitiesManifestPropertiesCpusArchitectureArm64
 
-	cpus := &[]struct {
-		Architecture *clModels.DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-		Cores        float32                                                        `json:"cores"`
-	}{
+	cpus := &[]deviceCPU{
 		{Architecture: pointers.Ptr(amd64), Cores: 8},
 		{Architecture: pointers.Ptr(arm64), Cores: 4},
 		{Cores: 2}, // no architecture reported
@@ -302,10 +288,7 @@ func TestCheckEligibility(t *testing.T) {
 
 	amd64 := clModels.DeviceCapabilitiesManifestPropertiesCpusArchitectureAmd64
 
-	cpus := &[]struct {
-		Architecture *clModels.DeviceCapabilitiesManifestPropertiesCpusArchitecture `json:"architecture,omitempty"`
-		Cores        float32                                                        `json:"cores"`
-	}{
+	cpus := &[]deviceCPU{
 		{Architecture: pointers.Ptr(amd64), Cores: 8},
 	}
 
@@ -328,9 +311,11 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "all requirements satisfied",
 			checks: &clModels.CapacityRequirements{
-				Cpu: &clModels.DeploymentCpuRequirement{
-					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
-					Cores:         4,
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
+						Cores:         4,
+					},
 				},
 				Memory:  pointers.Ptr("4Gi"),
 				Storage: pointers.Ptr("50Gi"),
@@ -342,9 +327,11 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "CPU requirement not fulfilled",
 			checks: &clModels.CapacityRequirements{
-				Cpu: &clModels.DeploymentCpuRequirement{
-					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
-					Cores:         16,
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
+						Cores:         16,
+					},
 				},
 			},
 			memory:     pointers.Ptr("8Gi"),
@@ -355,9 +342,11 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "CPU arch not matched",
 			checks: &clModels.CapacityRequirements{
-				Cpu: &clModels.DeploymentCpuRequirement{
-					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{arm64Arch},
-					Cores:         4,
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{arm64Arch},
+						Cores:         4,
+					},
 				},
 			},
 			memory:     pointers.Ptr("8Gi"),
@@ -408,9 +397,11 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "nil CPU architectures — any arch with enough cores passes",
 			checks: &clModels.CapacityRequirements{
-				Cpu: &clModels.DeploymentCpuRequirement{
-					Architectures: nil,
-					Cores:         4,
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: nil,
+						Cores:         4,
+					},
 				},
 			},
 			memory:  pointers.Ptr("8Gi"),
@@ -420,13 +411,56 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "only CPU check, no memory or storage requirement",
 			checks: &clModels.CapacityRequirements{
-				Cpu: &clModels.DeploymentCpuRequirement{
-					Cores: 4,
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Cores: 4,
+					},
 				},
 			},
 			memory:  nil,
 			storage: nil,
 			wantOk:  true,
+		},
+		{
+			name: "multiple CPU requirements all satisfied",
+			checks: &clModels.CapacityRequirements{
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
+						Cores:         4,
+					},
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
+						Cores:         2,
+					},
+				},
+				Memory:  pointers.Ptr("4Gi"),
+				Storage: pointers.Ptr("50Gi"),
+			},
+			memory:  pointers.Ptr("8Gi"),
+			storage: pointers.Ptr("100Gi"),
+			wantOk:  true,
+		},
+		{
+			name: "multiple CPU requirements one not satisfied",
+			checks: &clModels.CapacityRequirements{
+				Cpu: &[]clModels.DeploymentCpuRequirement{
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{amd64Arch},
+						Cores:         4,
+					},
+					{
+						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{arm64Arch},
+						Cores:         2,
+					},
+				},
+				Memory:  pointers.Ptr("4Gi"),
+				Storage: pointers.Ptr("50Gi"),
+			},
+			memory:     pointers.Ptr("8Gi"),
+			storage:    pointers.Ptr("100Gi"),
+			wantOk:     false,
+			wantReason: "cpu requirement not fulfilled",
 		},
 	}
 

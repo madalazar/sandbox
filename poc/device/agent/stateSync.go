@@ -399,6 +399,11 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 		return nil, fmt.Errorf("failed to parse deployment: %w", err)
 	}
 
+	ss.logDeploymentProfileCPURequirements(
+		deploymentRef.DeploymentId,
+		deployment.Spec.DeploymentProfile.Components,
+	)
+
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
 
@@ -677,4 +682,166 @@ func convertYAMLToJSON(i interface{}) interface{} {
 		}
 	}
 	return i
+}
+
+// TODO: these are helper function to log the rt related data model changes. they can be
+// removed after the PR is approved
+func (ss *StateSyncer) logDeploymentProfileCPURequirements(
+	deploymentID string,
+	components []sbi.ApplicationDeploymentProfileComponent,
+) {
+	for componentIndex, component := range components {
+		componentName := component.Name
+		dc := component.DeviceConstraints
+		if dc == nil || dc.CapacityRequirements == nil || dc.CapacityRequirements.Cpu == nil {
+			continue
+		}
+
+		for cpuIndex, cpu := range *dc.CapacityRequirements.Cpu {
+			cpuName := ""
+			if cpu.Name != nil && *cpu.Name != "" {
+				cpuName = *cpu.Name
+			} else {
+				ss.log.Warnw("Deployment CPU requirement missing name",
+					"deploymentId", deploymentID,
+					"component", componentName,
+					"cpuIndex", cpuIndex)
+			}
+
+			var cpuClass, cpuType any
+			if cpu.Class != nil {
+				cpuClass = *cpu.Class
+			}
+			if cpu.Type != nil {
+				cpuType = *cpu.Type
+			}
+
+			ss.log.Infow("Parsed deployment CPU requirement",
+				"deploymentId", deploymentID,
+				"source", "typed profile",
+				"component", componentName,
+				"componentIndex", componentIndex,
+				"name", cpuName,
+				"cpuIndex", cpuIndex,
+				"cores", cpu.Cores,
+				"class", cpuClass,
+				"type", cpuType)
+		}
+	}
+}
+
+func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
+	deploymentID string,
+	rawManifest any,
+) {
+	manifestObj, ok := rawManifest.(map[string]any)
+	if !ok {
+		ss.log.Debugw("Raw deployment manifest is not an object",
+			"deploymentId", deploymentID,
+			"type", fmt.Sprintf("%T", rawManifest))
+		return
+	}
+
+	specObj, ok := manifestObj["spec"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No spec found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	profileObj, ok := specObj["deploymentProfile"].(map[string]any)
+	if !ok {
+		ss.log.Debugw("No deploymentProfile found in raw deployment manifest",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	components, ok := profileObj["components"].([]any)
+	if !ok {
+		ss.log.Debugw("No deployment profile components found in raw deployment",
+			"deploymentId", deploymentID)
+		return
+	}
+
+	ss.logCPURequirementsByComponent(deploymentID, components, "raw YAML")
+}
+
+func (ss *StateSyncer) logCPURequirementsByComponent(
+	deploymentID string,
+	components []any,
+	source string,
+) {
+	for componentIndex, componentItem := range components {
+		component, ok := componentItem.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		componentName, _ := component["name"].(string)
+
+		var resources map[string]any
+		if props, ok := component["properties"].(map[string]any); ok {
+			if dc, ok := props["deviceConstraints"].(map[string]any); ok {
+				if capReqs, ok := dc["capacityRequirements"].(map[string]any); ok {
+					resources = capReqs
+				} else {
+					resources = dc
+				}
+			}
+		}
+
+		if resources == nil {
+			if dc, ok := component["deviceConstraints"].(map[string]any); ok {
+				if capReqs, ok := dc["capacityRequirements"].(map[string]any); ok {
+					resources = capReqs
+				} else {
+					resources = dc
+				}
+			}
+		}
+
+		if resources == nil {
+			continue
+		}
+
+		var cpuItems []any
+		if items, ok := resources["cpu"].([]any); ok {
+			cpuItems = items
+		} else if item, ok := resources["cpu"].(map[string]any); ok {
+			cpuItems = []any{item}
+		}
+
+		if len(cpuItems) == 0 {
+			continue
+		}
+
+		for cpuIndex, cpuItem := range cpuItems {
+			cpuObj, ok := cpuItem.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			cpuName := ""
+			rawName, hasCPUName := cpuObj["name"].(string)
+			if hasCPUName && rawName != "" {
+				cpuName = rawName
+			} else {
+				ss.log.Warnw("Deployment CPU requirement missing name",
+					"deploymentId", deploymentID,
+					"component", componentName,
+					"cpuIndex", cpuIndex)
+			}
+
+			ss.log.Infow("Parsed deployment CPU requirement",
+				"deploymentId", deploymentID,
+				"source", source,
+				"component", componentName,
+				"componentIndex", componentIndex,
+				"name", cpuName,
+				"cpuIndex", cpuIndex,
+				"cores", cpuObj["cores"],
+				"class", cpuObj["class"],
+				"type", cpuObj["type"])
+		}
+	}
 }

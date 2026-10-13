@@ -33,19 +33,23 @@ func (dc *deviceCapabilities) CheckEligibility(
 	}
 
 	if checks.Cpu != nil {
-		// Convert architecture enum slice to string slice for comparison.
-		var archStrings *[]string
-		if checks.Cpu.Architectures != nil {
-			archs := make([]string, len(*checks.Cpu.Architectures))
-			for i, a := range *checks.Cpu.Architectures {
-				archs[i] = string(a)
+		// with the addition of type, class for the checks.Cpu property
+		// a more through validation will be needed
+		for _, cpuReq := range *checks.Cpu {
+			// Convert architecture enum slice to string slice for comparison.
+			var archStrings *[]string
+			if cpuReq.Architectures != nil {
+				archs := make([]string, len(*cpuReq.Architectures))
+				for i, a := range *cpuReq.Architectures {
+					archs[i] = string(a)
+				}
+				archStrings = &archs
 			}
-			archStrings = &archs
-		}
 
-		result := dc.HasEnoughCPUCores(archStrings, checks.Cpu.Cores)
-		if !result {
-			return result, "cpu requirement not fulfilled", nil
+			result := dc.HasEnoughCPUCores(archStrings, cpuReq.Cores)
+			if !result {
+				return result, "cpu requirement not fulfilled", nil
+			}
 		}
 	}
 
