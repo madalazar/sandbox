@@ -426,6 +426,24 @@ create_symphony_api_dirs() {
     echo "[]" >  "${base_dir}/mis/authorized-clients.json"
 }
 
+push_app_package_to_registry_menu() {
+  echo "📦 Push App Package to Registry"
+  echo "==============================="
+  echo "Provide the package source directory that contains margo-package/"
+  echo "Example: $HOME/sandbox/poc/tests/artefacts/nextcloud-compose"
+  echo ""
+
+  read -p "Enter package source directory: " package_source_dir
+  read -p "Enter package repository name (without org): " package_repo_name
+  read -p "Enter tag [latest]: " package_tag
+
+  if [ -z "$package_tag" ]; then
+    package_tag="latest"
+  fi
+
+  push_app_package_to_registry "$package_source_dir" "$package_repo_name" "$package_tag"
+}
+
 # Update the show_menu function to include uninstall option
 show_menu() {
   clear
@@ -438,8 +456,9 @@ show_menu() {
   echo "5) ObservabilityStack: Start"
   echo "6) ObservabilityStack: Stop"
   echo "7) Manage SPIFFE ID allowlist"
-  echo "8) Exit"
-  read -p "Enter choice [1-8]: " choice
+  echo "8) App Package: Push to Harbor"
+  echo "9) Exit"
+  read -p "Enter choice [1-9]: " choice
   case $choice in
     1) install_prerequisites ;;
     2) uninstall_prerequisites ;;
@@ -448,7 +467,8 @@ show_menu() {
     5) observability_stack_install ;;
     6) observability_stack_uninstall ;;
     7) manage_spiffe_ids ;;
-    8) echo "👋 Goodbye!"; exit 0 ;;
+    8) push_app_package_to_registry_menu ;;
+    9) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "⚠️ Invalid choice"; sleep 2 ;;
   esac
 
@@ -476,8 +496,9 @@ else
     obs-install) observability_stack_install ;;
     obs-uninstall) observability_stack_uninstall ;;
     manage-spiffe-ids) manage_spiffe_ids ;;
+    push-app) push_app_package_to_registry "$2" "$3" "$4" ;;
     *)
-      echo "Usage: $0 {install|uninstall|start|stop|obs-install|obs-uninstall|manage-spiffe-ids}"
+      echo "Usage: $0 {install|uninstall|start|stop|obs-install|obs-uninstall|manage-spiffe-ids|push-app <package_source_dir> <package_repo_name> [tag]}"
       exit 1
       ;;
   esac
