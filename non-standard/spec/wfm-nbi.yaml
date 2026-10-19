@@ -1455,11 +1455,12 @@ components:
             $ref: '#/components/schemas/DeploymentCacheRequirement'
           description: Cache requirements
         memory:
-          type: string
-          description: >-
-            The minimum amount of memory required. The value is given in binary units
-            (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
-          pattern: ^[0-9]+(Mi|Gi|Ki)$
+          # x-go-field-tags: 'json:"memory" yaml:"memory"'
+          x-oapi-codegen-extra-tags:
+            json: "memory"
+            yaml: "memory"
+          $ref: '#/components/schemas/DeploymentMemoryRequirement'
+          description: Required memory and optional bandwidth allocation
         storage:
           type: string
           description: >-
@@ -1509,6 +1510,81 @@ components:
             yaml: "name"
           description: Name of the container this CPU requirement applies to
           type: string
+    DeploymentCacheRequirement:
+      type: object
+      description: Cache requirement or capability
+      required: [level, allocation]
+      properties:
+        level:
+          # x-go-field-tags: 'json:"level" yaml:"level"'
+          x-oapi-codegen-extra-tags:
+            json: "level"
+            yaml: "level"
+          type: string
+          enum: [L3, L2, L1d, L1i]
+          description: >
+            Cache level.
+            L3 = Level 3 Cache, L2 = Level 2 Cache,
+            L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
+        allocation:
+          # x-go-field-tags: 'json:"allocation" yaml:"allocation"'
+          x-oapi-codegen-extra-tags:
+            json: "allocation"
+            yaml: "allocation"
+          type: string
+          enum: [exclusive, shared]
+          description: >
+            Cache allocation type.
+            exclusive = dedicated cache partition (requires hardware CAT support),
+            shared = shared cache access.
+        size:
+          # x-go-field-tags: 'json:"size" yaml:"size"'
+          x-oapi-codegen-extra-tags:
+            json: "size"
+            yaml: "size"
+          type: string
+          description: >
+            Minimum required cache amount. Value is given in binary units
+            (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+    MemoryBandwidthAllocation:
+      type: object
+      description: Memory bandwidth allocation requested by a workload
+      required: [unit, value]
+      properties:
+        unit:
+          # x-go-field-tags: 'json:"unit" yaml:"unit"'
+          x-oapi-codegen-extra-tags:
+            json: "unit"
+            yaml: "unit"
+          type: string
+          enum: [percent, MBps]
+          description: Unit for memory bandwidth capping
+        value:
+          # x-go-field-tags: 'json:"value" yaml:"value"'
+          x-oapi-codegen-extra-tags:
+            json: "value"
+            yaml: "value"
+          type: integer
+          description: Requested bandwidth cap in the selected unit
+    DeploymentMemoryRequirement:
+      type: object
+      description: Memory requirement for a deployment profile or component
+      required: [size]
+      properties:
+        size:
+          # x-go-field-tags: 'json:"size" yaml:"size"'
+          x-oapi-codegen-extra-tags:
+            json: "size"
+            yaml: "size"
+          type: string
+          description: Required memory size (e.g., "1Gi")
+        bandwidthAllocation:
+          # x-go-field-tags: 'json:"bandwidthAllocation" yaml:"bandwidthAllocation"'
+          x-oapi-codegen-extra-tags:
+            json: "bandwidthAllocation"
+            yaml: "bandwidthAllocation"
+          $ref: '#/components/schemas/MemoryBandwidthAllocation'
+          description: Optional memory bandwidth capping
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.
@@ -1553,43 +1629,6 @@ components:
         itemSelector:
           $ref: '#/components/schemas/Selector'
           description: Selector evaluated against array elements. Required for the `ContainsAll` or `ContainsAny` operator.
-    
-    DeploymentCacheRequirement:
-      type: object
-      description: Cache requirement or capability
-      required: [level, allocation]
-      properties:
-        level:
-          # x-go-field-tags: 'json:"level" yaml:"level"'
-          x-oapi-codegen-extra-tags:
-            json: "level"
-            yaml: "level"
-          type: string
-          enum: [L3, L2, L1d, L1i]
-          description: >
-            Cache level.
-            L3 = Level 3 Cache, L2 = Level 2 Cache,
-            L1d = Level 1 Data Cache, L1i = Level 1 Instruction Cache.
-        allocation:
-          # x-go-field-tags: 'json:"allocation" yaml:"allocation"'
-          x-oapi-codegen-extra-tags:
-            json: "allocation"
-            yaml: "allocation"
-          type: string
-          enum: [exclusive, shared]
-          description: >
-            Cache allocation type.
-            exclusive = dedicated cache partition (requires hardware CAT support),
-            shared = shared cache access.
-        size:
-          # x-go-field-tags: 'json:"size" yaml:"size"'
-          x-oapi-codegen-extra-tags:
-            json: "size"
-            yaml: "size"
-          type: string
-          description: >
-            Minimum required cache amount. Value is given in binary units
-            (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
 
     # Common Schemas
     ContextualInfo:

@@ -566,7 +566,24 @@ components:
                       shared = device supports shared cache access.
               description: Cache resources available on the device
             memory:
-              type: string
+              type: object
+              description: Memory capability reported by the device
+              required: [size]
+              properties:
+                size:
+                  type: string
+                  description: Total available memory on the device (e.g., "16Gi")
+                bandwidthAllocationTypes:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum: [percent-throttling, rate-limiting]
+                  description: >
+                    Supported memory bandwidth allocation strategies.
+                    percent-throttling = cap memory bandwidth usage by percentage.
+                    rate-limiting = cap memory bandwidth to a fixed throughput.
             storage:
               type: string
             peripherals:
@@ -826,11 +843,8 @@ components:
             $ref: '#/components/schemas/DeploymentCacheRequirement'
           description: Cache resources available on the device
         memory:
-          type: string
-          description: >-
-            The minimum amount of memory required. The value is given in binary units
-            (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
-          pattern: ^[0-9]+(Mi|Gi|Ki)$
+          $ref: '#/components/schemas/DeploymentMemoryRequirement'
+          description: Required memory and optional bandwidth allocation for the deployment profile
         storage:
           type: string
           description: >-
@@ -887,6 +901,32 @@ components:
           description: >
             Minimum required cache amount. Value is given in binary units
             (Ki = Kibibytes, Mi = Mebibytes, Gi = Gibibytes), e.g. "9216Ki".
+    MemoryBandwidthAllocation:
+      type: object
+      description: Memory bandwidth allocation requested by a workload
+      required: [unit, value]
+      properties:
+        unit:
+          type: string
+          enum: [percent, MBps]
+          description: >
+            Unit used for memory bandwidth capping.
+            percent = percentage-based cap.
+            MBps = throughput cap in megabytes per second.
+        value:
+          type: integer
+          description: Requested bandwidth cap value expressed in the selected unit
+    DeploymentMemoryRequirement:
+      type: object
+      description: Memory requirement for a deployment profile or component
+      required: [size]
+      properties:
+        size:
+          type: string
+          description: Required memory for the deployment profile (e.g., "1Gi")
+        bandwidthAllocation:
+          $ref: '#/components/schemas/MemoryBandwidthAllocation'
+          description: Optional memory bandwidth capping request
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.

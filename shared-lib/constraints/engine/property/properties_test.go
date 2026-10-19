@@ -22,6 +22,10 @@ type deviceCPU = struct {
 	Type *clModels.DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
 }
 
+func memoryPtr(size string) *clModels.DeviceCapabilitiesManifestPropertiesMemory {
+	return &clModels.DeviceCapabilitiesManifestPropertiesMemory{Size: size}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers — build a minimal but valid DeviceCapabilitiesManifest
 // ---------------------------------------------------------------------------
@@ -122,14 +126,14 @@ func TestResolvePointer_TopLevel_BoolField_False(t *testing.T) {
 
 func TestResolvePointer_TopLevel_StringField_Memory(t *testing.T) {
 	d := baseDevice()
-	d.Properties.Memory = pointers.Ptr("64Gi")
+	d.Properties.Memory = memoryPtr("64Gi")
 	e := engine(d)
 
 	val, exists, err := e.resolvePointer("/memory")
 
 	require.NoError(t, err)
 	assert.True(t, exists)
-	assert.Equal(t, "64Gi", val)
+	assert.Equal(t, map[string]any{"size": "64Gi"}, val)
 }
 
 // ---------------------------------------------------------------------------
@@ -455,13 +459,13 @@ func TestResolvePointer_SingleKey_OtelCollector_False(t *testing.T) {
 
 func TestResolvePointer_SingleKey_Memory_Match(t *testing.T) {
 	d := minimalDevice()
-	d.Properties.Memory = pointers.Ptr("64Gi")
+	d.Properties.Memory = memoryPtr("64Gi")
 
 	val, exists, err := engine(d).resolvePointer("/memory")
 
 	require.NoError(t, err)
 	assert.True(t, exists)
-	assert.Equal(t, "64Gi", val)
+	assert.Equal(t, map[string]any{"size": "64Gi"}, val)
 }
 
 func TestResolvePointer_SingleKey_Storage_Match(t *testing.T) {
@@ -1790,7 +1794,7 @@ func TestHandleExists_OptionalBool_OtelCollector_Nil_ReturnsFalse(t *testing.T) 
 
 func TestHandleExists_OptionalString_Memory_Present_ReturnsTrue(t *testing.T) {
 	device := baseDevice()
-	device.Properties.Memory = pointers.Ptr("64Gi")
+	device.Properties.Memory = memoryPtr("64Gi")
 	e := engine(device)
 
 	me := &clModels.MatchExpression{
@@ -2117,7 +2121,7 @@ func TestHandleExists_RepeatedCalls_ConsistentResults(t *testing.T) {
 func TestHandleExists_TwoIndependentKeys_DoNotInterfere(t *testing.T) {
 	// Resolving two different keys on the same engine must not interfere.
 	device := baseDevice()
-	device.Properties.Memory = pointers.Ptr("64Gi")
+	device.Properties.Memory = memoryPtr("64Gi")
 	device.Properties.Storage = nil // absent
 	e := engine(device)
 
@@ -2235,7 +2239,7 @@ func TestHandleDoesNotExists_OptionalBool_OtelCollector_Nil_ReturnsTrue(t *testi
 
 func TestHandleDoesNotExists_OptionalString_Memory_Present_ReturnsFalse(t *testing.T) {
 	device := baseDevice()
-	device.Properties.Memory = pointers.Ptr("64Gi")
+	device.Properties.Memory = memoryPtr("64Gi")
 	e := engine(device)
 
 	me := &clModels.MatchExpression{
@@ -2587,7 +2591,7 @@ func TestHandleDoesNotExists_TwoIndependentKeys_DoNotInterfere(t *testing.T) {
 	// Resolving two different keys on the same engine must not interfere.
 	// /memory is present, /storage is absent.
 	device := baseDevice()
-	device.Properties.Memory = pointers.Ptr("64Gi")
+	device.Properties.Memory = memoryPtr("64Gi")
 	device.Properties.Storage = nil
 	e := engine(device)
 

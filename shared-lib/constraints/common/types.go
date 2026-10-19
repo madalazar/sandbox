@@ -37,7 +37,7 @@ type DeviceSelectorIface interface {
 // meets specific hardware capacity requirements.
 type CapacityEligibilityCheckerIface interface {
 	HasEnoughCPUCores(arch *[]string, cores float32) bool
-	HasEnoughMemory(mem *string) (bool, error)
+	HasEnoughMemory(mem *clModels.DeploymentMemoryRequirement) (bool, error)
 	HasEnoughStorage(storage *string) (bool, error)
 	CheckEligibility(checks *clModels.CapacityRequirements) (bool, string, error)
 }

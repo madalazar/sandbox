@@ -280,6 +280,24 @@ func (e DeviceCapabilitiesManifestPropertiesCpusType) Valid() bool {
 	}
 }
 
+// Defines values for DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes.
+const (
+	PercentThrottling DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes = "percent-throttling"
+	RateLimiting      DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes = "rate-limiting"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes enum.
+func (e DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes) Valid() bool {
+	switch e {
+	case PercentThrottling:
+		return true
+	case RateLimiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes.
 const (
 	DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypesCompose DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes = "compose"
@@ -415,6 +433,24 @@ func (e MatchExpressionOperator) Valid() bool {
 	}
 }
 
+// Defines values for MemoryBandwidthAllocationUnit.
+const (
+	MBps    MemoryBandwidthAllocationUnit = "MBps"
+	Percent MemoryBandwidthAllocationUnit = "percent"
+)
+
+// Valid indicates whether the value is a known member of the MemoryBandwidthAllocationUnit enum.
+func (e MemoryBandwidthAllocationUnit) Valid() bool {
+	switch e {
+	case MBps:
+		return true
+	case Percent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProblemDetailBackoffStrategy.
 const (
 	Exponential ProblemDetailBackoffStrategy = "exponential"
@@ -462,8 +498,8 @@ type CapacityRequirements struct {
 	// Cpu CPU elements specifying the CPU requirements for the deployment.
 	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
-	// Memory The minimum amount of memory required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
-	Memory *string `json:"memory,omitempty"`
+	// Memory Required memory and optional bandwidth allocation for the deployment profile
+	Memory *DeploymentMemoryRequirement `json:"memory,omitempty"`
 
 	// Storage The minimum amount of storage required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes, `Ti` = Tebibytes, `Pi` = Pebibytes, `Ei` = Exbibytes).
 	Storage *string `json:"storage,omitempty"`
@@ -558,6 +594,15 @@ type DeploymentManifestRef struct {
 	Url string `json:"url"`
 }
 
+// DeploymentMemoryRequirement Memory requirement for a deployment profile or component
+type DeploymentMemoryRequirement struct {
+	// BandwidthAllocation Optional memory bandwidth capping request
+	BandwidthAllocation *MemoryBandwidthAllocation `json:"bandwidthAllocation,omitempty"`
+
+	// Size Required memory for the deployment profile (e.g., "1Gi")
+	Size string `json:"size"`
+}
+
 // DeploymentStatusManifest defines model for DeploymentStatusManifest.
 type DeploymentStatusManifest struct {
 	// AdoptedManifestVersion Monotonically increasing unsigned 64-bit integer in the inclusive range [1, 2^64-1]. Prevents rollback attacks. The first manifest MUST use 1.
@@ -613,9 +658,17 @@ type DeviceCapabilitiesManifest struct {
 			// Type Whether these cores are kernel-isolated
 			Type *DeviceCapabilitiesManifestPropertiesCpusType `json:"type,omitempty"`
 		} `json:"cpus,omitempty"`
-		Id                       DeviceId                                                        `json:"id"`
-		Interfaces               *[]DeviceCommunicationInterface                                 `json:"interfaces,omitempty"`
-		Memory                   *string                                                         `json:"memory,omitempty"`
+		Id         DeviceId                        `json:"id"`
+		Interfaces *[]DeviceCommunicationInterface `json:"interfaces,omitempty"`
+
+		// Memory Memory capability reported by the device
+		Memory *struct {
+			// BandwidthAllocationTypes Supported memory bandwidth allocation strategies. percent-throttling = cap memory bandwidth usage by percentage. rate-limiting = cap memory bandwidth to a fixed throughput.
+			BandwidthAllocationTypes *[]DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes `json:"bandwidthAllocationTypes,omitempty"`
+
+			// Size Total available memory on the device (e.g., "16Gi")
+			Size string `json:"size"`
+		} `json:"memory,omitempty"`
 		ModelNumber              string                                                          `json:"modelNumber"`
 		OtelCollector            *bool                                                           `json:"otelCollector,omitempty"`
 		Peripherals              *[]DevicePeripheral                                             `json:"peripherals,omitempty"`
@@ -661,6 +714,18 @@ type DeviceCapabilitiesManifestPropertiesCpusClass string
 
 // DeviceCapabilitiesManifestPropertiesCpusType Whether these cores are kernel-isolated
 type DeviceCapabilitiesManifestPropertiesCpusType string
+
+// DeviceCapabilitiesManifestPropertiesMemory defines model for DeviceCapabilitiesManifest.Properties.Memory.
+type DeviceCapabilitiesManifestPropertiesMemory = struct {
+	// BandwidthAllocationTypes Supported memory bandwidth allocation strategies. percent-throttling = cap memory bandwidth usage by percentage. rate-limiting = cap memory bandwidth to a fixed throughput.
+	BandwidthAllocationTypes *[]DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes `json:"bandwidthAllocationTypes,omitempty"`
+
+	// Size Total available memory on the device (e.g., "16Gi")
+	Size string `json:"size"`
+}
+
+// DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes defines model for DeviceCapabilitiesManifest.Properties.Memory.BandwidthAllocationTypes.
+type DeviceCapabilitiesManifestPropertiesMemoryBandwidthAllocationTypes string
 
 // DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes defines model for DeviceCapabilitiesManifest.Properties.SupportedDeploymentTypes.
 type DeviceCapabilitiesManifestPropertiesSupportedDeploymentTypes string
@@ -730,6 +795,18 @@ type MatchExpression struct {
 
 // MatchExpressionOperator Operator used to evaluate the referenced value.
 type MatchExpressionOperator string
+
+// MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
+type MemoryBandwidthAllocation struct {
+	// Unit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+	Unit MemoryBandwidthAllocationUnit `json:"unit"`
+
+	// Value Requested bandwidth cap value expressed in the selected unit
+	Value int `json:"value"`
+}
+
+// MemoryBandwidthAllocationUnit Unit used for memory bandwidth capping. percent = percentage-based cap. MBps = throughput cap in megabytes per second.
+type MemoryBandwidthAllocationUnit string
 
 // ProblemDetail RFC 9457 Problem Details for HTTP APIs. Returned with Content-Type: application/problem+json. See https://www.rfc-editor.org/rfc/rfc9457. Extension members (RFC 9457 §3.2) are permitted via additionalProperties. Vendors MAY add custom fields alongside standard margo fields. Vendor-specific problem types MUST use their own URI namespace. The https://docs.margo.org/specification/problem-types namespace is reserved for Margo.
 type ProblemDetail struct {

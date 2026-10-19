@@ -48,6 +48,40 @@ func NewStateSyncer(
 	}
 }
 
+func (ss *StateSyncer) logMemoryRequirementsByComponent(deploymentID string, components []any, source string) {
+	for componentIndex, item := range components {
+		component, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		componentName, _ := component["name"].(string)
+		var resources map[string]any
+		if props, ok := component["properties"].(map[string]any); ok {
+			if dc, ok := props["deviceConstraints"].(map[string]any); ok {
+				resources, _ = dc["capacityRequirements"].(map[string]any)
+				if resources == nil {
+					resources = dc
+				}
+			}
+		}
+		if resources == nil {
+			if dc, ok := component["deviceConstraints"].(map[string]any); ok {
+				resources, _ = dc["capacityRequirements"].(map[string]any)
+				if resources == nil {
+					resources = dc
+				}
+			}
+		}
+		memory, ok := resources["memory"].(map[string]any)
+		if !ok {
+			continue
+		}
+		ss.log.Infow("Parsed deployment memory requirement", "deploymentId", deploymentID, "source", source,
+			"component", componentName, "componentIndex", componentIndex, "size", memory["size"],
+			"bandwidthAllocation", memory["bandwidthAllocation"])
+	}
+}
+
 func (ss *StateSyncer) Start() {
 	go ss.syncLoop()
 }
@@ -407,6 +441,7 @@ func (ss *StateSyncer) fetchDeploymentYAML(
 		deploymentRef.DeploymentId,
 		deployment.Spec.DeploymentProfile.Components,
 	)
+	ss.logDeploymentProfileMemoryRequirements(deploymentRef.DeploymentId, deployment.Spec.DeploymentProfile)
 
 	ss.log.Infow("Successfully fetched and verified deployment",
 		"deploymentId", deploymentRef.DeploymentId)
@@ -592,6 +627,7 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 		jsonCompatible := convertYAMLToJSON(yamlInterface)
 		ss.logDeploymentCPURequirementsFromRawYAML(deploymentId, jsonCompatible)
 		ss.logDeploymentCacheRequirementsFromRawYAML(deploymentId, jsonCompatible)
+		ss.logDeploymentMemoryRequirementsFromRawYAML(deploymentId, jsonCompatible)
 
 		// Convert to JSON (which will be properly unmarshaled by UnmarshalJSON())
 		jsonData, err := json.Marshal(jsonCompatible)
@@ -620,6 +656,7 @@ func (ss *StateSyncer) processDeploymentsFromBundle(
 			deploymentId,
 			deployment.Spec.DeploymentProfile.Components,
 		)
+		ss.logDeploymentProfileMemoryRequirements(deploymentId, deployment.Spec.DeploymentProfile)
 		ss.storeDeployment(deploymentId, deploymentRef, &deployment, manifestVersion)
 	}
 }
@@ -764,6 +801,29 @@ func (ss *StateSyncer) logDeploymentProfileCacheRequirements(
 	ss.logCacheRequirementsByComponent(deploymentID, rawComponents, "typed profile")
 }
 
+func (ss *StateSyncer) logDeploymentProfileMemoryRequirements(
+	deploymentID string,
+	profile sbi.AppDeploymentProfile,
+) {
+	if profile.DeviceConstraints != nil &&
+		profile.DeviceConstraints.CapacityRequirements != nil &&
+		profile.DeviceConstraints.CapacityRequirements.Memory != nil {
+		memoryJSON, err := json.Marshal(profile.DeviceConstraints.CapacityRequirements.Memory)
+		if err != nil {
+			ss.log.Errorw("Failed to marshal deployment profile memory requirement", "deploymentId", deploymentID, "error", err)
+		} else {
+			ss.log.Infow("Parsed deployment memory requirement", "deploymentId", deploymentID, "source", "typed profile", "memory", string(memoryJSON))
+		}
+	}
+	rawComponents, err := json.Marshal(profile.Components)
+	if err == nil {
+		var components []any
+		if json.Unmarshal(rawComponents, &components) == nil {
+			ss.logMemoryRequirementsByComponent(deploymentID, components, "typed profile")
+		}
+	}
+}
+
 func (ss *StateSyncer) logDeploymentCPURequirementsFromRawYAML(
 	deploymentID string,
 	rawManifest any,
@@ -835,6 +895,35 @@ func (ss *StateSyncer) logDeploymentCacheRequirementsFromRawYAML(
 	}
 
 	ss.logCacheRequirementsByComponent(deploymentID, components, "raw YAML")
+}
+
+func (ss *StateSyncer) logDeploymentMemoryRequirementsFromRawYAML(deploymentID string, rawManifest any) {
+	manifestObj, ok := rawManifest.(map[string]any)
+	if !ok {
+		return
+	}
+	specObj, ok := manifestObj["spec"].(map[string]any)
+	if !ok {
+		return
+	}
+	profileObj, ok := specObj["deploymentProfile"].(map[string]any)
+	if !ok {
+		return
+	}
+	var resources map[string]any
+	if dc, ok := profileObj["deviceConstraints"].(map[string]any); ok {
+		resources, _ = dc["capacityRequirements"].(map[string]any)
+		if resources == nil {
+			resources = dc
+		}
+	}
+	if memoryObj, ok := resources["memory"].(map[string]any); ok {
+		ss.log.Infow("Parsed deployment memory requirement", "deploymentId", deploymentID, "source", "raw YAML",
+			"size", memoryObj["size"], "bandwidthAllocation", memoryObj["bandwidthAllocation"])
+	}
+	if components, ok := profileObj["components"].([]any); ok {
+		ss.logMemoryRequirementsByComponent(deploymentID, components, "raw YAML")
+	}
 }
 
 func (ss *StateSyncer) logCPURequirementsByComponent(

@@ -58,7 +58,9 @@
                 ]
             }
         ],
-        "memory": "59Gi",
+        "memory": {
+            "size": "59Gi"
+        },
         "storage": "1862Gi",
         "peripherals": [
             {

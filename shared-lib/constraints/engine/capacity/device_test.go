@@ -28,7 +28,9 @@ func makeDevice(cpus *[]deviceCPU, memory, storage *string) clModels.DeviceCapab
 	d.Properties.SerialNumber = "sn-001"
 	d.Properties.Vendor = "acme"
 	d.Properties.Cpus = cpus
-	d.Properties.Memory = memory
+	if memory != nil {
+		d.Properties.Memory = &clModels.DeviceCapabilitiesManifestPropertiesMemory{Size: *memory}
+	}
 	d.Properties.Storage = storage
 	return d
 }
@@ -186,7 +188,11 @@ func TestHasEnoughMemory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := makeDevice(nil, tc.deviceMemory, nil)
 			checker := New(d)
-			ok, err := checker.HasEnoughMemory(tc.required)
+			var required *clModels.DeploymentMemoryRequirement
+			if tc.required != nil {
+				required = &clModels.DeploymentMemoryRequirement{Size: *tc.required}
+			}
+			ok, err := checker.HasEnoughMemory(required)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -317,7 +323,7 @@ func TestCheckEligibility(t *testing.T) {
 						Cores:         4,
 					},
 				},
-				Memory:  pointers.Ptr("4Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "4Gi"},
 				Storage: pointers.Ptr("50Gi"),
 			},
 			memory:  pointers.Ptr("8Gi"),
@@ -357,7 +363,7 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "memory requirement not fulfilled",
 			checks: &clModels.CapacityRequirements{
-				Memory: pointers.Ptr("16Gi"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "16Gi"},
 			},
 			memory:     pointers.Ptr("8Gi"),
 			storage:    pointers.Ptr("100Gi"),
@@ -377,7 +383,7 @@ func TestCheckEligibility(t *testing.T) {
 		{
 			name: "invalid memory quantity returns error",
 			checks: &clModels.CapacityRequirements{
-				Memory: pointers.Ptr("not-valid"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "not-valid"},
 			},
 			memory:  pointers.Ptr("8Gi"),
 			storage: pointers.Ptr("100Gi"),
@@ -434,7 +440,7 @@ func TestCheckEligibility(t *testing.T) {
 						Cores:         2,
 					},
 				},
-				Memory:  pointers.Ptr("4Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "4Gi"},
 				Storage: pointers.Ptr("50Gi"),
 			},
 			memory:  pointers.Ptr("8Gi"),
@@ -454,7 +460,7 @@ func TestCheckEligibility(t *testing.T) {
 						Cores:         2,
 					},
 				},
-				Memory:  pointers.Ptr("4Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "4Gi"},
 				Storage: pointers.Ptr("50Gi"),
 			},
 			memory:     pointers.Ptr("8Gi"),

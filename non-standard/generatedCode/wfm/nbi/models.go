@@ -459,6 +459,24 @@ func (e MatchExpressionOperator) Valid() bool {
 	}
 }
 
+// Defines values for MemoryBandwidthAllocationUnit.
+const (
+	MBps    MemoryBandwidthAllocationUnit = "MBps"
+	Percent MemoryBandwidthAllocationUnit = "percent"
+)
+
+// Valid indicates whether the value is a known member of the MemoryBandwidthAllocationUnit enum.
+func (e MemoryBandwidthAllocationUnit) Valid() bool {
+	switch e {
+	case MBps:
+		return true
+	case Percent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OciAuthenticationType.
 const (
 	Basic OciAuthenticationType = "basic"
@@ -854,8 +872,8 @@ type CapacityRequirements struct {
 	// Cpu CPU elements specifying the CPU requirements for the deployment.
 	Cpu *[]DeploymentCpuRequirement `json:"cpu,omitempty"`
 
-	// Memory The minimum amount of memory required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes).
-	Memory *string `json:"memory,omitempty"`
+	// Memory Required memory and optional bandwidth allocation
+	Memory *DeploymentMemoryRequirement `json:"memory" yaml:"memory"`
 
 	// Storage The minimum amount of storage required. The value is given in binary units (`Ki` = Kibibytes, `Mi` = Mebibytes, `Gi` = Gibibytes, `Ti` = Tebibytes, `Pi` = Pebibytes, `Ei` = Exbibytes).
 	Storage *string `json:"storage,omitempty"`
@@ -995,6 +1013,15 @@ type DeploymentExecutionProfile_Components_Item struct {
 // DeploymentExecutionProfileType Type of deployment profile
 type DeploymentExecutionProfileType string
 
+// DeploymentMemoryRequirement Memory requirement for a deployment profile or component
+type DeploymentMemoryRequirement struct {
+	// BandwidthAllocation Optional memory bandwidth capping
+	BandwidthAllocation *MemoryBandwidthAllocation `json:"bandwidthAllocation" yaml:"bandwidthAllocation"`
+
+	// Size Required memory size (e.g., "1Gi")
+	Size string `json:"size" yaml:"size"`
+}
+
 // DeploymentParameterTarget Application Parameter Target
 type DeploymentParameterTarget struct {
 	// Components Components of the parameter
@@ -1128,6 +1155,18 @@ type MatchExpression struct {
 
 // MatchExpressionOperator Operator used to evaluate the referenced value.
 type MatchExpressionOperator string
+
+// MemoryBandwidthAllocation Memory bandwidth allocation requested by a workload
+type MemoryBandwidthAllocation struct {
+	// Unit Unit for memory bandwidth capping
+	Unit MemoryBandwidthAllocationUnit `json:"unit" yaml:"unit"`
+
+	// Value Requested bandwidth cap in the selected unit
+	Value int `json:"value" yaml:"value"`
+}
+
+// MemoryBandwidthAllocationUnit Unit for memory bandwidth capping
+type MemoryBandwidthAllocationUnit string
 
 // Metadata defines model for Metadata.
 type Metadata struct {

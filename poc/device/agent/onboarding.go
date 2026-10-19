@@ -125,7 +125,8 @@ func (da *DeviceClientSettings) ReportCapabilities(
 	da.log.Infow("Starting capabilities reporting",
 		"deviceClientId", capabilities.Properties.Id,
 		"cpu", summarizeCapabilitiesCPU(capabilities),
-		"cache", summarizeCapabilitiesCache(capabilities))
+		"cache", summarizeCapabilitiesCache(capabilities),
+		"memory", summarizeCapabilitiesMemory(capabilities))
 	err := da.apiClient.ReportCapabilities(ctx, capabilities.Properties.Id, capabilities)
 	if err != nil {
 		if pd, ok := sbi.AsProblemDetail(err); ok {
@@ -215,6 +216,23 @@ func summarizeCapabilitiesCache(capabilities sbi.DeviceCapabilitiesManifest) str
 	}
 
 	return strings.Join(parts, "; ")
+}
+
+// TODO: method used to log/debug newly added rt capabilities data model. Can be removed after
+func summarizeCapabilitiesMemory(capabilities sbi.DeviceCapabilitiesManifest) string {
+	memory := capabilities.Properties.Memory
+	if memory == nil {
+		return "none"
+	}
+	bwTypes := "none"
+	if memory.BandwidthAllocationTypes != nil && len(*memory.BandwidthAllocationTypes) > 0 {
+		parts := make([]string, 0, len(*memory.BandwidthAllocationTypes))
+		for _, bwType := range *memory.BandwidthAllocationTypes {
+			parts = append(parts, string(bwType))
+		}
+		bwTypes = strings.Join(parts, ",")
+	}
+	return fmt.Sprintf("memory={size=%s, bandwidthAllocationTypes=%s}", memory.Size, bwTypes)
 }
 
 func (da *DeviceClientSettings) IsOnboarded() (bool, error) {

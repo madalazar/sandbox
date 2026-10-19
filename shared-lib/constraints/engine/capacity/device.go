@@ -116,17 +116,17 @@ func (dc *deviceCapabilities) HasEnoughCPUCores(arch *[]string, cores float32) b
 
 // HasEnoughMemory checks whether the device has at least the required amount of memory.
 // A nil requirement is treated as no constraint and always passes.
-func (dc *deviceCapabilities) HasEnoughMemory(mem *string) (bool, error) {
+func (dc *deviceCapabilities) HasEnoughMemory(mem *clModels.DeploymentMemoryRequirement) (bool, error) {
 	// No memory requirement specified — always satisfied.
-	if mem == nil || *mem == "" {
+	if mem == nil || mem.Size == "" {
 		return true, nil
 	}
 
-	if dc.Properties.Memory == nil || *dc.Properties.Memory == "" {
+	if dc.Properties.Memory == nil || dc.Properties.Memory.Size == "" {
 		return false, nil
 	}
 
-	ok, err := satisfies(*mem, *dc.Properties.Memory)
+	ok, err := satisfies(mem.Size, dc.Properties.Memory.Size)
 	if err != nil {
 		return false, fmt.Errorf("failed to check memory requirements, err : %s", err.Error())
 	}

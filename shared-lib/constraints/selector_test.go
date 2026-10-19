@@ -61,7 +61,7 @@ func withMemory(
 	device *clModels.DeviceCapabilitiesManifest,
 	memory string,
 ) *clModels.DeviceCapabilitiesManifest {
-	device.Properties.Memory = &memory
+	device.Properties.Memory = &clModels.DeviceCapabilitiesManifestPropertiesMemory{Size: memory}
 	return device
 }
 
@@ -432,7 +432,7 @@ func TestIsDeviceEligible_CapacityRequirements_MemoryAndStorage(t *testing.T) {
 			name:   "device memory == required memory (512Mi) → eligible",
 			device: withMemory(buildDevice("dev-201", "Acme", "M-I", "SN-0201"), "512Mi"),
 			checks: buildConstraints(&clModels.CapacityRequirements{
-				Memory: pointers.Ptr("512Mi"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 			}, nil),
 			wantEligible: true,
 		},
@@ -440,7 +440,7 @@ func TestIsDeviceEligible_CapacityRequirements_MemoryAndStorage(t *testing.T) {
 			name:   "device memory (1Gi) > required memory (512Mi) → eligible",
 			device: withMemory(buildDevice("dev-202", "Acme", "M-II", "SN-0202"), "1Gi"),
 			checks: buildConstraints(&clModels.CapacityRequirements{
-				Memory: pointers.Ptr("512Mi"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 			}, nil),
 			wantEligible: true,
 		},
@@ -448,7 +448,7 @@ func TestIsDeviceEligible_CapacityRequirements_MemoryAndStorage(t *testing.T) {
 			name:   "device memory (256Mi) < required memory (512Mi) → not eligible",
 			device: withMemory(buildDevice("dev-203", "Acme", "M-III", "SN-0203"), "256Mi"),
 			checks: buildConstraints(&clModels.CapacityRequirements{
-				Memory: pointers.Ptr("512Mi"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 			}, nil),
 			wantEligible: false,
 		},
@@ -464,7 +464,7 @@ func TestIsDeviceEligible_CapacityRequirements_MemoryAndStorage(t *testing.T) {
 			name:   "device has no memory field set, memory requirement present → not eligible",
 			device: buildDevice("dev-205", "Acme", "M-V", "SN-0205"),
 			checks: buildConstraints(&clModels.CapacityRequirements{
-				Memory: pointers.Ptr("512Mi"),
+				Memory: &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 			}, nil),
 			wantEligible: false,
 		},
@@ -576,7 +576,7 @@ func TestIsDeviceEligible_CapacityRequirements_Combined(t *testing.T) {
 						Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
 					},
 				},
-				Memory:  pointers.Ptr("2Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "2Gi"},
 				Storage: pointers.Ptr("20Gi"),
 			}, nil),
 			wantEligible: true,
@@ -597,7 +597,7 @@ func TestIsDeviceEligible_CapacityRequirements_Combined(t *testing.T) {
 						Cores: 4,
 					},
 				},
-				Memory:  pointers.Ptr("512Mi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 				Storage: pointers.Ptr("20Gi"),
 			}, nil),
 			wantEligible: false,
@@ -618,7 +618,7 @@ func TestIsDeviceEligible_CapacityRequirements_Combined(t *testing.T) {
 						Cores: 4,
 					},
 				},
-				Memory:  pointers.Ptr("2Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "2Gi"},
 				Storage: pointers.Ptr("10Gi"),
 			}, nil),
 			wantEligible: false,
@@ -639,7 +639,7 @@ func TestIsDeviceEligible_CapacityRequirements_Combined(t *testing.T) {
 						Cores: 4,
 					},
 				},
-				Memory:  pointers.Ptr("2Gi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "2Gi"},
 				Storage: pointers.Ptr("20Gi"),
 			}, nil),
 			wantEligible: false,
@@ -660,7 +660,7 @@ func TestIsDeviceEligible_CapacityRequirements_Combined(t *testing.T) {
 						Cores: 4,
 					},
 				},
-				Memory:  pointers.Ptr("512Mi"),
+				Memory:  &clModels.DeploymentMemoryRequirement{Size: "512Mi"},
 				Storage: pointers.Ptr("10Gi"),
 			}, nil),
 			wantEligible: false,
@@ -1358,7 +1358,7 @@ func TestIsDeviceEligible_MultipleEligibilityRules_WithCapacity(t *testing.T) {
 							Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
 						},
 					},
-					Memory:  pointers.Ptr("2Gi"),
+					Memory:  &clModels.DeploymentMemoryRequirement{Size: "2Gi"},
 					Storage: pointers.Ptr("20Gi"),
 				},
 				[]clModels.EligibilityRule{
@@ -1462,7 +1462,7 @@ func TestIsDeviceEligible_MultipleEligibilityRules_WithCapacity(t *testing.T) {
 					Cpu: &[]clModels.DeploymentCpuRequirement{
 						{Cores: 4},
 					},
-					Memory:  pointers.Ptr("4Gi"),
+					Memory:  &clModels.DeploymentMemoryRequirement{Size: "4Gi"},
 					Storage: pointers.Ptr("10Gi"), // device has only 2Gi → fails
 				},
 				EligibilityRules: &[]clModels.EligibilityRule{
