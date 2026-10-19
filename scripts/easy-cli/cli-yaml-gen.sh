@@ -258,6 +258,31 @@ append_profile_device_constraints() {
   return 0
 }
 
+append_component_workload_block() {
+  local workload_json="$1"
+  local output_file="$2"
+
+  if [ -z "$workload_json" ] || [ "$workload_json" = "null" ] || [ "$workload_json" = "{}" ]; then
+    return 0
+  fi
+
+  local has_workload
+  if ! has_workload=$(echo "$workload_json" | yq eval -r '((type == "!!map") and (length > 0))' - 2>/dev/null); then
+    return 1
+  fi
+
+  if [ "$has_workload" != "true" ]; then
+    return 0
+  fi
+
+  echo "        workload:" >> "$output_file"
+  if ! echo "$workload_json" | yq eval -P '.' - | sed 's/^/          /' >> "$output_file"; then
+    return 1
+  fi
+
+  return 0
+}
+
 append_profile_components() {
   local margo_file="$1"
   local output_file="$2"

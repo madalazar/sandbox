@@ -82,6 +82,13 @@
         ],
         "supportedDeploymentTypes": [
             "compose"
-        ]
+        ],
+        "workload": {
+            "schedulingTypes": [
+                    "best-effort",
+                    "real-time"
+            ]
+        }
+
     }
 }

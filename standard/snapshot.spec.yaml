@@ -608,6 +608,16 @@ components:
               items:
                 type: string
                 enum: [helm, compose, custom]
+            workload:
+              type: object
+              description: Supported workload scheduling types on the device
+              properties:
+                schedulingTypes:
+                  type: array
+                  minItems: 1
+                  uniqueItems: true
+                  items:
+                    $ref: '#/components/schemas/WorkloadSchedulingType'
         labels:
           type: object
           description: >-
@@ -789,6 +799,9 @@ components:
         deviceConstraints:
           $ref: '#/components/schemas/DeviceConstraints'
           description: Device constraints specifying the minimum device capabilities and eligibility rules required for the deployment.
+        workload:
+          $ref: '#/components/schemas/Workload'
+          description: Workload scheduling policy and tuning for this component
     appDeploymentProfile:
       type: object
       description: Application Deployment Profile
@@ -927,6 +940,43 @@ components:
         bandwidthAllocation:
           $ref: '#/components/schemas/MemoryBandwidthAllocation'
           description: Optional memory bandwidth capping request
+    WorkloadSchedulingType:
+      type: string
+      enum: [background, best-effort, deadline, real-time]
+      default: best-effort
+      description: >
+        Workload scheduling class.
+        background covers SCHED_BATCH and SCHED_IDLE,
+        best-effort covers SCHED_NORMAL/SCHED_OTHER,
+        deadline maps to SCHED_DEADLINE,
+        real-time maps to SCHED_FIFO/SCHED_RR.
+    WorkloadDeadline:
+      type: object
+      description: Deadline scheduling configuration
+      properties:
+        deadline:
+          type: integer
+          description: Task finish time
+        period:
+          type: integer
+          description: Task activation frequency
+        runtime:
+          type: integer
+          description: CPU runtime needed per period
+    Workload:
+      type: object
+      description: Workload scheduling configuration for a component
+      properties:
+        scheduling:
+          $ref: '#/components/schemas/WorkloadSchedulingType'
+        priority:
+          type: integer
+          description: Static priority for real-time scheduling
+        nice:
+          type: integer
+          description: Nice value for best-effort/background scheduling
+        deadline:
+          $ref: '#/components/schemas/WorkloadDeadline'
     EligibilityRule:
       type: object
       description: A rule matching properties and supplier-defined labels reported through the device capabilities.
