@@ -26,7 +26,6 @@ set_capabilities_roles() {
   local file="$HOME/sandbox/poc/device/agent/config/capabilities.json"
 
   if [[ -f "$file" ]]; then
-    # TODO: we can use jq here if we wanted
     sed -i -E "s|\"roles\"[[:space:]]*:[[:space:]]*\[[^]]*\]|\"roles\": [\"$role\"]|g" "$file"
     echo "capabilities.json roles set to [$role]"
   else
