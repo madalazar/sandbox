@@ -54,13 +54,14 @@ func NormalizeCpuRequirements(
 	}
 
 	for _, req := range *capacityRequirements.Cpu {
-		requirement := CpuRequirement{Mode: CpuModeShared, Cores: normalizeCores(req.Cores)}
+		requirement := CpuRequirement{Cores: normalizeCores(req.Cores)}
 		if req.Type != nil && *req.Type == sbi.DeploymentCpuRequirementTypeIsolated {
 			requirement.Mode = CpuModeIsolated
 			normalized.Isolated = append(normalized.Isolated, requirement)
-			continue
+		} else {
+			requirement.Mode = CpuModeShared
+			normalized.Shared = append(normalized.Shared, requirement)
 		}
-		normalized.Shared = append(normalized.Shared, requirement)
 	}
 
 	// one component deploys one unit with one cpuset, so a second isolated requirement

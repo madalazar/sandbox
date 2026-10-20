@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"fmt"
+
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
@@ -57,9 +59,11 @@ func (l *AllocationLedger) IsCpuAvailable(cpuIndex int, ref model.ComponentRef) 
 // records an exclusive claim for this pass; it reserves nothing when any
 // index is unavailable.
 func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error {
-	// if we want to add a double check for l.IsCpuAvailable(cpuIndex, ref) we can add it here
-	// while originally added, it was removed as the planner's call to l.IsCpuAvailable
-	// makes this call redundant
+	for _, cpuIndex := range cpus {
+		if !l.IsCpuAvailable(cpuIndex, ref) {
+			return fmt.Errorf("cpu %d is not available to component %q", cpuIndex, ref)
+		}
+	}
 
 	for _, cpuIndex := range cpus {
 		l.reservedCpus[cpuIndex] = ref
