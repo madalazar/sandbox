@@ -17,11 +17,50 @@
         "serialNumber": "PF45343-AA",
         "cpus": [
             {
-                "cores": 24,
+                "cores": 4,
+                "architecture": "amd64",
+                "class": "low-power",
+                "type": "shared",
+                "frequency": {
+                    "maxMHz": 3300,
+                    "baseMHz": 1500
+                }
+            },
+            {
+                "class": "performance",
+                "cores": 2,
+                "type": "isolated",
+                "frequency": {
+                    "maxMHz": 4700,
+                    "baseMHz": 1900
+                },
                 "architecture": "amd64"
             }
+
         ],
-        "memory": "59Gi",
+         "cache": [
+            {
+                "level": "L3",
+                "cacheId": "0",
+                "size": "115200KB",
+                "allocationTypes": [
+                    "shared",
+                    "exclusive"
+                ]
+            },
+            {
+                "level": "L3",
+                "cacheId": "1",
+                "size": "115200KB",
+                "allocationTypes": [
+                    "shared",
+                    "exclusive"
+                ]
+            }
+        ],
+        "memory": {
+            "size": "59Gi"
+        },
         "storage": "1862Gi",
         "peripherals": [
             {
@@ -43,6 +82,13 @@
         ],
         "supportedDeploymentTypes": [
             "compose"
-        ]
+        ],
+        "workload": {
+            "schedulingTypes": [
+                    "best-effort",
+                    "real-time"
+            ]
+        }
+
     }
 }
