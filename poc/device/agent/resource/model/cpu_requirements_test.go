@@ -9,26 +9,26 @@ import (
 func TestNormalizeCpuRequirements(t *testing.T) {
 	tests := []struct {
 		name         string
-		required     *sbi.RequiredResources
+		required     *sbi.CapacityRequirements
 		wantShared   []CpuRequirement
 		wantIsolated []CpuRequirement
 	}{
 		{name: "no required resources"},
 		{
 			name:         "fractional isolated cores round up",
-			required:     cpuRequirements(cpuRequirement(sbi.CpuTypeIsolated, 0.5)),
+			required:     cpuRequirements(cpuRequirement(sbi.DeploymentCpuRequirementTypeIsolated, 0.5)),
 			wantIsolated: []CpuRequirement{{Mode: CpuModeIsolated, Cores: 1}},
 		},
 		{
 			name:       "absent cores means one shared core",
-			required:   cpuRequirements(sbi.Cpu{}),
+			required:   cpuRequirements(sbi.DeploymentCpuRequirement{}),
 			wantShared: []CpuRequirement{{Mode: CpuModeShared, Cores: 1}},
 		},
 		{
 			name: "shared cores are classified separately",
 			required: cpuRequirements(
-				cpuRequirement(sbi.CpuTypeShared, 2.1),
-				cpuRequirement(sbi.CpuTypeShared, 1),
+				cpuRequirement(sbi.DeploymentCpuRequirementTypeShared, 2.1),
+				cpuRequirement(sbi.DeploymentCpuRequirementTypeShared, 1),
 			),
 			wantShared: []CpuRequirement{
 				{Mode: CpuModeShared, Cores: 3},
@@ -65,8 +65,8 @@ func TestNormalizeCpuRequirements(t *testing.T) {
 
 func TestNormalizeCpuRequirementsRejectsSecondIsolatedRequirement(t *testing.T) {
 	required := cpuRequirements(
-		cpuRequirement(sbi.CpuTypeIsolated, 1),
-		cpuRequirement(sbi.CpuTypeIsolated, 1),
+		cpuRequirement(sbi.DeploymentCpuRequirementTypeIsolated, 1),
+		cpuRequirement(sbi.DeploymentCpuRequirementTypeIsolated, 1),
 	)
 
 	if _, err := NormalizeCpuRequirements("component-a", required); err == nil {
@@ -77,8 +77,8 @@ func TestNormalizeCpuRequirementsRejectsSecondIsolatedRequirement(t *testing.T) 
 // One unit has one cpuset, so a component cannot ask for both modes at once.
 func TestNormalizeCpuRequirementsRejectsMixedModes(t *testing.T) {
 	required := cpuRequirements(
-		cpuRequirement(sbi.CpuTypeShared, 2),
-		cpuRequirement(sbi.CpuTypeIsolated, 1),
+		cpuRequirement(sbi.DeploymentCpuRequirementTypeShared, 2),
+		cpuRequirement(sbi.DeploymentCpuRequirementTypeIsolated, 1),
 	)
 
 	if _, err := NormalizeCpuRequirements("component-a", required); err == nil {
@@ -86,10 +86,10 @@ func TestNormalizeCpuRequirementsRejectsMixedModes(t *testing.T) {
 	}
 }
 
-func cpuRequirement(cpuType sbi.CpuType, cores float32) sbi.Cpu {
-	return sbi.Cpu{Type: &cpuType, Cores: &cores}
+func cpuRequirement(cpuType sbi.DeploymentCpuRequirementType, cores float32) sbi.DeploymentCpuRequirement {
+	return sbi.DeploymentCpuRequirement{Type: &cpuType, Cores: cores}
 }
 
-func cpuRequirements(reqs ...sbi.Cpu) *sbi.RequiredResources {
-	return &sbi.RequiredResources{Cpu: &reqs}
+func cpuRequirements(reqs ...sbi.DeploymentCpuRequirement) *sbi.CapacityRequirements {
+	return &sbi.CapacityRequirements{Cpu: &reqs}
 }

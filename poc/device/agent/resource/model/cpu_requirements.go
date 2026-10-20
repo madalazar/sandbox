@@ -22,8 +22,8 @@ type CpuRequirement struct {
 }
 
 // represents one component's cpu requests. Component membership is
-// structural - requiredResources is nested inside the component - so
-// requiredResources[].name is neither read nor matched against the component name
+// structural - deviceConstraints.capacityRequirements is nested inside the component - so
+// seviceConstraints.capacityRequirements.cpu[].name is neither read nor matched against the component name
 type NormalizedCpuRequirements struct {
 	Component ComponentRef
 	Shared    []CpuRequirement
@@ -46,16 +46,16 @@ func (r NormalizedCpuRequirements) CountIsolatedCores() int {
 // is the only place that reads the generated SBI cpu shape
 func NormalizeCpuRequirements(
 	ref ComponentRef,
-	requiredResources *sbi.RequiredResources,
+	capacityRequirements *sbi.CapacityRequirements,
 ) (NormalizedCpuRequirements, error) {
 	normalized := NormalizedCpuRequirements{Component: ref}
-	if requiredResources == nil || requiredResources.Cpu == nil {
+	if capacityRequirements == nil || capacityRequirements.Cpu == nil {
 		return normalized, nil
 	}
 
-	for _, req := range *requiredResources.Cpu {
+	for _, req := range *capacityRequirements.Cpu {
 		requirement := CpuRequirement{Mode: CpuModeShared, Cores: normalizeCores(req.Cores)}
-		if req.Type != nil && *req.Type == sbi.CpuTypeIsolated {
+		if req.Type != nil && *req.Type == sbi.DeploymentCpuRequirementTypeIsolated {
 			requirement.Mode = CpuModeIsolated
 			normalized.Isolated = append(normalized.Isolated, requirement)
 			continue
@@ -82,10 +82,10 @@ func NormalizeCpuRequirements(
 	return normalized, nil
 }
 
-// rounds a fractional core request up. An absent or non-positive request means one core
-func normalizeCores(cores *float32) int {
-	if cores == nil || *cores <= 0 {
+// rounds a fractional core request up. A non-positive request means one core
+func normalizeCores(cores float32) int {
+	if cores <= 0 {
 		return 1
 	}
-	return int(math.Ceil(float64(*cores)))
+	return int(math.Ceil(float64(cores)))
 }
