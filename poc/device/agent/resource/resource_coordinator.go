@@ -14,7 +14,7 @@ import (
 // unwrapped by normalization inside Plan, so no later stage sees a generated pointer
 type ResourceRequest struct {
 	Owner        model.OwnerRef
-	Requirements *sbi.RequiredResources
+	Requirements *sbi.CapacityRequirements
 }
 
 // what planning decided for one component. It gains a Cache field when the cache
