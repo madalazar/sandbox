@@ -13,16 +13,16 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 	l := newCpuPlanningTestLedger("deployment-123")
 
 	tests := []struct {
-		name              string
-		componentName     string
-		requiredResources *sbi.RequiredResources
-		wantCpus          []int
+		name                 string
+		componentName        string
+		capacityRequirements *sbi.CapacityRequirements
+		wantCpus             []int
 	}{
 		{
-			name:              "cyclictest gets first isolated cpu",
-			componentName:     "cyclictest_compose",
-			requiredResources: isolatedCpuRequirement("cyclictest_compose"),
-			wantCpus:          []int{1},
+			name:                 "cyclictest gets first isolated cpu",
+			componentName:        "cyclictest_compose",
+			capacityRequirements: isolatedCpuRequirement("cyclictest_compose"),
+			wantCpus:             []int{1},
 		},
 		{
 			name:          "stressng has no cpu requirement",
@@ -30,17 +30,17 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 			wantCpus:      nil,
 		},
 		{
-			name:              "caterpillar gets remaining isolated cpu",
-			componentName:     "caterpillar_compose",
-			requiredResources: isolatedCpuRequirement("caterpillar_compose"),
-			wantCpus:          []int{3},
+			name:                 "caterpillar gets remaining isolated cpu",
+			componentName:        "caterpillar_compose",
+			capacityRequirements: isolatedCpuRequirement("caterpillar_compose"),
+			wantCpus:             []int{3},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := planner.PlanCpu(
-				newCpuPlanningRequest(t, test.componentName, test.requiredResources, l),
+				newCpuPlanningRequest(t, test.componentName, test.capacityRequirements, l),
 			)
 			if err != nil {
 				t.Fatalf("PlanCpu() error = %v", err)

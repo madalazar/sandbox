@@ -78,16 +78,16 @@ func TestResourceCoordinatorNewLedger(t *testing.T) {
 func TestResourceCoordinatorPlan(t *testing.T) {
 	owner := model.NewOwnerRef("dep-1", "comp-1")
 	cores := float32(1)
-	class := sbi.CpuClassPerformance
-	cpuType := sbi.CpuTypeIsolated
+	class := sbi.DeploymentCpuRequirementClassPerformance
+	cpuType := sbi.DeploymentCpuRequirementTypeIsolated
 	compName := "comp-1"
 	req := ResourceRequest{
 		Owner: owner,
-		Requirements: &sbi.RequiredResources{
-			Cpu: &[]sbi.Cpu{
+		Requirements: &sbi.CapacityRequirements{
+			Cpu: &[]sbi.DeploymentCpuRequirement{
 				{
 					Name:  &compName,
-					Cores: &cores,
+					Cores: cores,
 					Class: &class,
 					Type:  &cpuType,
 				},

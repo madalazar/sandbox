@@ -14,12 +14,12 @@ var testIsolatedCpuIndices = []int{1, 3}
 func newCpuPlanningRequest(
 	t *testing.T,
 	componentName string,
-	requiredResources *sbi.RequiredResources,
+	capacityRequirements *sbi.CapacityRequirements,
 	l *ledger.AllocationLedger,
 ) CpuPlanningRequest {
 	t.Helper()
 
-	requirements, err := model.NormalizeCpuRequirements(model.ComponentRef(componentName), requiredResources)
+	requirements, err := model.NormalizeCpuRequirements(model.ComponentRef(componentName), capacityRequirements)
 	if err != nil {
 		t.Fatalf("NormalizeCpuRequirements() error = %v", err)
 	}
@@ -36,20 +36,20 @@ func newCpuPlanningTestLedger(deploymentId string) *ledger.AllocationLedger {
 	return ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, isolated), deploymentId)
 }
 
-func isolatedCpuRequirement(name string) *sbi.RequiredResources {
+func isolatedCpuRequirement(name string) *sbi.CapacityRequirements {
 	cores := float32(1)
-	class := sbi.CpuClassPerformance
-	cpuType := sbi.CpuTypeIsolated
-	cpuRequirements := []sbi.Cpu{
+	class := sbi.DeploymentCpuRequirementClassPerformance
+	cpuType := sbi.DeploymentCpuRequirementTypeIsolated
+	cpuRequirements := []sbi.DeploymentCpuRequirement{
 		{
 			Name:  &name,
-			Cores: &cores,
+			Cores: cores,
 			Class: &class,
 			Type:  &cpuType,
 		},
 	}
 
-	return &sbi.RequiredResources{Cpu: &cpuRequirements}
+	return &sbi.CapacityRequirements{Cpu: &cpuRequirements}
 }
 
 // BalloonCpuPlanner is tested as not yet implemented until its implementation lands
