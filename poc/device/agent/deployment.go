@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -487,10 +486,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		// Get compose content from package location
 		dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(component))
-		dm.log.Infow("compose component requiredResources", "appId", deploymentId, "profileType",
-			appDeployment.Spec.DeploymentProfile.Type, "profileRequiredResources",
-			appDeployment.Spec.DeploymentProfile.RequiredResources, "componentName",
-			component.Name, "componentRequiredResources", dm.extractComponentRequiredResources(component))
+		dm.log.Infow("compose component capacity reqs", "appId", deploymentId, "profileType",
+			appDeployment.Spec.DeploymentProfile.Type, "profile device constraints",
+			appDeployment.Spec.DeploymentProfile.DeviceConstraints, "componentName",
+			component.Name, "component device constraints", dm.extractComponentDeviceConstraints(component))
 
 		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
@@ -522,7 +521,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
-			Requirements: component.RequiredResources,
+			Requirements: component.DeviceConstraints.CapacityRequirements,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
@@ -548,9 +547,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
 			}
 
-			removeSourceComposeFile := strings.HasPrefix(component.Properties.PackageLocation, "oci://") ||
-				strings.HasPrefix(component.Properties.PackageLocation, "http://") ||
-				strings.HasPrefix(component.Properties.PackageLocation, "https://")
+			// repository only uses oci:// type urls
+			removeSourceComposeFile := strings.HasPrefix(component.Properties.Repository, "oci://")
 			defer func(prep string, src string, rmSrc bool) {
 				if rmSrc {
 					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -831,38 +829,6 @@ func (dm *DeploymentManager) extractComponentNames(
 
 func GetAddress[T any](a T) *T {
 	return &a
-}
-
-// TODO: this is just a method used for logging purposes. To be removed once the
-// implementation is added
-// extractComponentRequiredResources reads requiredResources from the raw component JSON.
-// The generated compose component type does not currently include this field.
-func (dm *DeploymentManager) extractComponentRequiredResources(
-	component sbi.AppDeploymentProfile_Components_Item,
-) map[string]interface{} {
-	raw, err := component.MarshalJSON()
-	if err != nil {
-		dm.log.Debugw("failed to marshal component JSON", "error", err)
-		return nil
-	}
-
-	var componentMap map[string]interface{}
-	if err := json.Unmarshal(raw, &componentMap); err != nil {
-		dm.log.Debugw("failed to unmarshal component JSON", "error", err)
-		return nil
-	}
-
-	if resources, ok := componentMap["requiredResources"].(map[string]interface{}); ok {
-		return resources
-	}
-
-	if properties, ok := componentMap["properties"].(map[string]interface{}); ok {
-		if resources, ok := properties["requiredResources"].(map[string]interface{}); ok {
-			return resources
-		}
-	}
-
-	return nil
 }
 
 // Helper function to convert parameters to environment variables
