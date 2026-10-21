@@ -419,7 +419,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
-			Requirements: component.RequiredResources,
+			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
@@ -514,7 +514,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Infow("compose component capacity reqs", "appId", deploymentId, "profileType",
 			appDeployment.Spec.DeploymentProfile.Type, "profile device constraints",
 			appDeployment.Spec.DeploymentProfile.DeviceConstraints, "componentName",
-			component.Name, "component device constraints", dm.extractComponentDeviceConstraints(component))
+			component.Name, "component capacity reqs", dm.extractComponentCapacityRequirements(component))
 
 		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
@@ -546,7 +546,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
-			Requirements: component.DeviceConstraints.CapacityRequirements,
+			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
@@ -895,13 +895,15 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	return envVars
 }
 
-// TODO: this is just a method used for logging purposes. To be removed once the
-// implementation is added
-// extractComponentDeviceConstraints reads deviceConstraints from the component.
-func (dm *DeploymentManager) extractComponentDeviceConstraints(
+// extractComponentCapacityRequirements reads the capacity requirements from the component
+func (dm *DeploymentManager) extractComponentCapacityRequirements(
 	component sbi.ApplicationDeploymentProfileComponent,
-) *sbi.DeviceConstraints {
-	return component.DeviceConstraints
+) *sbi.CapacityRequirements {
+	if component.DeviceConstraints != nil && component.DeviceConstraints.CapacityRequirements != nil {
+		return component.DeviceConstraints.CapacityRequirements
+	}
+
+	return nil
 }
 
 func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
