@@ -46,7 +46,7 @@ _nri_build_rdt_control_yaml() {
 #
 # Generates a default NRI Balloon Resource Policy with:
 #   - Available CPUs derived from host CPU topology (or custom range)
-#   - Reserved CPUs defaulting to core 0, + 1 core if > 30 cores, + 2 cores if > 60 cores
+#   - Reserved CPUs defaulting to core 0, + 1 core if > 32 cores, + 2 cores if > 64 cores
 #   - Individual balloons for each isolated CPU core (ipc<class><core_id>)
 #   - Shared cores delegated to NRI's default balloon (no custom balloon)
 #   - RDT control block with fullCache: null
@@ -61,7 +61,7 @@ _nri_build_rdt_control_yaml() {
 #
 # Usage: generate_default_nri_policy [available_cpus [reserved_cpus [output_file [topology_cache_file]]]]
 #   available_cpus:      cpuset range string (default: derived from topology cache)
-#   reserved_cpus:       cpuset range string (default: core 0, + last core if > 30 cores, + last 2 cores if > 60 cores)
+#   reserved_cpus:       cpuset range string (default: core 0, + last core if > 32 cores, + last 2 cores if > 64 cores)
 #   output_file:         destination for YAML (default: $HOME/sandbox/balloon-policy.yaml)
 #   topology_cache_file: topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
 # ---------------------------------------------------------------------------
@@ -98,13 +98,13 @@ generate_default_nri_policy() {
   fi
 
   # Derive reserved_cpus_range if not explicitly provided:
-  # Core 0 is always included; add 1 core (last one) if > 30 cores, or last 2 cores if > 60 cores.
+  # Core 0 is always included; add 1 core (last one) if > 32 cores, or last 2 cores if > 64 cores.
   if [[ -z "$reserved_cpus_range" ]]; then
     reserved_cpus_range="$(jq -r '
       [.[].id | tonumber] | sort as $ids |
       ($ids | length) as $cnt |
-      (if $cnt > 60 then ([$ids[0]] + $ids[-2:])
-       elif $cnt > 30 then ([$ids[0]] + [$ids[-1]])
+      (if $cnt > 64 then ([$ids[0]] + $ids[-2:])
+       elif $cnt > 32 then ([$ids[0]] + [$ids[-1]])
        else [$ids[0]]
        end) | unique | sort | join(",")
     ' <<< "$cpu_topology_json")"
