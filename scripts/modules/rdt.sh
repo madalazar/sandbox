@@ -25,15 +25,17 @@ _is_intel_rdt_enabled_at_boot() {
   local cmdline
   cmdline="$(cat "$RDT_KERNEL_CMDLINE_FILE" 2>/dev/null || true)"
 
-  [[ "$cmdline" == *"intel_rdt=on"* ]] || return 1
-  [[ "$cmdline" == *"rdt="* ]]
+  [[ "$cmdline" == *"rdt="* || "$cmdline" == *"intel_rdt=on"* ]]
 }
 
 # Return 0 if the kernel command line and resctrl show usable CAT support.
 _is_intel_rdt_enabled_and_usable() {
+  if [[ -d "$RDT_RESCTRL_ROOT/info/L3" || -d "$RDT_RESCTRL_ROOT/info/L2" ]]; then
+    return 0
+  fi
+
   _is_intel_rdt_enabled_at_boot || return 1
-  [[ -d "$RDT_RESCTRL_ROOT" ]] || return 1
-  [[ -d "$RDT_RESCTRL_ROOT/info/L3" || -d "$RDT_RESCTRL_ROOT/info/L2" ]]
+  [[ -d "$RDT_RESCTRL_ROOT" ]]
 }
 
 _ensure_resctrl_mounted() {
