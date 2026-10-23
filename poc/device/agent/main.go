@@ -19,7 +19,6 @@ import (
 
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource"
-	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	wfm "github.com/margo/sandbox/poc/wfm/cli"
 	"github.com/margo/sandbox/shared-lib/mis/mtls"
@@ -35,19 +34,18 @@ import (
 // 3. State seeking/syncing with wfm
 // 4. Deployment status updates to the wfm
 type Agent struct {
-	log            *zap.SugaredLogger
-	auth           *DeviceClientSettings
-	capabilities   *sbi.DeviceCapabilitiesManifest
-	config         types.Config
-	database       database.DatabaseIfc
-	balloonPolicy  *resource.BalloonPolicyInformer
-	policyReader   model.BalloonPolicyReader
-	syncer         StateSyncerIfc
-	deployer       DeploymentManagerIfc
-	monitor        DeploymentMonitorIfc
-	statusReporter StatusReporterIfc
-	tbCacher       TrustBundleCacherIfc
-	afWatcher      AuthFileWatcherIfc
+	log                   *zap.SugaredLogger
+	auth                  *DeviceClientSettings
+	capabilities          *sbi.DeviceCapabilitiesManifest
+	config                types.Config
+	database              database.DatabaseIfc
+	balloonPolicyInformer *resource.BalloonPolicyInformer
+	syncer                StateSyncerIfc
+	deployer              DeploymentManagerIfc
+	monitor               DeploymentMonitorIfc
+	statusReporter        StatusReporterIfc
+	tbCacher              TrustBundleCacherIfc
+	afWatcher             AuthFileWatcherIfc
 }
 
 func NewAgent(configPath string) (*Agent, error) {
@@ -79,7 +77,7 @@ func NewAgent(configPath string) (*Agent, error) {
 	opts := []Option{}
 	var helmClient *workloads.HelmClient
 	var composeClient *workloads.DockerComposeCliClient
-	var balloonPolicy *resource.BalloonPolicyInformer
+	var balloonPolicyInformer *resource.BalloonPolicyInformer
 	for _, runtime := range cfg.Runtimes {
 		if runtime.Kubernetes != nil {
 			// Create Helm client
@@ -87,8 +85,8 @@ func NewAgent(configPath string) (*Agent, error) {
 			if err != nil {
 				return nil, err
 			}
-			if balloonPolicy == nil {
-				balloonPolicy, err = resource.NewBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
+			if balloonPolicyInformer == nil {
+				balloonPolicyInformer, err = resource.NewBalloonPolicyInformer(runtime.Kubernetes.KubeconfigPath, log)
 				if err != nil {
 					return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
 				}
@@ -199,7 +197,7 @@ func NewAgent(configPath string) (*Agent, error) {
 		log.Errorw("unable to load host topology artifact", "path", topologyArtifactPath, "error", err)
 	}
 
-	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicy, hostTopology, log)
+	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, hostTopology, log)
 	monitor := NewDeploymentMonitor(db, capabilities, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,
@@ -212,19 +210,18 @@ func NewAgent(configPath string) (*Agent, error) {
 	afWatcher := NewAuthFileWatcher(cfg.MIAF.AuthzPath, db, log)
 
 	return &Agent{
-		database:       db,
-		balloonPolicy:  balloonPolicy,
-		policyReader:   balloonPolicy,
-		syncer:         syncer,
-		deployer:       deployer,
-		monitor:        monitor,
-		auth:           deviceSettings,
-		statusReporter: statusReporter,
-		log:            log,
-		config:         *cfg,
-		capabilities:   capabilities,
-		tbCacher:       tbCacher,
-		afWatcher:      afWatcher,
+		database:              db,
+		balloonPolicyInformer: balloonPolicyInformer,
+		syncer:                syncer,
+		deployer:              deployer,
+		monitor:               monitor,
+		auth:                  deviceSettings,
+		statusReporter:        statusReporter,
+		log:                   log,
+		config:                *cfg,
+		capabilities:          capabilities,
+		tbCacher:              tbCacher,
+		afWatcher:             afWatcher,
 	}, nil
 }
 
@@ -305,12 +302,12 @@ func (a *Agent) Start() error {
 		time.Sleep(5 * time.Second)
 	}
 
-	if a.balloonPolicy != nil {
+	if a.balloonPolicyInformer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		if err := a.balloonPolicy.Start(ctx); err != nil {
-			a.log.Warnw("balloon policy informer did not complete initial sync; continuing without NRI annotations", "err", err)
+		if err := a.balloonPolicyInformer.Start(ctx); err != nil {
+			a.log.Warnw("balloon policy informer failed initial sync; background sync will keep retrying(NRI annotations delayed or unavailable)", "err", err)
 		}
 	}
 
@@ -334,8 +331,8 @@ func (a *Agent) Stop() error {
 	a.log.Info("Stopping Workload Fleet Management Client")
 	a.tbCacher.Stop()
 
-	if a.balloonPolicy != nil {
-		a.balloonPolicy.Stop()
+	if a.balloonPolicyInformer != nil {
+		a.balloonPolicyInformer.Stop()
 	}
 
 	a.syncer.Stop()
