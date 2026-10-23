@@ -21,7 +21,7 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 			t.Fatal("expected no cache requirements")
 		}
 
-		empty := &sbi.RequiredResources{Cache: &[]sbi.Cache{}}
+		empty := &sbi.CapacityRequirements{Cache: &[]sbi.DeploymentCacheRequirement{}}
 		normalized, err = NormalizeCacheRequirements("comp-a", empty)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -32,11 +32,11 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 	})
 
 	t.Run("valid L3 exclusive requirement", func(t *testing.T) {
-		req := &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		req := &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
-					Level:      sbi.CacheLevelL3,
-					Allocation: sbi.CacheAllocationExclusive,
+					Level:      sbi.DeploymentCacheRequirementLevelL3,
+					Allocation: sbi.DeploymentCacheRequirementAllocationExclusive,
 					Size:       strPtr("9216Ki"),
 				},
 			},
@@ -58,13 +58,17 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 	})
 
 	t.Run("rejects non-L3 level", func(t *testing.T) {
-		levels := []sbi.CacheLevel{sbi.CacheLevelL1d, sbi.CacheLevelL1i, sbi.CacheLevelL2}
+		levels := []sbi.DeploymentCacheRequirementLevel{
+			sbi.DeploymentCacheRequirementLevelL1d,
+			sbi.DeploymentCacheRequirementLevelL1i,
+			sbi.DeploymentCacheRequirementLevelL2,
+		}
 		for _, level := range levels {
-			req := &sbi.RequiredResources{
-				Cache: &[]sbi.Cache{
+			req := &sbi.CapacityRequirements{
+				Cache: &[]sbi.DeploymentCacheRequirement{
 					{
 						Level:      level,
-						Allocation: sbi.CacheAllocationExclusive,
+						Allocation: sbi.DeploymentCacheRequirementAllocationExclusive,
 						Size:       strPtr("1024Ki"),
 					},
 				},
@@ -80,11 +84,11 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 	})
 
 	t.Run("skips shared cache allocation", func(t *testing.T) {
-		req := &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		req := &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
-					Level:      sbi.CacheLevelL3,
-					Allocation: sbi.CacheAllocationShared,
+					Level:      sbi.DeploymentCacheRequirementLevelL3,
+					Allocation: sbi.DeploymentCacheRequirementAllocationShared,
 					Size:       strPtr("1024Ki"),
 				},
 			},
@@ -102,16 +106,16 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 	})
 
 	t.Run("rejects multiple L3 cache requirements", func(t *testing.T) {
-		req := &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		req := &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
-					Level:      sbi.CacheLevelL3,
-					Allocation: sbi.CacheAllocationExclusive,
+					Level:      sbi.DeploymentCacheRequirementLevelL3,
+					Allocation: sbi.DeploymentCacheRequirementAllocationExclusive,
 					Size:       strPtr("1024Ki"),
 				},
 				{
-					Level:      sbi.CacheLevelL3,
-					Allocation: sbi.CacheAllocationExclusive,
+					Level:      sbi.DeploymentCacheRequirementLevelL3,
+					Allocation: sbi.DeploymentCacheRequirementAllocationExclusive,
 					Size:       strPtr("2048Ki"),
 				},
 			},
@@ -126,11 +130,11 @@ func TestNormalizeCacheRequirements(t *testing.T) {
 	})
 
 	t.Run("rejects invalid size", func(t *testing.T) {
-		req := &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		req := &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
-					Level:      sbi.CacheLevelL3,
-					Allocation: sbi.CacheAllocationExclusive,
+					Level:      sbi.DeploymentCacheRequirementLevelL3,
+					Allocation: sbi.DeploymentCacheRequirementAllocationExclusive,
 					Size:       strPtr("invalid"),
 				},
 			},

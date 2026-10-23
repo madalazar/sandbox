@@ -40,25 +40,25 @@ func (r NormalizedCacheRequirements) HasCache() bool {
 // with at most one l3 requirement per component
 func NormalizeCacheRequirements(
 	ref ComponentRef,
-	requiredResources *sbi.RequiredResources,
+	capacityRequirements *sbi.CapacityRequirements,
 ) (NormalizedCacheRequirements, error) {
 	normalized := NormalizedCacheRequirements{Component: ref}
-	if requiredResources == nil || requiredResources.Cache == nil {
+	if capacityRequirements == nil || capacityRequirements.Cache == nil {
 		return normalized, nil
 	}
 
-	exclusiveReqs := make([]sbi.Cache, 0)
+	exclusiveReqs := make([]sbi.DeploymentCacheRequirement, 0)
 	// filter only exclusive l3 level cache requirements
-	for _, req := range *requiredResources.Cache {
+	for _, req := range *capacityRequirements.Cache {
 		levelStr := string(req.Level)
-		if req.Level != sbi.CacheLevelL3 {
+		if req.Level != sbi.DeploymentCacheRequirementLevelL3 {
 			return NormalizedCacheRequirements{}, fmt.Errorf(
 				"component %q requests cache level %q; only l3 cache is supported",
 				ref, levelStr,
 			)
 		}
 
-		if req.Allocation == sbi.CacheAllocationExclusive {
+		if req.Allocation == sbi.DeploymentCacheRequirementAllocationExclusive {
 			exclusiveReqs = append(exclusiveReqs, req)
 		}
 	}
