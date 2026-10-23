@@ -91,7 +91,7 @@ DOCKER_VERSION="${DOCKER_VERSION:-29.1.2}"
 DOCKER_COMPOSE_VERSION="${DOCKER_COMPOSE_VERSION:-5.0.0}"
 
 # Stable version as of December 2024
-K3S_VERSION="${K3S_VERSION:-v1.31.4+k3s1}"
+K3S_VERSION="${K3S_VERSION:-v1.36.4+k3s1}"
 
 # ----------------------------
 # GHCR Image References
@@ -117,6 +117,7 @@ source "${SCRIPT_DIR}/modules/agent.sh"
 source "${SCRIPT_DIR}/modules/rdt.sh"
 source "${SCRIPT_DIR}/modules/observability.sh"
 source "${SCRIPT_DIR}/modules/dns-host-config.sh"
+source "${SCRIPT_DIR}/modules/nri.sh"
 
 export GOINSECURE='github.com/margo/*'
 export GONOPROXY='github.com/margo/*'
@@ -304,6 +305,76 @@ create_device_ecdsa_certs() {
 
 
 }
+
+# ---------------------------------------------------------------------------
+# NRI k3s guard - ensures we are in a k3s environment with cluster access
+# ---------------------------------------------------------------------------
+_require_k3s_cluster() {
+  if [[ "${DEVICE_TYPE:-}" != "k3s" ]]; then
+    echo "[ERROR] This operation requires a k3s device. Current device type: '${DEVICE_TYPE:-unset}'"
+    return 1
+  fi
+  if ! kubectl get nodes -o name >/dev/null 2>&1; then
+    echo "[ERROR] Kubernetes cluster is not reachable."
+    echo "        Ensure k3s is running and kubectl is configured."
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# NRI menu wrappers (k3s-only)
+# ---------------------------------------------------------------------------
+_nri_install_menu() {
+  if ! _require_k3s_cluster; then return 1; fi
+  local default_policy="$HOME/sandbox/balloon-policy.yaml"
+  read -rp "Path to balloon values file (leave blank to auto-generate) [${default_policy}]: " balloon_values
+  balloon_values="${balloon_values:-$default_policy}"
+  install_balloon_nri_plugin "$balloon_values"
+}
+
+_nri_update_menu() {
+  if ! _require_k3s_cluster; then return 1; fi
+  local default_policy="$HOME/sandbox/balloon-policy.yaml"
+  read -rp "Path to balloon values file [${default_policy}]: " balloon_values
+  balloon_values="${balloon_values:-$default_policy}"
+  update_balloon_nri_plugin "$balloon_values"
+}
+
+_nri_is_installed() {
+  local release="nri-resource-policy-balloons"
+
+  if command -v helm >/dev/null 2>&1; then
+    if helm status "$release" -n kube-system >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  if command -v kubectl >/dev/null 2>&1; then
+    if kubectl get pods -n kube-system -l "app.kubernetes.io/instance=${release}" --no-headers 2>/dev/null | grep -q .; then
+      return 0
+    fi
+    if kubectl get pods -n kube-system -l "app.kubernetes.io/name=nri-resource-policy-balloons" --no-headers 2>/dev/null | grep -q .; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+_nri_uninstall_if_present() {
+  if ! _nri_is_installed; then
+    echo "[INFO] NRI Balloon plugin not detected (no Helm release or NRI pods found). Nothing to uninstall."
+    return 0
+  fi
+
+  uninstall_balloon_nri_plugin
+}
+
+_nri_uninstall_menu() {
+  _nri_uninstall_if_present
+}
+
 pause() {
   echo
   read -rp "Press Enter to continue..." _
@@ -327,8 +398,12 @@ show_menu() {
   echo "10) cleanup-residual"
   echo "11) create_device_rsa_certs"
   echo "12) create_device_ecdsa_certs"
-  echo "13) Exit"
-  read -rp "Enter choice [1-13]: " choice
+  echo "--- k3s-only NRI options ---"
+  echo "13) NRI-Balloon-Plugin-Install (cluster reachable, agent pod not required)"
+  echo "14) NRI-Balloon-Plugin-Update"
+  echo "15) NRI-Balloon-Plugin-Uninstall"
+  echo "16) Exit"
+  read -rp "Enter choice [1-16]: " choice
   case $choice in
     1) install_prerequisites;;
     2) uninstall_prerequisites;;
@@ -342,7 +417,10 @@ show_menu() {
     10) cleanup_residual;;
     11) create_device_rsa_certs ;;
     12) create_device_ecdsa_certs ;;
-    13) echo "👋 Goodbye!"; exit 0 ;;
+    13) _nri_install_menu ;;
+    14) _nri_update_menu ;;
+    15) _nri_uninstall_menu ;;
+    16) echo "👋 Goodbye!"; exit 0 ;;
     *) echo "Invalid choice" ;;
   esac
 
@@ -390,9 +468,20 @@ elif [[ "$1" == "docker" || "$1" == "k3s" ]] && [[ -n "$2" ]]; then
     cleanup) cleanup_residual ;;
     create-rsa-certs) create_device_rsa_certs ;;
     create-ecdsa-certs) create_device_ecdsa_certs ;;
+    nri-install)
+      if ! _require_k3s_cluster; then exit 1; fi
+      install_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
+      ;;
+    nri-update)
+      if ! _require_k3s_cluster; then exit 1; fi
+      update_balloon_nri_plugin "${3:-$HOME/sandbox/balloon-policy.yaml}"
+      ;;
+    nri-uninstall)
+      _nri_uninstall_if_present
+      ;;
     *)
       echo "[ERROR] Unknown command: $2"
-      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs"
+      echo "Available: install, uninstall, start-docker, stop-docker, start-k3s, stop-k3s, status, otel-install, otel-uninstall, cleanup, create-rsa-certs, create-ecdsa-certs, nri-install [values-file], nri-update, nri-uninstall"
       exit 1
       ;;
   esac
