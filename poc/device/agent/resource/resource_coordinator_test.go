@@ -225,14 +225,14 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 
 func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 	owner := model.NewOwnerRef("dep-1", "comp-1")
-	cacheLevel := sbi.CacheLevelL3
-	allocMode := sbi.CacheAllocationExclusive
+	cacheLevel := sbi.DeploymentCacheRequirementLevelL3
+	allocMode := sbi.DeploymentCacheRequirementAllocationExclusive
 	cacheSize := "4096 KI"
 
 	req := ResourceRequest{
 		Owner: owner,
-		Requirements: &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		Requirements: &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
 					Level:      cacheLevel,
 					Allocation: allocMode,
