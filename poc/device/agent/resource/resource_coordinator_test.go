@@ -223,14 +223,14 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 
 func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 	owner := model.NewOwnerRef("dep-1", "comp-1")
-	cacheLevel := sbi.CacheLevelL3
-	allocMode := sbi.CacheAllocationExclusive
+	cacheLevel := sbi.DeploymentCacheRequirementLevelL3
+	allocMode := sbi.DeploymentCacheRequirementAllocationExclusive
 	cacheSize := "4096 KI"
 
 	req := ResourceRequest{
 		Owner: owner,
-		Requirements: &sbi.RequiredResources{
-			Cache: &[]sbi.Cache{
+		Requirements: &sbi.CapacityRequirements{
+			Cache: &[]sbi.DeploymentCacheRequirement{
 				{
 					Level:      cacheLevel,
 					Allocation: allocMode,
@@ -527,22 +527,22 @@ func (r staticBalloonPolicyReader) Parsed() *model.ParsedBalloonPolicy {
 	return r.policy
 }
 
-func makeCpuAndCacheReqs(comp string, cores float32, cacheSize string) *sbi.RequiredResources {
-	class := sbi.CpuClassPerformance
-	cpuType := sbi.CpuTypeIsolated
-	level := sbi.CacheLevelL3
-	mode := sbi.CacheAllocationExclusive
+func makeCpuAndCacheReqs(comp string, cores float32, cacheSize string) *sbi.CapacityRequirements {
+	class := sbi.DeploymentCpuRequirementClassPerformance
+	cpuType := sbi.DeploymentCpuRequirementTypeIsolated
+	level := sbi.DeploymentCacheRequirementLevelL3
+	mode := sbi.DeploymentCacheRequirementAllocationExclusive
 
-	return &sbi.RequiredResources{
-		Cpu: &[]sbi.Cpu{
+	return &sbi.CapacityRequirements{
+		Cpu: &[]sbi.DeploymentCpuRequirement{
 			{
 				Name:  &comp,
-				Cores: &cores,
+				Cores: cores,
 				Class: &class,
 				Type:  &cpuType,
 			},
 		},
-		Cache: &[]sbi.Cache{
+		Cache: &[]sbi.DeploymentCacheRequirement{
 			{
 				Level:      level,
 				Allocation: mode,

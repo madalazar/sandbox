@@ -4,6 +4,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestAllocationsClone(t *testing.T) {
@@ -49,7 +51,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	db := NewDatabase(tmpDir)
+	db := NewDatabase(tmpDir, zap.NewNop().Sugar())
 	deploymentID := "dep-1"
 
 	err = db.SetDesiredState(deploymentID, AppDeploymentState{
