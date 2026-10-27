@@ -75,7 +75,7 @@ func NewDeploymentManager(
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewRdtClassNamer()).
-		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
+		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build helm resource coordinator", "error", err)
