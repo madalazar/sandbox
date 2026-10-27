@@ -1,9 +1,13 @@
 package model
 
+import "k8s.io/apimachinery/pkg/runtime/schema"
+
 const (
 	// Resource and namespace defaults
 	DefaultBalloonsPolicyNamespace = "kube-system"
 	DefaultBalloonsPolicyName      = "default"
+	BalloonsPolicyGroup            = "config.nri"
+	BalloonsPolicyVersion          = "v1alpha1"
 	BalloonsPolicyResource         = "balloonspolicies"
 
 	// BalloonsPolicy schema keys
@@ -29,6 +33,12 @@ const (
 	RdtFillerCacheMask = "0x1"
 	RdtFullAllocation  = "100%"
 )
+
+var BalloonsPolicyGVR = schema.GroupVersionResource{
+	Group:    BalloonsPolicyGroup,
+	Version:  BalloonsPolicyVersion,
+	Resource: BalloonsPolicyResource,
+}
 
 // non-blocking reads of the latest parsed policy snapshot
 type BalloonPolicyReader interface {
