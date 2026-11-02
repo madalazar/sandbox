@@ -27,7 +27,6 @@ type AppDeploymentState struct {
 }
 
 type CacheAllocation struct {
-	// TODO: at the end of the wiring; if this field is not needed delete it
 	Owner         string `json:"owner,omitempty"`
 	ComponentName string `json:"componentName"`
 	Level         string `json:"level"`
