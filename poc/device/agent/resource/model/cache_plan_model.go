@@ -85,8 +85,6 @@ type CacheCapacity struct {
 
 // represents a planned cache assignment for one component on one cache domain
 type CacheAssignment struct {
-	// Review the need of OwnerRef vs ComponentRef
-	// Ref      ComponentRef
 	Owner    OwnerRef
 	Level    string
 	CacheId  string
@@ -98,7 +96,6 @@ type CacheAssignment struct {
 
 // represents what cache planning decided for one component
 type CachePlan struct {
-	// TODO: review the need for ComponentRef
 	Component         ComponentRef
 	L3CacheAssignment *CacheAssignment
 }
