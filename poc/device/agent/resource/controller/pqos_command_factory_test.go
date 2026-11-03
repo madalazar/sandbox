@@ -55,7 +55,7 @@ func TestBuildApplyArgs(t *testing.T) {
 	}
 
 	args := factory.BuildApplyArgs("0", "1", "0x3", "2,3")
-	expected := []string{"--iface=os", "-e", "llc@0:1=0x3", "-a", "core:1=2,3"}
+	expected := []string{"--iface=os", "--alloc-class=llc@0:1=0x3", "--alloc-assoc=core:1=2,3"}
 	if len(args) != len(expected) {
 		t.Fatalf("expected args %+v, got %+v", expected, args)
 	}
@@ -74,7 +74,7 @@ func TestBuildResetArgs(t *testing.T) {
 
 	t.Run("with core assignment", func(t *testing.T) {
 		args := factory.BuildResetArgs("0", "1", "0xfff", "2,3")
-		expected := []string{"--iface=msr", "-e", "llc@0:1=0xfff", "-a", "core:0=2,3"}
+		expected := []string{"--iface=msr", "--alloc-class=llc@0:1=0xfff", "--alloc-assoc=core:0=2,3"}
 		if len(args) != len(expected) {
 			t.Fatalf("expected args %+v, got %+v", expected, args)
 		}
@@ -87,7 +87,7 @@ func TestBuildResetArgs(t *testing.T) {
 
 	t.Run("without core assignment", func(t *testing.T) {
 		args := factory.BuildResetArgs("0", "1", "0xfff", "")
-		expected := []string{"--iface=msr", "-e", "llc@0:1=0xfff"}
+		expected := []string{"--iface=msr", "--alloc-class=llc@0:1=0xfff"}
 		if len(args) != len(expected) {
 			t.Fatalf("expected args %+v, got %+v", expected, args)
 		}

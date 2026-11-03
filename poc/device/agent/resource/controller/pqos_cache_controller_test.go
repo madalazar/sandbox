@@ -108,6 +108,40 @@ func TestPqosCacheControllerApply(t *testing.T) {
 			t.Fatal("expected error for missing cpuset, got nil")
 		}
 	})
+
+	t.Run("unset class id", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, caches, 8)
+		resUnsetClos := res
+		alloc := *res.L3CacheAssignment
+		alloc.Clos = model.ClassUnset
+		resUnsetClos.L3CacheAssignment = &alloc
+
+		err := ctrl.Apply(context.Background(), resUnsetClos)
+		if err == nil {
+			t.Fatal("expected error for unset class id, got nil")
+		}
+		if !strings.Contains(err.Error(), "invalid or unset class id") {
+			t.Fatalf("expected error containing 'invalid or unset class id', got %v", err)
+		}
+	})
+
+	t.Run("reserved default class id 0", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, caches, 8)
+		resDefaultClos := res
+		alloc := *res.L3CacheAssignment
+		alloc.Clos = defaultPqosCosId
+		resDefaultClos.L3CacheAssignment = &alloc
+
+		err := ctrl.Apply(context.Background(), resDefaultClos)
+		if err == nil {
+			t.Fatal("expected error for reserved default class id 0, got nil")
+		}
+		if !strings.Contains(err.Error(), "cannot use reserved default pqos class") {
+			t.Fatalf("expected error containing 'cannot use reserved default pqos class', got %v", err)
+		}
+	})
 }
 
 func TestPqosCacheControllerVerify(t *testing.T) {
