@@ -1,5 +1,12 @@
 package model
 
+import (
+	"fmt"
+	"math/bits"
+	"strconv"
+	"strings"
+)
+
 // represents a contiguous range of cache ways
 type WayInterval struct {
 	Start  int64
@@ -14,6 +21,37 @@ func (w WayInterval) End() int64 {
 // reports whether w and other have any ways in common
 func (w WayInterval) Overlaps(other WayInterval) bool {
 	return w.Start < other.End() && other.Start < w.End()
+}
+
+// parses a hex or decimal bitmask string into a contiguous WayInterval
+// within [0, maxWays)
+// returns an error if the mask is invalid, empty/zero, out of bounds,
+// or has non-contiguous set bits (e.g. 0xF00F)
+func ParseContiguousWayMask(mask string, maxWays int64) (WayInterval, error) {
+	if maxWays <= 0 || maxWays > 64 {
+		return WayInterval{}, fmt.Errorf("maxWays must be in (0, 64], got %d", maxWays)
+	}
+
+	trimmed := strings.TrimSpace(mask)
+	parsed, err := strconv.ParseUint(trimmed, 0, int(maxWays))
+	if err != nil || parsed == 0 {
+		return WayInterval{}, fmt.Errorf("invalid cache mask %q", mask)
+	}
+
+	// lowest set bit
+	start := bits.TrailingZeros64(parsed)
+	// count of set bits
+	length := bits.OnesCount64(parsed)
+
+	// bits.Len64(parsed) returns the highest set bit + 1
+	if bits.Len64(parsed)-start != length {
+		return WayInterval{}, fmt.Errorf("cache mask %q is not a contiguous way interval", mask)
+	}
+
+	return WayInterval{
+		Start:  int64(start),
+		Length: int64(length),
+	}, nil
 }
 
 // FreeWayIntervals scans a boolean bitmap of used ways and returns all contiguous free (false) intervals.

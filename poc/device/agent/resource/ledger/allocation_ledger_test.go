@@ -154,6 +154,28 @@ func TestAllocationLedgerFreeWaysAndReserveWays(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrCapacityExhausted) {
 		t.Fatalf("expected ErrCapacityExhausted on overlapping reserve, got %v", err)
 	}
+
+	// Verify persisted mask parsing: contiguous mask marks ways used, non-contiguous mask (e.g. 0xF00F) is ignored
+	maskSnapshot := NewAllocationSnapshot(nil, nil, []model.CacheAssignment{
+		{
+			Owner:   model.NewOwnerRef("deployment-2", "comp-valid-mask"),
+			CacheId: "0",
+			Mask:    "0x0F", // ways [0, 4)
+		},
+		{
+			Owner:   model.NewOwnerRef("deployment-3", "comp-non-contiguous"),
+			CacheId: "0",
+			Mask:    "0xF00F", // non-contiguous / invalid -> ignored
+		},
+	})
+	maskLedger := NewAllocationLedger(maskSnapshot, "deployment-1", caps, &fakeClassNamer{})
+	freeWithMasks := maskLedger.FreeWays("0", "component-a")
+	wantFreeWithMasks := []model.WayInterval{
+		{Start: 4, Length: 8},
+	}
+	if !reflect.DeepEqual(freeWithMasks, wantFreeWithMasks) {
+		t.Fatalf("FreeWays with persisted masks got %+v, want %+v", freeWithMasks, wantFreeWithMasks)
+	}
 }
 
 func TestAllocationLedgerReserveClass(t *testing.T) {

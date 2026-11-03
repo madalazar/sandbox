@@ -12,6 +12,8 @@ import (
 
 var _ CacheIsolationController = (*PqosCacheController)(nil)
 
+// COS0 is the hardware/OS default class of service to which all unassociated
+// cores belong; component reservations must never overwrite COS0's mask
 const defaultPqosCosId = "0"
 
 // manages l3 cache allocation and core association using pqos
@@ -50,12 +52,12 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 	componentName := string(reservation.Owner.Component)
 	alloc := reservation.L3CacheAssignment
 
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(alloc.Clos)
+	if !alloc.Clos.Held() {
+		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, alloc.Clos)
 	}
-	if cosId == "" || cosId == string(model.ClassUnset) || cosId == defaultPqosCosId {
-		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, cosId)
+	cosId := alloc.Clos.String()
+	if cosId == defaultPqosCosId {
+		return fmt.Errorf("component %q cannot use reserved default pqos class %q", componentName, cosId)
 	}
 
 	cacheID := strings.TrimSpace(alloc.CacheId)
@@ -94,13 +96,11 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
-	if cosId == "" || cosId == string(model.ClassUnset) || cosId == defaultPqosCosId {
+	alloc := reservation.L3CacheAssignment
+	if !alloc.Clos.Held() || alloc.Clos.String() == defaultPqosCosId {
 		return nil
 	}
+	cosId := alloc.Clos.String()
 
 	cacheId := strings.TrimSpace(reservation.L3CacheAssignment.CacheId)
 	if cacheId == "" {
@@ -116,9 +116,6 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 	if cacheInfo == nil {
 		return fmt.Errorf("component %q cache id %q not found in topology for pqos reset", componentName, cacheId)
-	}
-	if cacheInfo.Ways <= 0 {
-		return fmt.Errorf("component %q cache id %q has invalid ways=%d for pqos reset", componentName, cacheId, cacheInfo.Ways)
 	}
 
 	fullMask, err := fullWayMaskHex(cacheInfo.Ways)

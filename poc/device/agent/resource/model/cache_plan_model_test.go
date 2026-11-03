@@ -26,6 +26,77 @@ func TestWayInterval(t *testing.T) {
 	}
 }
 
+func TestParseContiguousWayMask(t *testing.T) {
+	tests := []struct {
+		name    string
+		mask    string
+		maxWays int64
+		want    WayInterval
+		wantErr bool
+	}{
+		{
+			name:    "valid low bits 0x3",
+			mask:    "0x3",
+			maxWays: 12,
+			want:    WayInterval{Start: 0, Length: 2},
+		},
+		{
+			name:    "valid middle bits 0xF0",
+			mask:    "0xF0",
+			maxWays: 12,
+			want:    WayInterval{Start: 4, Length: 4},
+		},
+		{
+			name:    "valid high bits 0xF00",
+			mask:    "0xF00",
+			maxWays: 12,
+			want:    WayInterval{Start: 8, Length: 4},
+		},
+		{
+			name:    "non-contiguous mask 0xF00F rejected",
+			mask:    "0xF00F",
+			maxWays: 16,
+			wantErr: true,
+		},
+		{
+			name:    "non-contiguous mask 0x5 rejected",
+			mask:    "0x5",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "zero mask rejected",
+			mask:    "0x0",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "empty mask rejected",
+			mask:    "",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "exceeds maxWays rejected",
+			mask:    "0x1000",
+			maxWays: 12,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseContiguousWayMask(tc.mask, tc.maxWays)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseContiguousWayMask(%q, %d) error = %v, wantErr %v", tc.mask, tc.maxWays, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("ParseContiguousWayMask(%q, %d) = %+v, want %+v", tc.mask, tc.maxWays, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFreeWayIntervals(t *testing.T) {
 	tests := []struct {
 		name string
