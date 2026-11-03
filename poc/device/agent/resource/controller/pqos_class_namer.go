@@ -16,7 +16,7 @@ func NewPqosClassNamer() *PqosClassNamer {
 }
 
 // selects the lowest free class of service index as decimal string (skipping cos0)
-func (n *PqosClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
+func (n *PqosClassNamer) Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error) {
 	used := make(map[int]struct{}, len(taken))
 	for _, c := range taken {
 		if idx, err := strconv.Atoi(string(c)); err == nil {

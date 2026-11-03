@@ -15,7 +15,7 @@ type testClassNamer struct {
 	err  error
 }
 
-func (f *testClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
+func (f *testClassNamer) Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error) {
 	if f.err != nil {
 		return model.ClassUnset, f.err
 	}
