@@ -772,26 +772,26 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 		}
 	}
 
-	// Update current state to REMOVED (even if removal failed)
+	if removeErr != nil {
+		dm.log.Errorw("Removal failed",
+			"deploymentId", deploymentId,
+			"error", removeErr)
+		failedState := currentState
+		failedState.Status.Status.State = sbi.DeploymentStatusManifestStatusStateFailed
+		dm.database.SetCurrentState(deploymentId, failedState)
+		dm.database.SetPhase(
+			deploymentId,
+			"FAILED",
+			fmt.Sprintf("Removal failed: %v", removeErr),
+		)
+		return
+	}
+
+	// Update current state to REMOVED only when all components were removed and released
 	removedState := currentState
 	removedState.Status.Status.State = sbi.DeploymentStatusManifestStatusStateRemoved
 	dm.database.SetCurrentState(deploymentId, removedState)
-
-	if removeErr != nil {
-		dm.log.Errorw("Removal failed but marking as removed",
-			"deploymentId", deploymentId,
-			"error", removeErr)
-		dm.database.SetPhase(
-			deploymentId,
-			"REMOVED",
-			fmt.Sprintf("Removal completed with errors: %v", removeErr),
-		)
-	} else {
-		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
-			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
-		}
-		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
-	}
+	dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 
 	// Remove from local database (triggers status report via subscriber)
 	dm.database.RemoveDeployment(deploymentId)
@@ -814,6 +814,7 @@ func (dm *DeploymentManager) removeHelm(
 		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
 	}
 
+	var errs []error
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		releaseName := fmt.Sprintf("%s-%s", component.Name, deploymentId[:8])
 		dm.log.Infow(
@@ -830,23 +831,26 @@ func (dm *DeploymentManager) removeHelm(
 				"componentName", component.Name,
 				"error", err,
 			)
-		} else {
-			dm.log.Infow(
-				"Helm release removed successfully",
-				"releaseName", releaseName,
-				"componentName", component.Name,
-			)
+			errs = append(errs, fmt.Errorf("failed to uninstall helm chart %q for component %q: %w", releaseName, component.Name, err))
+			continue
+		}
 
-			owner := model.NewOwnerRef(deploymentId, component.Name)
-			if err := coordinator.Release(ctx, owner); err != nil {
-				dm.log.Warnw("Failed to release helm component reservation during removal",
-					"deploymentId", deploymentId,
-					"componentName", component.Name,
-					"error", err)
-			}
+		dm.log.Infow(
+			"Helm release removed successfully",
+			"releaseName", releaseName,
+			"componentName", component.Name,
+		)
+
+		owner := model.NewOwnerRef(deploymentId, component.Name)
+		if err := coordinator.Release(ctx, owner); err != nil {
+			dm.log.Warnw("Failed to release helm component reservation during removal",
+				"deploymentId", deploymentId,
+				"componentName", component.Name,
+				"error", err)
+			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (dm *DeploymentManager) removeCompose(
@@ -864,6 +868,7 @@ func (dm *DeploymentManager) removeCompose(
 		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
 	}
 
+	var errs []error
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
@@ -883,23 +888,26 @@ func (dm *DeploymentManager) removeCompose(
 				"componentName", component.Name,
 				"error", err,
 			)
-		} else {
-			dm.log.Infow(
-				"Docker Compose project removed successfully",
-				"projectName", projectName,
-				"componentName", component.Name,
-			)
+			errs = append(errs, fmt.Errorf("failed to remove compose project %q for component %q: %w", projectName, component.Name, err))
+			continue
+		}
 
-			owner := model.NewOwnerRef(deploymentId, component.Name)
-			if err := coordinator.Release(ctx, owner); err != nil {
-				dm.log.Warnw("Failed to release compose component reservation during removal",
-					"deploymentId", deploymentId,
-					"componentName", component.Name,
-					"error", err)
-			}
+		dm.log.Infow(
+			"Docker Compose project removed successfully",
+			"projectName", projectName,
+			"componentName", component.Name,
+		)
+
+		owner := model.NewOwnerRef(deploymentId, component.Name)
+		if err := coordinator.Release(ctx, owner); err != nil {
+			dm.log.Warnw("Failed to release compose component reservation during removal",
+				"deploymentId", deploymentId,
+				"componentName", component.Name,
+				"error", err)
+			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (dm *DeploymentManager) extractComponentNames(

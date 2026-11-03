@@ -265,18 +265,13 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef)
 		return nil
 	}
 
-	var errs []error
 	if c.cacheController != nil && reservation.HasL3Cache() {
 		if err := c.cacheController.Release(ctx, reservation); err != nil {
-			errs = append(errs, err)
+			return err
 		}
 	}
 
-	if err := c.store.ClearComponent(reservation.Owner); err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
+	return c.store.ClearComponent(reservation.Owner)
 }
 
 // detaches from the caller's context, because a deploy that failed precisely because

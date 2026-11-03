@@ -440,7 +440,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	}
 }
 
-func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
+func TestResourceCoordinatorReleaseRetainsReservationWhenIsolationFails(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
 	reservation := model.Reservation{
 		Owner: owner,
@@ -458,9 +458,9 @@ func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error returned from Release when isolation fails")
 	}
-	// Even on failure, store.ClearComponent MUST be called
-	if len(store.cleared) != 1 || store.cleared[0] != owner {
-		t.Fatalf("expected ClearComponent called despite isolation failure, got cleared=%v", store.cleared)
+	// On hardware/policy release failure, the reservation must remain in the store
+	if len(store.cleared) != 0 {
+		t.Fatalf("expected ClearComponent not to be called when isolation release fails, got cleared=%v", store.cleared)
 	}
 }
 
