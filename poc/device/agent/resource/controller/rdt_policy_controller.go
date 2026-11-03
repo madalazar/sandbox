@@ -65,6 +65,7 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 	if componentName == "" {
 		return fmt.Errorf("reservation has empty component name")
 	}
+	partitionName := rdtPartitionName(reservation.Owner)
 
 	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
@@ -97,7 +98,7 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 
 	namespace, policyName := c.policyTarget()
 
-	patchBytes, err := c.buildApplyPatch(componentName, cosId, selectedCacheId, partitionMasks)
+	patchBytes, err := c.buildApplyPatch(partitionName, cosId, selectedCacheId, partitionMasks)
 	if err != nil {
 		return fmt.Errorf("failed to marshal balloons policy patch for component %q: %w", componentName, err)
 	}
@@ -112,7 +113,7 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 	}
 
 	if c.reader != nil {
-		if err := c.waitForResourcePolicyUpdate(ctx, componentName, cosId); err != nil {
+		if err := c.waitForResourcePolicyUpdate(ctx, partitionName, cosId); err != nil {
 			return err
 		}
 	}
@@ -132,6 +133,7 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
+	partitionName := rdtPartitionName(reservation.Owner)
 
 	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
@@ -139,7 +141,7 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	namespace, policyName := c.policyTarget()
-	patchPayload := c.buildReleasePatch(componentName, cosId)
+	patchPayload := c.buildReleasePatch(partitionName, cosId)
 
 	if c.dynClient != nil {
 		_, err := c.dynClient.Resource(model.BalloonsPolicyGVR).
@@ -151,7 +153,7 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	if c.reader != nil {
-		if err := c.waitForResourcePolicyRemoval(ctx, componentName, cosId); err != nil {
+		if err := c.waitForResourcePolicyRemoval(ctx, partitionName, cosId); err != nil {
 			return err
 		}
 	}

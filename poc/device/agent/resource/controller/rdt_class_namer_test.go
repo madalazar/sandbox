@@ -19,35 +19,39 @@ func TestRdtClassNamerDeterministicNaming(t *testing.T) {
 	namer := NewRdtClassNamer()
 
 	tests := []struct {
-		ref   model.ComponentRef
+		name  string
+		owner model.OwnerRef
 		taken []model.ClosId
 		want  model.ClosId
 	}{
 		{
-			ref:   model.ComponentRef("cyclictest"),
+			name:  "short deployment id",
+			owner: model.NewOwnerRef("dep-1", "cyclictest"),
 			taken: nil,
-			want:  model.ClosId("cyclictest_class"),
+			want:  model.ClosId("cyclictest-dep-1_class"),
 		},
 		{
-			ref:   model.ComponentRef("worker-node"),
-			taken: []model.ClosId{"cyclictest_class"},
-			want:  model.ClosId("worker-node_class"),
+			name:  "long deployment id truncated to 8 chars",
+			owner: model.NewOwnerRef("1234567890abcdef", "worker-node"),
+			taken: []model.ClosId{"cyclictest-dep-1_class"},
+			want:  model.ClosId("worker-node-12345678_class"),
 		},
 		{
-			ref:   model.ComponentRef("stressng"),
+			name:  "empty deployment id falls back to component name",
+			owner: model.OwnerRef{Component: "stressng"},
 			taken: []model.ClosId{"1", "2"},
 			want:  model.ClosId("stressng_class"),
 		},
 	}
 
 	for _, tc := range tests {
-		t.Run(string(tc.ref), func(t *testing.T) {
-			got, err := namer.Name(tc.ref, tc.taken)
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := namer.Name(tc.owner, tc.taken)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tc.want {
-				t.Fatalf("Name(%q) = %v, want %v", tc.ref, got, tc.want)
+				t.Fatalf("Name(%+v) = %v, want %v", tc.owner, got, tc.want)
 			}
 		})
 	}

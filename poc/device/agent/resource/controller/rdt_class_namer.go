@@ -13,7 +13,19 @@ func NewRdtClassNamer() *RdtClassNamer {
 	return &RdtClassNamer{}
 }
 
-// generates a deterministic class name for the component reference
-func (n *RdtClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
-	return model.ClosId(string(ref) + "_class"), nil
+// generates a deterministic class name for the owner reference
+func (n *RdtClassNamer) Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error) {
+	return model.ClosId(rdtPartitionName(owner) + "_class"), nil
+}
+
+func rdtPartitionName(owner model.OwnerRef) string {
+	comp := string(owner.Component)
+	dep := owner.Deployment
+	if dep == "" {
+		return comp
+	}
+	if len(dep) > 8 {
+		dep = dep[:8]
+	}
+	return comp + "-" + dep
 }

@@ -229,7 +229,8 @@ func (l *AllocationLedger) ReserveClass(ref model.ComponentRef) (model.ClosId, e
 		takenList = append(takenList, c)
 	}
 
-	namedClass, err := l.classNamer.Name(ref, takenList)
+	owner := model.NewOwnerRef(l.deploymentId, string(ref))
+	namedClass, err := l.classNamer.Name(owner, takenList)
 	if err != nil {
 		return model.ClassUnset, fmt.Errorf("failed to name class for component %q: %w", ref, err)
 	}
