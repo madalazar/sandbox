@@ -111,6 +111,7 @@ func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error
 // or already persisted to ref itself
 func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []model.WayInterval {
 	totalWays, exists := l.cacheCapacity.Ways[cacheId]
+
 	if !exists || totalWays <= 0 {
 		return nil
 	}
@@ -119,15 +120,13 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 
 	// mark ways from persisted snapshot
 	for _, res := range l.snapshot.Caches {
-		if res.CacheId != cacheId {
+		if res.CacheId != cacheId || model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(res.Owner) {
 			continue
 		}
-		// check self-ownership: if held by the exact same component of this deployment, it is reusable
-		if model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(res.Owner) {
-			continue
-		}
+
 		interval := res.Interval
-		if interval.Length <= 0 && res.Mask != "" {
+
+		if res.Mask != "" {
 			if parsedInterval, err := model.ParseContiguousWayMask(res.Mask, totalWays); err == nil {
 				interval = parsedInterval
 			}
