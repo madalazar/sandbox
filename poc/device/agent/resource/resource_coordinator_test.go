@@ -268,6 +268,10 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 	if err == nil {
 		t.Fatal("Plan() expected error when cache requested without CPU assignments, got nil")
 	}
+	wantErr := `component "comp-1" requests exclusive cache but has no cpu assignments`
+	if err.Error() != wantErr {
+		t.Fatalf("Plan() error = %q, want %q", err.Error(), wantErr)
+	}
 
 	// With CPU assignments, cache planning succeeds
 	fakeCpu := &fakeCpuPlanner{
