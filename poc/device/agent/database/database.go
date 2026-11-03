@@ -135,10 +135,12 @@ type DatabaseIfc interface {
 	SetPhase(deploymentId, phase, message string)
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
 	SetAllocations(deploymentId string, allocations Allocations) error
+	SetComponentAllocations(deploymentId, componentName string, cpus []int, cache *CacheAllocation) error
 	ClearComponentAllocations(deploymentId, componentName string) error
 	GetAllocations(deploymentId string) (Allocations, error)
 	AllocatedCpus() map[int]string
 	AllocatedCaches() []CacheAllocation
+	AllocatedResources() (map[int]string, []CacheAllocation)
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -611,6 +613,46 @@ func (db *Database) SetAllocations(deploymentId string, allocations Allocations)
 	return nil
 }
 
+// updates one component's cpu and cache holdings under the same lock that reads
+// them, so concurrent updates or releases of sibling components cannot be lost
+func (db *Database) SetComponentAllocations(
+	deploymentId, componentName string,
+	cpus []int,
+	cache *CacheAllocation,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	if record.Allocations.Cpus == nil {
+		record.Allocations.Cpus = make(map[string][]int)
+	}
+	if len(cpus) > 0 {
+		record.Allocations.Cpus[componentName] = append([]int(nil), cpus...)
+	} else {
+		delete(record.Allocations.Cpus, componentName)
+	}
+
+	if record.Allocations.Caches == nil {
+		record.Allocations.Caches = make(map[string]CacheAllocation)
+	}
+	if cache != nil {
+		record.Allocations.Caches[componentName] = *cache
+	} else {
+		delete(record.Allocations.Caches, componentName)
+	}
+
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
 // drops one component's cpu and cache holdings under the same
 // lock that reads them, so a concurrent release of a sibling cannot reinstate it
 func (db *Database) ClearComponentAllocations(deploymentId, componentName string) error {
@@ -656,12 +698,7 @@ func formatOwner(deploymentId, componentName string) string {
 	return deploymentId
 }
 
-// the device-wide view of which cpu index is held by which component,
-// encoded as "deployment/component"
-func (db *Database) AllocatedCpus() map[int]string {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
+func (db *Database) allocatedCpusLocked() map[int]string {
 	allocated := make(map[int]string)
 	for deploymentID, deployment := range db.deployments {
 		for component, cpuIndices := range deployment.Allocations.Cpus {
@@ -675,12 +712,7 @@ func (db *Database) AllocatedCpus() map[int]string {
 	return allocated
 }
 
-// returns the device-wide view of which cache allocations are held,
-// annotated with owner "deployment/component"
-func (db *Database) AllocatedCaches() []CacheAllocation {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
+func (db *Database) allocatedCachesLocked() []CacheAllocation {
 	allocated := make([]CacheAllocation, 0)
 	for deploymentID, deployment := range db.deployments {
 		for component, assignment := range deployment.Allocations.Caches {
@@ -691,6 +723,33 @@ func (db *Database) AllocatedCaches() []CacheAllocation {
 	}
 
 	return allocated
+}
+
+// the device-wide view of which cpu index is held by which component,
+// encoded as "deployment/component"
+func (db *Database) AllocatedCpus() map[int]string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return db.allocatedCpusLocked()
+}
+
+// returns the device-wide view of which cache allocations are held,
+// annotated with owner "deployment/component"
+func (db *Database) AllocatedCaches() []CacheAllocation {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return db.allocatedCachesLocked()
+}
+
+// returns a consistent device-wide snapshot of both allocated cpus and caches
+// under a single read lock acquisition
+func (db *Database) AllocatedResources() (map[int]string, []CacheAllocation) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return db.allocatedCpusLocked(), db.allocatedCachesLocked()
 }
 
 func (db *Database) GetDeployment(deploymentId string) (*DeploymentRecord, error) {

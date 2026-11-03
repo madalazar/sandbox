@@ -137,4 +137,25 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 	if len(db.AllocatedCaches()) != 0 {
 		t.Fatalf("expected 0 allocated caches after clear, got %d", len(db.AllocatedCaches()))
 	}
+
+	// SetComponentAllocations updates a single component atomically without clobbering siblings
+	newCache := &CacheAllocation{
+		ComponentName: "comp-c",
+		Level:         "L3",
+		CacheId:       "0",
+		SizeKB:        2048,
+		Mask:          "0x3",
+		Clos:          "1",
+	}
+	if err := db.SetComponentAllocations(deploymentID, "comp-c", []int{6, 7}, newCache); err != nil {
+		t.Fatalf("SetComponentAllocations failed: %v", err)
+	}
+
+	snapCpus, snapCaches := db.AllocatedResources()
+	if snapCpus[4] != "dep-1/comp-b" || snapCpus[6] != "dep-1/comp-c" {
+		t.Fatalf("unexpected AllocatedResources cpus: %+v", snapCpus)
+	}
+	if len(snapCaches) != 1 || snapCaches[0].Owner != "dep-1/comp-c" {
+		t.Fatalf("unexpected AllocatedResources caches: %+v", snapCaches)
+	}
 }
