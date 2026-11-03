@@ -30,22 +30,19 @@ func (f ifacePqosCommandFactory) PqosInterface() string {
 func (f ifacePqosCommandFactory) BuildApplyArgs(cacheId, cosId, mask, cpuset string) []string {
 	return []string{
 		"--iface=" + f.iface,
-		"-e",
-		fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
-		"-a",
-		fmt.Sprintf(pqosCoreAssignmentFormat, cosId, cpuset),
+		"--alloc-class=" + fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
+		"--alloc-assoc=" + fmt.Sprintf(pqosCoreAssignmentFormat, cosId, cpuset),
 	}
 }
 
 func (f ifacePqosCommandFactory) BuildResetArgs(cacheId, cosId, mask, cpuset string) []string {
 	args := []string{
 		"--iface=" + f.iface,
-		"-e",
-		fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
+		"--alloc-class=" + fmt.Sprintf(pqosLlcAllocationFormat, cacheId, cosId, mask),
 	}
 
 	if cpuset != "" {
-		args = append(args, "-a", fmt.Sprintf(pqosCoreAssignmentFormat, defaultPqosCosId, cpuset))
+		args = append(args, "--alloc-assoc="+fmt.Sprintf(pqosCoreAssignmentFormat, defaultPqosCosId, cpuset))
 	}
 
 	return args

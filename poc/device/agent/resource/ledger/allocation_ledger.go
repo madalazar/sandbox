@@ -3,8 +3,6 @@ package ledger
 import (
 	"errors"
 	"fmt"
-	"math/big"
-	"strings"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -111,6 +109,7 @@ func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error
 // or already persisted to ref itself
 func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []model.WayInterval {
 	totalWays, exists := l.cacheCapacity.Ways[cacheId]
+
 	if !exists || totalWays <= 0 {
 		return nil
 	}
@@ -119,27 +118,21 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 
 	// mark ways from persisted snapshot
 	for _, res := range l.snapshot.Caches {
-		if res.CacheId != cacheId {
+		if res.CacheId != cacheId || model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(res.Owner) {
 			continue
 		}
-		// check self-ownership: if held by the exact same component of this deployment, it is reusable
-		if model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(res.Owner) {
-			continue
-		}
-		if res.Interval.Length > 0 {
-			for bit := res.Interval.Start; bit < res.Interval.End() && bit < totalWays; bit++ {
-				if bit >= 0 {
-					used[bit] = true
-				}
+
+		interval := res.Interval
+
+		if res.Mask != "" {
+			if parsedInterval, err := model.ParseContiguousWayMask(res.Mask, totalWays); err == nil {
+				interval = parsedInterval
 			}
-		} else if res.Mask != "" {
-			parsed := new(big.Int)
-			if _, ok := parsed.SetString(strings.TrimSpace(res.Mask), 0); ok {
-				for bit := range totalWays {
-					if parsed.Bit(int(bit)) == 1 {
-						used[bit] = true
-					}
-				}
+		}
+
+		if interval.Start >= 0 && interval.Length > 0 {
+			for bit := interval.Start; bit < interval.End() && bit < totalWays; bit++ {
+				used[bit] = true
 			}
 		}
 	}
@@ -149,8 +142,9 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 		if holder == ref {
 			continue
 		}
-		for bit := wayInterval.Start; bit < wayInterval.End() && bit < totalWays; bit++ {
-			if bit >= 0 {
+
+		if wayInterval.Start >= 0 && wayInterval.Length > 0 {
+			for bit := wayInterval.Start; bit < wayInterval.End() && bit < totalWays; bit++ {
 				used[bit] = true
 			}
 		}
