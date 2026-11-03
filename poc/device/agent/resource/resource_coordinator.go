@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/controller"
@@ -55,6 +56,11 @@ func (p ResourcePlan) HasCache() bool {
 // one runtime and a helm values map for the other, so the deploy (deployOrUpdate* methods)
 // code will calls its own configurator directly. A shared configurator might need to be
 // further researched
+//
+// allocMu serializes allocation against release across every coordinator that draws
+// from the same isolated cpus and l3 ways. The caller holds it across
+// NewLedger -> Plan -> Commit; Release acquires it itself, so it must never be called
+// while the caller holds it
 type ResourceCoordinator struct {
 	store           ReservationStore
 	planner         planner.CpuPlanner
@@ -62,6 +68,7 @@ type ResourceCoordinator struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	allocMu         *sync.Mutex
 }
 
 // constructs a ResourceCoordinator ensuring all dependencies are non-nil.
@@ -72,6 +79,7 @@ type ResourceCoordinatorBuilder struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	allocMu         *sync.Mutex
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -118,6 +126,11 @@ func (b *ResourceCoordinatorBuilder) WithClassNamer(namer controller.ClassNamer)
 	return b
 }
 
+func (b *ResourceCoordinatorBuilder) WithAllocationLock(mu *sync.Mutex) *ResourceCoordinatorBuilder {
+	b.allocMu = mu
+	return b
+}
+
 func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	var errs []error
 	if b.store == nil {
@@ -135,6 +148,9 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	if b.allocMu == nil {
+		b.allocMu = &sync.Mutex{}
+	}
 	return &ResourceCoordinator{
 		store:           b.store,
 		planner:         b.planner,
@@ -142,12 +158,14 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 		cacheController: b.cacheController,
 		cacheCapacity:   b.cacheCapacity,
 		classNamer:      b.classNamer,
+		allocMu:         b.allocMu,
 	}, nil
 }
 
-// takes the device-wide snapshot once, for one reconcile of one deployment. The caller
-// threads the result through every component of that deployment, so a component cannot
-// be planned onto cpus a sibling took earlier in the same pass
+// takes the device-wide snapshot for one component's allocation. The caller must hold
+// allocMu from here through Commit, and build a fresh ledger for each component: a
+// snapshot taken before the lock, or reused after it was released, may be stale.
+// Siblings stay protected because an earlier sibling's Commit is already in storage
 func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.AllocationLedger, error) {
 	snapshot, err := c.store.LoadSnapshot()
 	if err != nil {
@@ -257,6 +275,9 @@ func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef
 // error. The context is the release deadline, and the seam the deferred cache
 // isolation reset hooks into
 func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef) error {
+	c.allocMu.Lock()
+	defer c.allocMu.Unlock()
+
 	reservation, found, err := c.store.LoadReservation(owner)
 	if err != nil {
 		return err

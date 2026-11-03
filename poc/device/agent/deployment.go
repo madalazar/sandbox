@@ -47,6 +47,9 @@ type DeploymentManager struct {
 	hostTopology       types.HostTopology
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
+	// shared by both coordinators: held across NewLedger -> Plan -> Commit here, and
+	// taken by ResourceCoordinator.Release itself
+	allocMu *sync.Mutex
 }
 
 func NewDeploymentManager(
@@ -59,6 +62,8 @@ func NewDeploymentManager(
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
+	allocMu := &sync.Mutex{}
+
 	composeCoord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
@@ -66,6 +71,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build compose resource coordinator", "error", err)
@@ -78,6 +84,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
+		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build helm resource coordinator", "error", err)
@@ -96,6 +103,7 @@ func NewDeploymentManager(
 		capabilities:       capabilities,
 		stopChan:           make(chan struct{}),
 		reconcileLocks:     sync.Map{},
+		allocMu:            allocMu,
 	}
 }
 
@@ -424,11 +432,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 	helmConfigurator := configurator.NewHelmConfigurator()
 
-	ledger, err := coordinator.NewLedger(deploymentId)
-	if err != nil {
-		return fmt.Errorf("unable to create ledger %v", err)
-	}
-
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		if err != nil {
 			return fmt.Errorf("invalid helm component: %v", err)
@@ -454,11 +457,19 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName
 
+		dm.allocMu.Lock()
+		ledger, err := coordinator.NewLedger(deploymentId)
+		if err != nil {
+			dm.allocMu.Unlock()
+			return fmt.Errorf("unable to create ledger %v", err)
+		}
+
 		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
+			dm.allocMu.Unlock()
 			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
 		}
 
@@ -468,9 +479,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			defer rollback.ReleaseOnFailure(&err)
 
 			if err = coordinator.Commit(ctx, plan); err != nil {
+				dm.allocMu.Unlock()
 				return fmt.Errorf("failed to persist helm allocations for component %s: %w", component.Name, err)
 			}
 		}
+		dm.allocMu.Unlock()
 
 		// update pod annotations for this helm component
 		values, err = helmConfigurator.Apply(plan.Cpu, plan.Cache, owner, values)
@@ -546,11 +559,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 	composeConfigurator := configurator.NewComposeConfigurator()
 
-	ledger, err := coordinator.NewLedger(deploymentId)
-	if err != nil {
-		return fmt.Errorf("unable to create ledger %v", err)
-	}
-
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		if err != nil {
 			return fmt.Errorf("invalid compose component %v", err)
@@ -593,11 +601,19 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		dm.log.Debugw("compose file downloaded", "composeFilename", composeFilename)
 
+		dm.allocMu.Lock()
+		ledger, err := coordinator.NewLedger(deploymentId)
+		if err != nil {
+			dm.allocMu.Unlock()
+			return fmt.Errorf("unable to create ledger %v", err)
+		}
+
 		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
+			dm.allocMu.Unlock()
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
 		}
 
@@ -611,9 +627,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			defer rollback.ReleaseOnFailure(&err)
 
 			if err = coordinator.Commit(ctx, resourcePlan); err != nil {
+				dm.allocMu.Unlock()
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
 			}
+		}
+		dm.allocMu.Unlock()
 
+		if resourcePlan.HasCpu() {
 			var prepErr error
 			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
 			if prepErr != nil {
