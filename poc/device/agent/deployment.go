@@ -57,6 +57,8 @@ func NewDeploymentManager(
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
+	allocMu := &sync.Mutex{}
+
 	composeCoord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
@@ -64,6 +66,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build compose resource coordinator", "error", err)
@@ -76,6 +79,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
+		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build helm resource coordinator", "error", err)
@@ -383,11 +387,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 	helmConfigurator := configurator.NewHelmConfigurator()
 
-	ledger, err := coordinator.NewLedger(deploymentId)
-	if err != nil {
-		return fmt.Errorf("unable to create ledger %v", err)
-	}
-
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -402,7 +401,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
+			var componentValues map[string]map[string]any
+			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -415,7 +415,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+		var plan resource.ResourcePlan
+		plan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: helmComp.RequiredResources,
 		})
@@ -428,8 +429,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
-			if err = coordinator.Commit(ctx, plan); err != nil {
-				return fmt.Errorf("failed to persist helm allocations for component %s: %w", helmComp.Name, err)
+			if err = coordinator.Activate(ctx, owner); err != nil {
+				return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
 			}
 		}
 
@@ -445,11 +446,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
 		// Deploy/Update
-		release, err := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
-		if err != nil {
+		release, statusErr := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
+		if statusErr != nil {
 			dm.log.Infow(
 				"failed to check whether a release exists or not, assuming that it doesn't exist, will proceed with installation",
-				"releaseName", releaseName, "deploymentId", deploymentId, "err", err.Error())
+				"releaseName", releaseName, "deploymentId", deploymentId, "err", statusErr.Error())
 		}
 
 		if release != nil {
@@ -458,10 +459,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 			if err = dm.helmClient.UpdateChart(ctx, releaseName, helmComp.Properties.Repository, "", values); err != nil {
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
-			}
-
-			if err = coordinator.Activate(ctx, owner); err != nil {
-				return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
 			}
 
 			if rollback != nil {
@@ -482,10 +479,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		wait := helmComp.Properties.Wait != nil && *helmComp.Properties.Wait
 		if err = dm.helmClient.InstallChart(ctx, releaseName, helmComp.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
-		}
-
-		if err = coordinator.Activate(ctx, owner); err != nil {
-			return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
 		}
 
 		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
@@ -510,11 +503,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 	composeConfigurator := configurator.NewComposeConfigurator()
 
-	ledger, err := coordinator.NewLedger(deploymentId)
-	if err != nil {
-		return fmt.Errorf("unable to create ledger %v", err)
-	}
-
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -536,7 +524,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
+			var componentValues map[string]map[string]any
+			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -547,14 +536,20 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, err := dm.composeClient.DownloadCompose(ctx, composeComp.Properties.PackageLocation,
-			composeComp.Properties.KeyLocation, projectName)
+		var composeFilename string
+		composeFilename, err = dm.composeClient.DownloadCompose(
+			ctx,
+			composeComp.Properties.PackageLocation,
+			composeComp.Properties.KeyLocation,
+			projectName,
+		)
 		if err != nil {
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
 
-		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+		var resourcePlan resource.ResourcePlan
+		resourcePlan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: composeComp.RequiredResources,
 		})
@@ -570,15 +565,14 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
+		}
 
-			if err = coordinator.Commit(ctx, resourcePlan); err != nil {
-				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
-			}
-
+		if resourcePlan.HasCpu() {
 			var prepErr error
 			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
 			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+				err = fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+				return err
 			}
 
 			defer func(prep string, src string) {
@@ -594,7 +588,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
+		var exists bool
+		exists, err = dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
@@ -742,26 +737,26 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 		}
 	}
 
-	// Update current state to REMOVED (even if removal failed)
+	if removeErr != nil {
+		dm.log.Errorw("Removal failed",
+			"deploymentId", deploymentId,
+			"error", removeErr)
+		failedState := currentState
+		failedState.Status.Status.State = sbi.DeploymentStatusManifestStatusStateFailed
+		dm.database.SetCurrentState(deploymentId, failedState)
+		dm.database.SetPhase(
+			deploymentId,
+			"FAILED",
+			fmt.Sprintf("Removal failed: %v", removeErr),
+		)
+		return
+	}
+
+	// Update current state to REMOVED only when all components were removed and released
 	removedState := currentState
 	removedState.Status.Status.State = sbi.DeploymentStatusManifestStatusStateRemoved
 	dm.database.SetCurrentState(deploymentId, removedState)
-
-	if removeErr != nil {
-		dm.log.Errorw("Removal failed but marking as removed",
-			"deploymentId", deploymentId,
-			"error", removeErr)
-		dm.database.SetPhase(
-			deploymentId,
-			"REMOVED",
-			fmt.Sprintf("Removal completed with errors: %v", removeErr),
-		)
-	} else {
-		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
-			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
-		}
-		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
-	}
+	dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 
 	// Remove from local database (triggers status report via subscriber)
 	dm.database.RemoveDeployment(deploymentId)
@@ -788,6 +783,7 @@ func (dm *DeploymentManager) removeHelm(
 		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
 	}
 
+	var errs []error
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
@@ -805,24 +801,28 @@ func (dm *DeploymentManager) removeHelm(
 			dm.log.Warnw("Failed to uninstall Helm chart",
 				"releaseName", releaseName,
 				"componentName", helmComp.Name,
-				"error", err)
-			// ✅ Continue removing other components
-		} else {
-			dm.log.Infow("Helm release removed successfully",
-				"releaseName", releaseName,
-				"componentName", helmComp.Name)
+				"error", err,
+			)
+			errs = append(errs, fmt.Errorf("failed to uninstall helm chart %q for component %q: %w", releaseName, helmComp.Name, err))
+			continue
+		}
 
-			owner := model.NewOwnerRef(deploymentId, helmComp.Name)
-			if err := coordinator.Release(ctx, owner); err != nil {
-				dm.log.Warnw("Failed to release helm component reservation during removal",
-					"deploymentId", deploymentId,
-					"componentName", helmComp.Name,
-					"error", err)
-			}
+		dm.log.Infow(
+			"Helm release removed successfully",
+			"releaseName", releaseName,
+			"componentName", helmComp.Name,
+		)
+
+		owner := model.NewOwnerRef(deploymentId, helmComp.Name)
+		if err := coordinator.Release(ctx, owner); err != nil {
+			dm.log.Warnw("Failed to release helm component reservation during removal",
+				"deploymentId", deploymentId,
+				"componentName", helmComp.Name,
+				"error", err)
+			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", helmComp.Name, err))
 		}
 	}
-
-	return nil // ✅ All components processed
+	return errors.Join(errs...)
 }
 
 func (dm *DeploymentManager) removeCompose(
@@ -845,6 +845,7 @@ func (dm *DeploymentManager) removeCompose(
 		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
 	}
 
+	var errs []error
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
@@ -866,24 +867,28 @@ func (dm *DeploymentManager) removeCompose(
 			dm.log.Warnw("Failed to remove Docker Compose project",
 				"projectName", projectName,
 				"componentName", composeComp.Name,
-				"error", err)
-			// Continue removing other components even if one fails
-		} else {
-			dm.log.Infow("Docker Compose project removed successfully",
-				"projectName", projectName,
-				"componentName", composeComp.Name)
+				"error", err,
+			)
+			errs = append(errs, fmt.Errorf("failed to remove compose project %q for component %q: %w", projectName, composeComp.Name, err))
+			continue
+		}
 
-			owner := model.NewOwnerRef(deploymentId, composeComp.Name)
-			if err := coordinator.Release(ctx, owner); err != nil {
-				dm.log.Warnw("Failed to release compose component reservation during removal",
-					"deploymentId", deploymentId,
-					"componentName", composeComp.Name,
-					"error", err)
-			}
+		dm.log.Infow(
+			"Docker Compose project removed successfully",
+			"projectName", projectName,
+			"componentName", composeComp.Name,
+		)
+
+		owner := model.NewOwnerRef(deploymentId, composeComp.Name)
+		if err := coordinator.Release(ctx, owner); err != nil {
+			dm.log.Warnw("Failed to release compose component reservation during removal",
+				"deploymentId", deploymentId,
+				"componentName", composeComp.Name,
+				"error", err)
+			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", composeComp.Name, err))
 		}
 	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 // extractComponentNames returns the name of every component in an AppDeploymentManifest,

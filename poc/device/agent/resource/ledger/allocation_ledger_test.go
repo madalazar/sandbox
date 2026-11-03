@@ -14,14 +14,14 @@ type fakeClassNamer struct {
 	err   error
 }
 
-func (f *fakeClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
+func (f *fakeClassNamer) Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error) {
 	if f.err != nil {
 		return model.ClassUnset, f.err
 	}
-	if name, ok := f.names[ref]; ok {
+	if name, ok := f.names[owner.Component]; ok {
 		return name, nil
 	}
-	return model.ClosId(fmt.Sprintf("cos-%s", ref)), nil
+	return model.ClosId(fmt.Sprintf("cos-%s", owner.Component)), nil
 }
 
 func TestAllocationLedgerIsCpuAvailable(t *testing.T) {

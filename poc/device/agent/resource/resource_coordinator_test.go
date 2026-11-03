@@ -166,16 +166,15 @@ func TestResourceCoordinatorNewLedger(t *testing.T) {
 		},
 	}
 	c := newTestCoordinator(store, nil, nil, nil)
-	l, err := c.NewLedger("dep1")
+	l, err := c.newLedger("dep1")
 	if err != nil {
-		t.Fatalf("NewLedger() error = %v", err)
+		t.Fatalf("newLedger() error = %v", err)
 	}
 	if l == nil {
-		t.Fatal("NewLedger() returned nil")
+		t.Fatal("newLedger() returned nil")
 	}
 
-	// newLedger delegates to NewLedger
-	l2, err := c.NewLedger("dep1")
+	l2, err := c.newLedger("dep1")
 	if err != nil || l2 == nil {
 		t.Fatalf("newLedger() error = %v, l = %v", err, l2)
 	}
@@ -208,7 +207,7 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 		},
 	}
 	c := newTestCoordinator(nil, fakePlanner, nil, nil)
-	plan, err := c.Plan(nil, req)
+	plan, err := c.plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -256,14 +255,32 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 		},
 	}
 
+	// Without CPU assignments, requesting cache returns an error
+	fakeCpuNoCpus := &fakeCpuPlanner{
+		plan: model.CpuPlan{
+			Component: "comp-1",
+			Cpus:      []int{},
+		},
+	}
+	c := newTestCoordinator(nil, fakeCpuNoCpus, fakeCache, nil)
+	_, err := c.plan(nil, req)
+	if err == nil {
+		t.Fatal("Plan() expected error when cache requested without CPU assignments, got nil")
+	}
+	wantErr := `component "comp-1" requests exclusive cache but has no cpu assignments`
+	if err.Error() != wantErr {
+		t.Fatalf("Plan() error = %q, want %q", err.Error(), wantErr)
+	}
+
+	// With CPU assignments, cache planning succeeds
 	fakeCpu := &fakeCpuPlanner{
 		plan: model.CpuPlan{
 			Component: "comp-1",
 			Cpus:      []int{2},
 		},
 	}
-	c := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
-	plan, err := c.Plan(nil, req)
+	cWithCpu := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
+	plan, err := cWithCpu.plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -296,7 +313,7 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 		},
 	}
 
-	if err := c.Commit(context.Background(), plan); err != nil {
+	if err := c.commit(context.Background(), plan); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
 	if store.savedDep != "dep-1" {
@@ -309,7 +326,7 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 	// Commit with no cpus is a no-op
 	store.savedDep = ""
 	emptyPlan := ResourcePlan{Owner: owner}
-	if err := c.Commit(context.Background(), emptyPlan); err != nil {
+	if err := c.commit(context.Background(), emptyPlan); err != nil {
 		t.Fatalf("Commit() empty plan error = %v", err)
 	}
 	if store.savedDep != "" {
@@ -338,7 +355,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 		},
 	}
 
-	if err := c.Commit(context.Background(), plan); err != nil {
+	if err := c.commit(context.Background(), plan); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
 	if store.savedDep != "dep-1" {
@@ -351,7 +368,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 	// Commit failure on Apply
 	isoFail := &fakeIsolationController{err: errors.New("apply failed")}
 	cFail := newTestCoordinator(store, nil, nil, isoFail)
-	if err := cFail.Commit(context.Background(), plan); err == nil {
+	if err := cFail.commit(context.Background(), plan); err == nil {
 		t.Fatal("expected error when isolation.Apply fails, got nil")
 	}
 }
@@ -430,7 +447,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 	}
 }
 
-func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
+func TestResourceCoordinatorReleaseRetainsReservationWhenIsolationFails(t *testing.T) {
 	owner := model.NewOwnerRef("deployment", "component")
 	reservation := model.Reservation{
 		Owner: owner,
@@ -448,9 +465,9 @@ func TestResourceCoordinatorReleaseStillClearsWhenIsolationFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error returned from Release when isolation fails")
 	}
-	// Even on failure, store.ClearComponent MUST be called
-	if len(store.cleared) != 1 || store.cleared[0] != owner {
-		t.Fatalf("expected ClearComponent called despite isolation failure, got cleared=%v", store.cleared)
+	// On hardware/policy release failure, the reservation must remain in the store
+	if len(store.cleared) != 0 {
+		t.Fatalf("expected ClearComponent not to be called when isolation release fails, got cleared=%v", store.cleared)
 	}
 }
 

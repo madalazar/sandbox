@@ -57,7 +57,7 @@ func TestPqosClassNamerSelection(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := namer.Name("comp-1", tc.taken)
+			got, err := namer.Name(model.NewOwnerRef("dep-1", "comp-1"), tc.taken)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
