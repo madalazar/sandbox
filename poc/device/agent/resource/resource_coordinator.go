@@ -58,9 +58,8 @@ func (p ResourcePlan) HasCache() bool {
 // further researched
 //
 // allocMu serializes allocation against release across every coordinator that draws
-// from the same isolated cpus and l3 ways. The caller holds it across
-// NewLedger -> Plan -> Commit; Release acquires it itself, so it must never be called
-// while the caller holds it
+// from the same isolated cpus and l3 ways. Both Allocate (newLedger -> plan -> commit)
+// and Release acquire and release it internally.
 type ResourceCoordinator struct {
 	store           ReservationStore
 	planner         planner.CpuPlanner
@@ -162,11 +161,37 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	}, nil
 }
 
-// takes the device-wide snapshot for one component's allocation. The caller must hold
-// allocMu from here through Commit, and build a fresh ledger for each component: a
-// snapshot taken before the lock, or reused after it was released, may be stale.
+// Allocate atomically takes a fresh device-wide snapshot, plans the component's
+// CPU and L3 cache resources, and commits the reservation under allocMu.
+func (c *ResourceCoordinator) Allocate(
+	ctx context.Context,
+	request ResourceRequest,
+) (ResourcePlan, error) {
+	c.allocMu.Lock()
+	defer c.allocMu.Unlock()
+
+	allocLedger, err := c.newLedger(request.Owner.Deployment)
+	if err != nil {
+		return ResourcePlan{}, fmt.Errorf("unable to create ledger: %w", err)
+	}
+
+	resourcePlan, err := c.plan(allocLedger, request)
+	if err != nil {
+		return ResourcePlan{}, err
+	}
+
+	if resourcePlan.HasCpu() {
+		if err := c.commit(ctx, resourcePlan); err != nil {
+			return ResourcePlan{}, fmt.Errorf("failed to persist allocations for component %s: %w", request.Owner.Component, err)
+		}
+	}
+
+	return resourcePlan, nil
+}
+
+// takes the device-wide snapshot for one component's allocation.
 // Siblings stay protected because an earlier sibling's Commit is already in storage
-func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.AllocationLedger, error) {
+func (c *ResourceCoordinator) newLedger(deploymentId string) (*ledger.AllocationLedger, error) {
 	snapshot, err := c.store.LoadSnapshot()
 	if err != nil {
 		return nil, err
@@ -177,7 +202,7 @@ func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.Allocation
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
 // no i/o and no context: planning must stay reproducible from its inputs alone
-func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
+func (c *ResourceCoordinator) plan(allocLedger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
 	cpuRequirements, err := model.NormalizeCpuRequirements(request.Owner.Component, request.Requirements)
 	if err != nil {
 		return ResourcePlan{}, err
@@ -190,7 +215,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 
 	cpuPlan, err := c.planner.PlanCpu(planner.CpuPlanningRequest{
 		Requirements: cpuRequirements,
-		Ledger:       ledger,
+		Ledger:       allocLedger,
 	})
 	if err != nil {
 		return ResourcePlan{}, err
@@ -210,7 +235,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 		cachePlan, err = c.cachePlanner.PlanCache(planner.CachePlanningRequest{
 			Requirements: cacheReqs,
 			CpuPlan:      cpuPlan,
-			Ledger:       ledger,
+			Ledger:       allocLedger,
 		})
 		if err != nil {
 			return ResourcePlan{}, err
@@ -226,7 +251,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 
 // records the plan before the workload starts, so nothing is ever applied to the device
 // that is not already recoverable from storage
-func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) error {
+func (c *ResourceCoordinator) commit(ctx context.Context, plan ResourcePlan) error {
 	if !plan.HasCpu() && !plan.HasCache() {
 		return nil
 	}

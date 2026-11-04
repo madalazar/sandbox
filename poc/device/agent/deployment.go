@@ -47,9 +47,6 @@ type DeploymentManager struct {
 	hostTopology       types.HostTopology
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
-	// shared by both coordinators: held across NewLedger -> Plan -> Commit here, and
-	// taken by ResourceCoordinator.Release itself
-	allocMu *sync.Mutex
 }
 
 func NewDeploymentManager(
@@ -103,7 +100,6 @@ func NewDeploymentManager(
 		capabilities:       capabilities,
 		stopChan:           make(chan struct{}),
 		reconcileLocks:     sync.Map{},
-		allocMu:            allocMu,
 	}
 }
 
@@ -444,7 +440,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
+			var componentValues map[string]map[string]any
+			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -457,19 +454,12 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName
 
-		dm.allocMu.Lock()
-		ledger, err := coordinator.NewLedger(deploymentId)
-		if err != nil {
-			dm.allocMu.Unlock()
-			return fmt.Errorf("unable to create ledger %v", err)
-		}
-
-		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+		var plan resource.ResourcePlan
+		plan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
-			dm.allocMu.Unlock()
 			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
 		}
 
@@ -478,12 +468,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
-			if err = coordinator.Commit(ctx, plan); err != nil {
-				dm.allocMu.Unlock()
-				return fmt.Errorf("failed to persist helm allocations for component %s: %w", component.Name, err)
+			if err = coordinator.Activate(ctx, owner); err != nil {
+				return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
 			}
 		}
-		dm.allocMu.Unlock()
 
 		// update pod annotations for this helm component
 		values, err = helmConfigurator.Apply(plan.Cpu, plan.Cache, owner, values)
@@ -497,11 +485,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
 		// Deploy/Update
-		release, err := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
-		if err != nil {
+		release, statusErr := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
+		if statusErr != nil {
 			dm.log.Infow(
 				"failed to check whether a release exists or not, assuming that it doesn't exist, will proceed with installation",
-				"releaseName", releaseName, "deploymentId", deploymentId, "err", err.Error())
+				"releaseName", releaseName, "deploymentId", deploymentId, "err", statusErr.Error())
 		}
 
 		if release != nil {
@@ -510,10 +498,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 			if err = dm.helmClient.UpdateChart(ctx, releaseName, component.Properties.Repository, "", values); err != nil {
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
-			}
-
-			if err = coordinator.Activate(ctx, owner); err != nil {
-				return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
 			}
 
 			if rollback != nil {
@@ -531,10 +515,6 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		wait := component.Properties.Wait != nil && *component.Properties.Wait
 		if err = dm.helmClient.InstallChart(ctx, releaseName, component.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
-		}
-
-		if err = coordinator.Activate(ctx, owner); err != nil {
-			return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
 		}
 
 		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
@@ -579,7 +559,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
+			var componentValues map[string]map[string]any
+			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -590,7 +571,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, err := dm.composeClient.DownloadCompose(
+		var composeFilename string
+		composeFilename, err = dm.composeClient.DownloadCompose(
 			ctx,
 			component.Properties.Repository,
 			component.Properties.Revision,
@@ -601,19 +583,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		dm.log.Debugw("compose file downloaded", "composeFilename", composeFilename)
 
-		dm.allocMu.Lock()
-		ledger, err := coordinator.NewLedger(deploymentId)
-		if err != nil {
-			dm.allocMu.Unlock()
-			return fmt.Errorf("unable to create ledger %v", err)
-		}
-
-		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+		var resourcePlan resource.ResourcePlan
+		resourcePlan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
-			dm.allocMu.Unlock()
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
 		}
 
@@ -625,19 +600,14 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
-
-			if err = coordinator.Commit(ctx, resourcePlan); err != nil {
-				dm.allocMu.Unlock()
-				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
-			}
 		}
-		dm.allocMu.Unlock()
 
 		if resourcePlan.HasCpu() {
 			var prepErr error
 			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
 			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+				err = fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+				return err
 			}
 
 			defer func(prep string, src string) {
@@ -653,7 +623,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		envVars := dm.convertParametersToEnvVars(values, component.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
+		var exists bool
+		exists, err = dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}

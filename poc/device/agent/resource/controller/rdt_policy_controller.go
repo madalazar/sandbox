@@ -112,17 +112,27 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 		}
 	}
 
+	return nil
+}
+
+// verifies that the rdt cache class(es) are present in the nri balloon resource policy
+func (c *RdtPolicyController) Verify(ctx context.Context, reservation model.Reservation) error {
+	if !reservation.HasL3Cache() || reservation.L3CacheAssignment == nil {
+		return nil
+	}
+
+	cosId := string(reservation.L3CacheAssignment.Clos)
+	if cosId == "" || cosId == string(model.ClassUnset) {
+		return fmt.Errorf("component %q has invalid or unset class id %q", reservation.Owner.Component, cosId)
+	}
+	partitionName := strings.TrimSuffix(cosId, rdtClassSuffix)
+
 	if c.reader != nil {
 		if err := c.waitForResourcePolicyUpdate(ctx, partitionName, cosId); err != nil {
 			return err
 		}
 	}
 
-	return nil
-}
-
-// verifies that the rdt cache class(es) are present in the nri balloon resource policy
-func (c *RdtPolicyController) Verify(ctx context.Context, reservation model.Reservation) error {
 	return nil
 }
 

@@ -166,16 +166,15 @@ func TestResourceCoordinatorNewLedger(t *testing.T) {
 		},
 	}
 	c := newTestCoordinator(store, nil, nil, nil)
-	l, err := c.NewLedger("dep1")
+	l, err := c.newLedger("dep1")
 	if err != nil {
-		t.Fatalf("NewLedger() error = %v", err)
+		t.Fatalf("newLedger() error = %v", err)
 	}
 	if l == nil {
-		t.Fatal("NewLedger() returned nil")
+		t.Fatal("newLedger() returned nil")
 	}
 
-	// newLedger delegates to NewLedger
-	l2, err := c.NewLedger("dep1")
+	l2, err := c.newLedger("dep1")
 	if err != nil || l2 == nil {
 		t.Fatalf("newLedger() error = %v, l = %v", err, l2)
 	}
@@ -208,7 +207,7 @@ func TestResourceCoordinatorPlan(t *testing.T) {
 		},
 	}
 	c := newTestCoordinator(nil, fakePlanner, nil, nil)
-	plan, err := c.Plan(nil, req)
+	plan, err := c.plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -264,7 +263,7 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 		},
 	}
 	c := newTestCoordinator(nil, fakeCpuNoCpus, fakeCache, nil)
-	_, err := c.Plan(nil, req)
+	_, err := c.plan(nil, req)
 	if err == nil {
 		t.Fatal("Plan() expected error when cache requested without CPU assignments, got nil")
 	}
@@ -281,7 +280,7 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 		},
 	}
 	cWithCpu := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
-	plan, err := cWithCpu.Plan(nil, req)
+	plan, err := cWithCpu.plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -306,7 +305,7 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 		},
 	}
 
-	if err := c.Commit(context.Background(), plan); err != nil {
+	if err := c.commit(context.Background(), plan); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
 	if store.savedDep != "dep-1" {
@@ -319,7 +318,7 @@ func TestResourceCoordinatorCommit(t *testing.T) {
 	// Commit with no cpus is a no-op
 	store.savedDep = ""
 	emptyPlan := ResourcePlan{Owner: owner}
-	if err := c.Commit(context.Background(), emptyPlan); err != nil {
+	if err := c.commit(context.Background(), emptyPlan); err != nil {
 		t.Fatalf("Commit() empty plan error = %v", err)
 	}
 	if store.savedDep != "" {
@@ -348,7 +347,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 		},
 	}
 
-	if err := c.Commit(context.Background(), plan); err != nil {
+	if err := c.commit(context.Background(), plan); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
 	if store.savedDep != "dep-1" {
@@ -361,7 +360,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 	// Commit failure on Apply
 	isoFail := &fakeIsolationController{err: errors.New("apply failed")}
 	cFail := newTestCoordinator(store, nil, nil, isoFail)
-	if err := cFail.Commit(context.Background(), plan); err == nil {
+	if err := cFail.commit(context.Background(), plan); err == nil {
 		t.Fatal("expected error when isolation.Apply fails, got nil")
 	}
 }
