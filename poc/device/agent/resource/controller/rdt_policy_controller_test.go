@@ -88,7 +88,7 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
 			Mask:    "0x7",
-			Clos:    "worker-dep-1_class",
+			Clos:    "worker_dep-1_class",
 		},
 	}
 
@@ -124,11 +124,11 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 		control := spec["control"].(map[string]any)
 		rdt := control["rdt"].(map[string]any)
 		partitions := rdt["partitions"].(map[string]any)
-		workerPart := partitions["worker-dep-1"].(map[string]any)
+		workerPart := partitions["worker_dep-1"].(map[string]any)
 
 		// Check classes
 		classes := workerPart["classes"].(map[string]any)
-		workerClass := classes["worker-dep-1_class"].(map[string]any)
+		workerClass := classes["worker_dep-1_class"].(map[string]any)
 		classL3 := workerClass["l3Allocation"].(map[string]any)
 		cache0Class := classL3["0"].(map[string]any)
 		if cache0Class["unified"] != "100%" {
@@ -154,8 +154,8 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 				Name:      "custom-balloons",
 				Namespace: "custom-ns",
 				RdtConfig: model.RdtConfig{
-					Partitions: map[string]struct{}{"worker-dep-1": {}},
-					Classes:    map[string]struct{}{"worker-dep-1_class": {}},
+					Partitions: map[string]struct{}{"worker_dep-1": {}},
+					Classes:    map[string]struct{}{"worker_dep-1_class": {}},
 				},
 			},
 		}
@@ -258,7 +258,7 @@ func TestRdtPolicyControllerRelease(t *testing.T) {
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
 			Mask:    "0x7",
-			Clos:    "worker-dep-1_class",
+			Clos:    "worker_dep-1_class",
 		},
 	}
 
@@ -278,7 +278,7 @@ func TestRdtPolicyControllerRelease(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected PatchAction, got %T", actions[0])
 		}
-		expectedPatch := `{"spec":{"control":{"rdt":{"partitions":{"worker-dep-1":null},"classes":{"worker-dep-1_class":null}}}}}`
+		expectedPatch := `{"spec":{"control":{"rdt":{"partitions":{"worker_dep-1":null},"classes":{"worker_dep-1_class":null}}}}}`
 		if string(patchAction.GetPatch()) != expectedPatch {
 			t.Fatalf("expected patch %q, got %q", expectedPatch, string(patchAction.GetPatch()))
 		}

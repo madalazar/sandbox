@@ -65,12 +65,12 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 	if componentName == "" {
 		return fmt.Errorf("reservation has empty component name")
 	}
-	partitionName := rdtPartitionName(reservation.Owner)
 
 	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, cosId)
 	}
+	partitionName := strings.TrimSuffix(cosId, rdtClassSuffix)
 
 	alloc := reservation.L3CacheAssignment
 	selectedCacheId := strings.TrimSpace(alloc.CacheId)
@@ -133,12 +133,12 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
-	partitionName := rdtPartitionName(reservation.Owner)
 
 	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return nil
 	}
+	partitionName := strings.TrimSuffix(cosId, rdtClassSuffix)
 
 	namespace, policyName := c.policyTarget()
 	patchPayload := c.buildReleasePatch(partitionName, cosId)
