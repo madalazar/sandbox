@@ -9,11 +9,11 @@ import (
 // read device-wide allocations, and record, reconstruct and release a component's
 // recorded reservation
 type ReservationStore interface {
-	// every deployment's holdings, not just one; taken once per reconcile, before the
-	// component loop, so a ledger built from it also sees siblings planned in that pass
+	// every deployment's holdings, not just one; taken under a single read lock
+	// when building a ledger for component planning
 	LoadSnapshot() (ledger.AllocationSnapshot, error)
 	LoadReservation(owner model.OwnerRef) (model.Reservation, bool, error)
-	// replaces the deployment's holdings rather than merging, in one write
+	// updates the component's holdings in one atomic write without clobbering siblings
 	SaveReservation(deploymentId string, reservation model.Reservation) error
 	ClearComponent(owner model.OwnerRef) error
 }
@@ -92,13 +92,18 @@ func (s *DatabaseReservationStore) LoadReservation(owner model.OwnerRef) (model.
 
 func (s *DatabaseReservationStore) SaveReservation(deploymentId string, reservation model.Reservation) error {
 	compKey := string(reservation.Owner.Component)
-	var cacheAlloc *database.CacheAllocation
+	allocations := database.Allocations{
+		Cpus: map[string][]int{
+			compKey: reservation.Cpus,
+		},
+	}
 	if reservation.HasL3Cache() {
-		converted := toDatabaseCacheAllocation(compKey, reservation.L3CacheAssignment)
-		cacheAlloc = &converted
+		allocations.Caches = map[string]database.CacheAllocation{
+			compKey: toDatabaseCacheAllocation(compKey, reservation.L3CacheAssignment),
+		}
 	}
 
-	return s.db.SetComponentAllocations(deploymentId, compKey, reservation.Cpus, cacheAlloc)
+	return s.db.SetComponentAllocations(deploymentId, compKey, allocations)
 }
 
 func (s *DatabaseReservationStore) ClearComponent(owner model.OwnerRef) error {

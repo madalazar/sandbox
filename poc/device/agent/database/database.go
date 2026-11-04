@@ -38,7 +38,6 @@ type CacheAllocation struct {
 }
 
 // this is one deployment's complete holdings, keyed by component name
-// written as a whole: SetAllocations replaces, it does not merge
 type Allocations struct {
 	Cpus   map[string][]int
 	Caches map[string]CacheAllocation
@@ -134,12 +133,9 @@ type DatabaseIfc interface {
 	SetCurrentState(deploymentId string, state AppDeploymentState)
 	SetPhase(deploymentId, phase, message string)
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
-	SetAllocations(deploymentId string, allocations Allocations) error
-	SetComponentAllocations(deploymentId, componentName string, cpus []int, cache *CacheAllocation) error
+	SetComponentAllocations(deploymentId, componentName string, allocations Allocations) error
 	ClearComponentAllocations(deploymentId, componentName string) error
 	GetAllocations(deploymentId string) (Allocations, error)
-	AllocatedCpus() map[int]string
-	AllocatedCaches() []CacheAllocation
 	AllocatedResources() (map[int]string, []CacheAllocation)
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
@@ -594,31 +590,11 @@ func (db *Database) SetComponentStatus(
 	db.notify(deploymentId, record, DeploymentChangeTypeComponentPhaseChanged)
 }
 
-// replaces a deployment's allocation holdings in a single write, so there is no
-// window in which the record shows a partially planned deployment
-func (db *Database) SetAllocations(deploymentId string, allocations Allocations) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	record, exists := db.deployments[deploymentId]
-	if !exists {
-		return fmt.Errorf("deployment %s not found", deploymentId)
-	}
-
-	record.Allocations = allocations.clone()
-	record.LastUpdated = time.Now()
-	db.notify(deploymentId, record, DeploymentChangeTypeAllocationsChanged)
-	db.TriggerDataPersist()
-
-	return nil
-}
-
 // updates one component's cpu and cache holdings under the same lock that reads
 // them, so concurrent updates or releases of sibling components cannot be lost
 func (db *Database) SetComponentAllocations(
 	deploymentId, componentName string,
-	cpus []int,
-	cache *CacheAllocation,
+	allocations Allocations,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -631,7 +607,7 @@ func (db *Database) SetComponentAllocations(
 	if record.Allocations.Cpus == nil {
 		record.Allocations.Cpus = make(map[string][]int)
 	}
-	if len(cpus) > 0 {
+	if cpus := allocations.Cpus[componentName]; len(cpus) > 0 {
 		record.Allocations.Cpus[componentName] = append([]int(nil), cpus...)
 	} else {
 		delete(record.Allocations.Cpus, componentName)
@@ -640,8 +616,8 @@ func (db *Database) SetComponentAllocations(
 	if record.Allocations.Caches == nil {
 		record.Allocations.Caches = make(map[string]CacheAllocation)
 	}
-	if cache != nil {
-		record.Allocations.Caches[componentName] = *cache
+	if cache, hasCache := allocations.Caches[componentName]; hasCache {
+		record.Allocations.Caches[componentName] = cache
 	} else {
 		delete(record.Allocations.Caches, componentName)
 	}
@@ -698,58 +674,29 @@ func formatOwner(deploymentId, componentName string) string {
 	return deploymentId
 }
 
-func (db *Database) allocatedCpusLocked() map[int]string {
-	allocated := make(map[int]string)
-	for deploymentID, deployment := range db.deployments {
-		for component, cpuIndices := range deployment.Allocations.Cpus {
-			owner := formatOwner(deploymentID, component)
-			for _, cpuIndex := range cpuIndices {
-				allocated[cpuIndex] = owner
-			}
-		}
-	}
-
-	return allocated
-}
-
-func (db *Database) allocatedCachesLocked() []CacheAllocation {
-	allocated := make([]CacheAllocation, 0)
-	for deploymentID, deployment := range db.deployments {
-		for component, assignment := range deployment.Allocations.Caches {
-			alloc := assignment
-			alloc.Owner = formatOwner(deploymentID, component)
-			allocated = append(allocated, alloc)
-		}
-	}
-
-	return allocated
-}
-
-// the device-wide view of which cpu index is held by which component,
-// encoded as "deployment/component"
-func (db *Database) AllocatedCpus() map[int]string {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	return db.allocatedCpusLocked()
-}
-
-// returns the device-wide view of which cache allocations are held,
-// annotated with owner "deployment/component"
-func (db *Database) AllocatedCaches() []CacheAllocation {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	return db.allocatedCachesLocked()
-}
-
 // returns a consistent device-wide snapshot of both allocated cpus and caches
-// under a single read lock acquisition
+// under a single read lock acquisition, with owners encoded as "deployment/component"
 func (db *Database) AllocatedResources() (map[int]string, []CacheAllocation) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	return db.allocatedCpusLocked(), db.allocatedCachesLocked()
+	allocatedCpus := make(map[int]string)
+	allocatedCaches := make([]CacheAllocation, 0)
+	for deploymentID, deployment := range db.deployments {
+		for component, cpuIndices := range deployment.Allocations.Cpus {
+			owner := formatOwner(deploymentID, component)
+			for _, cpuIndex := range cpuIndices {
+				allocatedCpus[cpuIndex] = owner
+			}
+		}
+		for component, assignment := range deployment.Allocations.Caches {
+			alloc := assignment
+			alloc.Owner = formatOwner(deploymentID, component)
+			allocatedCaches = append(allocatedCaches, alloc)
+		}
+	}
+
+	return allocatedCpus, allocatedCaches
 }
 
 func (db *Database) GetDeployment(deploymentId string) (*DeploymentRecord, error) {

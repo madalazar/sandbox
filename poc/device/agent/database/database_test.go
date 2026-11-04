@@ -75,8 +75,11 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 		},
 	}
 
-	if err := db.SetAllocations(deploymentID, allocs); err != nil {
-		t.Fatalf("SetAllocations failed: %v", err)
+	if err := db.SetComponentAllocations(deploymentID, "comp-a", allocs); err != nil {
+		t.Fatalf("SetComponentAllocations comp-a failed: %v", err)
+	}
+	if err := db.SetComponentAllocations(deploymentID, "comp-b", allocs); err != nil {
+		t.Fatalf("SetComponentAllocations comp-b failed: %v", err)
 	}
 
 	gotAllocs, err := db.GetAllocations(deploymentID)
@@ -87,17 +90,14 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 		t.Fatalf("expected allocations %+v, got %+v", allocs, gotAllocs)
 	}
 
-	// Check AllocatedCpus
-	cpus := db.AllocatedCpus()
+	// Check AllocatedResources
+	cpus, caches := db.AllocatedResources()
 	if cpus[2] != "dep-1/comp-a" || cpus[3] != "dep-1/comp-a" {
-		t.Fatalf("unexpected AllocatedCpus for comp-a: %+v", cpus)
+		t.Fatalf("unexpected AllocatedResources cpus for comp-a: %+v", cpus)
 	}
 	if cpus[4] != "dep-1/comp-b" || cpus[5] != "dep-1/comp-b" {
-		t.Fatalf("unexpected AllocatedCpus for comp-b: %+v", cpus)
+		t.Fatalf("unexpected AllocatedResources cpus for comp-b: %+v", cpus)
 	}
-
-	// Check AllocatedCaches
-	caches := db.AllocatedCaches()
 	if len(caches) != 1 {
 		t.Fatalf("expected 1 allocated cache, got %d", len(caches))
 	}
@@ -133,21 +133,29 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 		t.Fatalf("expected comp-b CPUs to remain, got %+v", afterClear.Cpus["comp-b"])
 	}
 
-	// Assert AllocatedCaches is now empty
-	if len(db.AllocatedCaches()) != 0 {
-		t.Fatalf("expected 0 allocated caches after clear, got %d", len(db.AllocatedCaches()))
+	// Assert allocated caches are now empty
+	_, cachesAfterClear := db.AllocatedResources()
+	if len(cachesAfterClear) != 0 {
+		t.Fatalf("expected 0 allocated caches after clear, got %d", len(cachesAfterClear))
 	}
 
 	// SetComponentAllocations updates a single component atomically without clobbering siblings
-	newCache := &CacheAllocation{
-		ComponentName: "comp-c",
-		Level:         "L3",
-		CacheId:       "0",
-		SizeKB:        2048,
-		Mask:          "0x3",
-		Clos:          "1",
+	compCAllocs := Allocations{
+		Cpus: map[string][]int{
+			"comp-c": {6, 7},
+		},
+		Caches: map[string]CacheAllocation{
+			"comp-c": {
+				ComponentName: "comp-c",
+				Level:         "L3",
+				CacheId:       "0",
+				SizeKB:        2048,
+				Mask:          "0x3",
+				Clos:          "1",
+			},
+		},
 	}
-	if err := db.SetComponentAllocations(deploymentID, "comp-c", []int{6, 7}, newCache); err != nil {
+	if err := db.SetComponentAllocations(deploymentID, "comp-c", compCAllocs); err != nil {
 		t.Fatalf("SetComponentAllocations failed: %v", err)
 	}
 

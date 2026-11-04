@@ -16,10 +16,10 @@ func TestDatabaseReservationStoreLoadReservation(t *testing.T) {
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	if err := db.SetComponentAllocations(deploymentID, componentName, database.Allocations{
 		Cpus: map[string][]int{componentName: {4, 2}},
 	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	owner := model.NewOwnerRef(deploymentID, componentName)
@@ -113,10 +113,10 @@ func TestDatabaseReservationStoreSnapshot(t *testing.T) {
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	if err := db.SetComponentAllocations(deploymentID, "comp1", database.Allocations{
 		Cpus: map[string][]int{"comp1": {1, 2, 5}},
 	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	isolated := map[int]struct{}{1: {}, 2: {}} // cpu 5 is not isolated
@@ -148,10 +148,14 @@ func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	seedAllocs := database.Allocations{
 		Cpus: map[string][]int{componentName: {2}, siblingName: {4}},
-	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+	}
+	if err := db.SetComponentAllocations(deploymentID, componentName, seedAllocs); err != nil {
+		t.Fatalf("SetComponentAllocations() error = %v", err)
+	}
+	if err := db.SetComponentAllocations(deploymentID, siblingName, seedAllocs); err != nil {
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	store := NewDatabaseReservationStore(db, map[int]struct{}{2: {}, 4: {}})
