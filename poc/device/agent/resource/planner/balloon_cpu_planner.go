@@ -95,10 +95,6 @@ func (p BalloonCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, e
 		)
 	}
 
-	if err := request.Ledger.ReserveCpus(ref, selectedBalloonCpus); err != nil {
-		return model.CpuPlan{}, err
-	}
-
 	return model.CpuPlan{
 		Component: ref,
 		Cpus:      selectedBalloonCpus,

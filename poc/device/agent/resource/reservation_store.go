@@ -38,7 +38,7 @@ func toModelCacheAssignment(owner model.OwnerRef, alloc database.CacheAllocation
 		Level:   alloc.Level,
 		CacheId: alloc.CacheId,
 		SizeKiB: alloc.SizeKB,
-		Mask:    alloc.Mask,
+		Masks:   alloc.Masks,
 		Clos:    model.ClosId(alloc.Clos),
 	}
 }
@@ -49,7 +49,7 @@ func toDatabaseCacheAllocation(componentName string, c *model.CacheAssignment) d
 		Level:         c.Level,
 		CacheId:       c.CacheId,
 		SizeKB:        c.SizeKiB,
-		Mask:          c.Mask,
+		Masks:         c.Masks,
 		Clos:          c.Clos.String(),
 	}
 }

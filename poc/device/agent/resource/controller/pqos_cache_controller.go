@@ -71,9 +71,15 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("component %q cache id %q not found in host topology", componentName, cacheID)
 	}
 
-	mask := strings.TrimSpace(alloc.Mask)
+	// we expect exactly one cache allocation for a partition for this
+	// c-ller
+	if len(alloc.Masks) != 1 {
+		return fmt.Errorf("component %q expected 1 cache mask for pqos, got %d", componentName, len(alloc.Masks))
+	}
+
+	mask := strings.TrimSpace(alloc.Masks[cacheID])
 	if mask == "" {
-		return fmt.Errorf("component %q has empty cache mask", componentName)
+		return fmt.Errorf("component %q has empty cache mask for cache id %q", componentName, cacheID)
 	}
 
 	cpuset := reservation.CpuSet()

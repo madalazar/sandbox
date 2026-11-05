@@ -402,8 +402,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			var componentValues map[string]map[string]any
-			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
+			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -416,8 +415,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		var plan resource.ResourcePlan
-		plan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
+		plan, err := coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: helmComp.RequiredResources,
 		})
@@ -430,8 +428,8 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
-			if err = coordinator.Activate(ctx, owner); err != nil {
-				return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
+			if err = coordinator.Verify(ctx, owner); err != nil {
+				return fmt.Errorf("failed to verify cache isolation for component %s: %w", helmComp.Name, err)
 			}
 		}
 
@@ -525,8 +523,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
-			var componentValues map[string]map[string]any
-			componentValues, err = pkg.ConvertAllAppDeploymentParamsToValues(
+			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
 			)
 			if err != nil {
@@ -537,8 +534,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		var composeFilename string
-		composeFilename, err = dm.composeClient.DownloadCompose(
+		composeFilename, err := dm.composeClient.DownloadCompose(
 			ctx,
 			composeComp.Properties.PackageLocation,
 			composeComp.Properties.KeyLocation,
@@ -549,8 +545,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
 
-		var resourcePlan resource.ResourcePlan
-		resourcePlan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
+		resourcePlan, err := coordinator.Allocate(ctx, resource.ResourceRequest{
 			Owner:        owner,
 			Requirements: composeComp.RequiredResources,
 		})
@@ -575,8 +570,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 
 		// Check if project already exists
-		var exists bool
-		exists, err = dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
+		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
@@ -809,6 +803,7 @@ func (dm *DeploymentManager) removeHelm(
 			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", helmComp.Name, err))
 		}
 	}
+
 	return errors.Join(errs...)
 }
 

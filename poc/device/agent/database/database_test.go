@@ -17,7 +17,7 @@ func TestAllocationsClone(t *testing.T) {
 				Level:         "L3",
 				CacheId:       "0",
 				SizeKB:        2048,
-				Mask:          "0x3",
+				Masks:         map[string]string{"0": "0x3"},
 				Clos:          "1",
 			},
 		},
@@ -32,11 +32,12 @@ func TestAllocationsClone(t *testing.T) {
 	cloned.Cpus["comp1"][0] = 99
 	entry := cloned.Caches["comp1"]
 	entry.Clos = "99"
+	entry.Masks["0"] = "0xff"
 	cloned.Caches["comp1"] = entry
 	if orig.Cpus["comp1"][0] == 99 {
 		t.Fatal("expected original Cpus not to be modified")
 	}
-	if orig.Caches["comp1"].Clos == "99" {
+	if orig.Caches["comp1"].Clos == "99" || orig.Caches["comp1"].Masks["0"] != "0x3" {
 		t.Fatal("expected original Caches not to be modified")
 	}
 }
@@ -69,7 +70,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 				Level:         "L3",
 				CacheId:       "0",
 				SizeKB:        4096,
-				Mask:          "0xf",
+				Masks:         map[string]string{"0": "0xf"},
 				Clos:          "2",
 			},
 		},
@@ -107,7 +108,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 		Level:         "L3",
 		CacheId:       "0",
 		SizeKB:        4096,
-		Mask:          "0xf",
+		Masks:         map[string]string{"0": "0xf"},
 		Clos:          "2",
 	}
 	if !reflect.DeepEqual(caches[0], expectedAlloc) {
@@ -150,7 +151,7 @@ func TestDatabaseAllocationsLifecycle(t *testing.T) {
 				Level:         "L3",
 				CacheId:       "0",
 				SizeKB:        2048,
-				Mask:          "0x3",
+				Masks:         map[string]string{"0": "0x3"},
 				Clos:          "1",
 			},
 		},
