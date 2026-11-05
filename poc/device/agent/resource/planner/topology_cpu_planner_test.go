@@ -11,11 +11,11 @@ import (
 
 func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
-	l := newCpuPlanningTestLedger("deployment-123")
 
 	tests := []struct {
 		name              string
 		componentName     string
+		allocated         map[int]string
 		requiredResources *sbi.RequiredResources
 		wantCpus          []int
 	}{
@@ -33,6 +33,7 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 		{
 			name:              "caterpillar gets remaining isolated cpu",
 			componentName:     "caterpillar_compose",
+			allocated:         map[int]string{1: "deployment-123/cyclictest_compose"},
 			requiredResources: isolatedCpuRequirement("caterpillar_compose"),
 			wantCpus:          []int{3},
 		},
@@ -40,6 +41,7 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			l := newCpuPlanningTestLedger("deployment-123", test.allocated)
 			got, err := planner.PlanCpu(
 				newCpuPlanningRequest(t, test.componentName, test.requiredResources, l),
 			)
@@ -60,7 +62,7 @@ func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCpuRequirement("rt-container"),
-		newCpuPlanningTestLedger("deployment-123"),
+		newCpuPlanningTestLedger("deployment-123", nil),
 	))
 	if err != nil {
 		t.Fatalf("PlanCpu() error = %v", err)
@@ -74,15 +76,10 @@ func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
 
 func TestTopologyCpuPlannerFailsWhenIsolatedCpusAreExhausted(t *testing.T) {
 	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
-	l := newCpuPlanningTestLedger("deployment-123")
-
-	for _, component := range []string{"component-a", "component-b"} {
-		if _, err := planner.PlanCpu(
-			newCpuPlanningRequest(t, component, isolatedCpuRequirement(component), l),
-		); err != nil {
-			t.Fatalf("PlanCpu(%s) error = %v", component, err)
-		}
-	}
+	l := newCpuPlanningTestLedger("deployment-123", map[int]string{
+		1: "deployment-123/component-a",
+		3: "deployment-123/component-b",
+	})
 
 	got, err := planner.PlanCpu(
 		newCpuPlanningRequest(t, "component-c", isolatedCpuRequirement("component-c"), l),
@@ -148,7 +145,7 @@ func TestTopologyCpuPlannerWithoutIsolatedCpusPlansNothing(t *testing.T) {
 		t,
 		"cyclictest_compose",
 		isolatedCpuRequirement("cyclictest_compose"),
-		newCpuPlanningTestLedger("deployment-123"),
+		newCpuPlanningTestLedger("deployment-123", nil),
 	))
 	if err != nil {
 		t.Fatalf("PlanCpu() error = %v", err)

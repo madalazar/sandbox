@@ -87,12 +87,12 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 		Cpus:  []int{4, 5},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x7",
+			Masks:   map[string]string{"0": "0x7", "1": "0x2"},
 			Clos:    "worker_dep-1_class",
 		},
 	}
 
-	t.Run("successful apply with multi-cache filler synthesis", func(t *testing.T) {
+	t.Run("successful apply with multi-cache masks", func(t *testing.T) {
 		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
 		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
@@ -135,15 +135,15 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 			t.Errorf("expected unified 100%% for selected cache 0, got %v", cache0Class["unified"])
 		}
 
-		// Check partition l3Allocation (selected cache mask + synthesized filler mask)
+		// Check partition l3Allocation (selected cache mask + other cache mask)
 		partL3 := workerPart["l3Allocation"].(map[string]any)
 		cache0Part := partL3["0"].(map[string]any)
 		if cache0Part["unified"] != "0x7" {
 			t.Errorf("expected unified 0x7 for selected cache 0, got %v", cache0Part["unified"])
 		}
 		cache1Part := partL3["1"].(map[string]any)
-		if cache1Part["unified"] != "0x1" {
-			t.Errorf("expected synthesized filler mask 0x1 for other cache 1, got %v", cache1Part["unified"])
+		if cache1Part["unified"] != "0x2" {
+			t.Errorf("expected planned filler mask 0x2 for other cache 1, got %v", cache1Part["unified"])
 		}
 	})
 
@@ -196,7 +196,7 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 		badRes := res
 		badRes.L3CacheAssignment = &model.CacheAssignment{
 			CacheId: "",
-			Mask:    "0x7",
+			Masks:   map[string]string{"0": "0x7", "1": "0x2"},
 			Clos:    "worker_class",
 		}
 
@@ -211,7 +211,7 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 		badRes := res
 		badRes.L3CacheAssignment = &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "",
+			Masks:   nil,
 			Clos:    "worker_class",
 		}
 
@@ -231,7 +231,7 @@ func TestRdtPolicyControllerVerify(t *testing.T) {
 		Cpus:  []int{4, 5},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x7",
+			Masks:   map[string]string{"0": "0x7"},
 			Clos:    "worker_class",
 		},
 	}
@@ -257,7 +257,7 @@ func TestRdtPolicyControllerRelease(t *testing.T) {
 		Cpus:  []int{4, 5},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x7",
+			Masks:   map[string]string{"0": "0x7"},
 			Clos:    "worker_dep-1_class",
 		},
 	}

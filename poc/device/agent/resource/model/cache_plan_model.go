@@ -128,7 +128,7 @@ type CacheAssignment struct {
 	CacheId  string
 	SizeKiB  int64
 	Interval WayInterval
-	Mask     string
+	Masks    map[string]string
 	Clos     ClosId
 }
 

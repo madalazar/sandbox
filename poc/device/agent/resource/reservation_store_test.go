@@ -195,7 +195,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 			Level:   "L3",
 			CacheId: "0",
 			SizeKiB: 2048,
-			Mask:    "0xC",
+			Masks:   map[string]string{"0": "0xC"},
 			Clos:    model.ClosId("cos1"),
 		},
 	}
@@ -226,7 +226,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 	if cacheRes.Clos != model.ClosId("cos1") {
 		t.Fatalf("expected class 'cos1', got %s", cacheRes.Clos)
 	}
-	if cacheRes.CacheId != "0" || cacheRes.Mask != "0xC" {
+	if cacheRes.CacheId != "0" || cacheRes.Masks["0"] != "0xC" {
 		t.Fatalf("unexpected cache reservation ID/mask: %+v", cacheRes)
 	}
 
@@ -239,7 +239,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 		t.Fatalf("expected 1 cache in snapshot, got %d", len(snapshot.Caches))
 	}
 	snapCache := snapshot.Caches[0]
-	if snapCache.Owner != owner || snapCache.Mask != "0xC" {
+	if snapCache.Owner != owner || snapCache.Masks["0"] != "0xC" {
 		t.Fatalf("unexpected snapshot cache: %+v", snapCache)
 	}
 

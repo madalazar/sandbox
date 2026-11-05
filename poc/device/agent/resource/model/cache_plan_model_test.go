@@ -193,7 +193,7 @@ func TestCachePlan(t *testing.T) {
 		CacheId:  "0",
 		SizeKiB:  2048,
 		Interval: WayInterval{Start: 0, Length: 2},
-		Mask:     "0x3",
+		Masks:    map[string]string{"0": "0x3"},
 		Clos:     ClosId("1"),
 	}
 	plan := CachePlan{

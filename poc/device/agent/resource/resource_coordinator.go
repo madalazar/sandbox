@@ -47,7 +47,7 @@ func (p ResourcePlan) HasCache() bool {
 //	         deployment's ledger
 //	commit   record the reservation before the workload is started, so every later
 //	         stage can work from storage rather than from memory
-//	activate verify, after the workload is running, that the device still matches
+//	verify   verify, after the workload is running, that the device still matches
 //	         what was committed; might not be needed
 //	release  works from storage, never from an in-memory plan: it loads what
 //			 was committed for the owner and undoes that
@@ -58,7 +58,7 @@ func (p ResourcePlan) HasCache() bool {
 // further researched
 //
 // allocMu serializes allocation against release across every coordinator that draws
-// from the same isolated cpus and l3 ways. Both Allocate (newLedger -> plan -> commit)
+// from the same isolated cpus and l3 ways. Both Allocate (snapshot -> plan -> commit)
 // and Release acquire and release it internally.
 type ResourceCoordinator struct {
 	store           ReservationStore
@@ -144,11 +144,14 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	if b.cacheController == nil {
 		errs = append(errs, errors.New("cache isolation controller cannot be nil"))
 	}
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+	if b.classNamer == nil {
+		errs = append(errs, errors.New("class namer cannot be nil"))
 	}
 	if b.allocMu == nil {
-		b.allocMu = &sync.Mutex{}
+		errs = append(errs, errors.New("allocation lock cannot be nil"))
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return &ResourceCoordinator{
 		store:           b.store,
@@ -170,10 +173,12 @@ func (c *ResourceCoordinator) Allocate(
 	c.allocMu.Lock()
 	defer c.allocMu.Unlock()
 
-	allocLedger, err := c.newLedger(request.Owner.Deployment)
+	snapshot, err := c.store.LoadSnapshot()
 	if err != nil {
 		return ResourcePlan{}, fmt.Errorf("unable to create ledger: %w", err)
 	}
+
+	allocLedger := ledger.NewAllocationLedger(snapshot, request.Owner.Deployment, c.cacheCapacity, c.classNamer)
 
 	resourcePlan, err := c.plan(allocLedger, request)
 	if err != nil {
@@ -187,17 +192,6 @@ func (c *ResourceCoordinator) Allocate(
 	}
 
 	return resourcePlan, nil
-}
-
-// takes the device-wide snapshot for one component's allocation.
-// Siblings stay protected because an earlier sibling's Commit is already in storage
-func (c *ResourceCoordinator) newLedger(deploymentId string) (*ledger.AllocationLedger, error) {
-	snapshot, err := c.store.LoadSnapshot()
-	if err != nil {
-		return nil, err
-	}
-
-	return ledger.NewAllocationLedger(snapshot, deploymentId, c.cacheCapacity, c.classNamer), nil
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
@@ -259,7 +253,7 @@ func (c *ResourceCoordinator) commit(ctx context.Context, plan ResourcePlan) err
 		return err
 	}
 
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Apply(ctx, reservation); err != nil {
 			_ = c.store.ClearComponent(reservation.Owner)
 			return err
@@ -271,7 +265,7 @@ func (c *ResourceCoordinator) commit(ctx context.Context, plan ResourcePlan) err
 
 // verifies, after the workload is running, that the device still matches what was
 // committed
-func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef) error {
+func (c *ResourceCoordinator) Verify(ctx context.Context, owner model.OwnerRef) error {
 	reservation, found, err := c.store.LoadReservation(owner)
 	if err != nil {
 		return err
@@ -280,11 +274,7 @@ func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef
 		return nil
 	}
 
-	if c.cacheController != nil {
-		return c.cacheController.Verify(ctx, reservation)
-	}
-
-	return nil
+	return c.cacheController.Verify(ctx, reservation)
 }
 
 // releases everything the component holds. Releasing what was never reserved is not an
@@ -302,7 +292,7 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef)
 		return nil
 	}
 
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Release(ctx, reservation); err != nil {
 			return err
 		}

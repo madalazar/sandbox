@@ -140,7 +140,7 @@ func TestHelmConfiguratorApplyWithCacheInjectsRdtAnnotation(t *testing.T) {
 		Component: "cyclictest",
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "cyclictest_class",
 		},
 	}
@@ -179,7 +179,7 @@ func TestHelmConfiguratorApplyWithBothBalloonAndRdtAnnotations(t *testing.T) {
 		Component: "worker",
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0xf",
+			Masks:   map[string]string{"0": "0xf"},
 			Clos:    "worker_class",
 		},
 	}

@@ -54,10 +54,6 @@ func (p TopologyCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, 
 		)
 	}
 
-	if err := request.Ledger.ReserveCpus(requirements.Component, selected); err != nil {
-		return model.CpuPlan{}, err
-	}
-
 	return model.CpuPlan{
 		Component: requirements.Component,
 		Cpus:      selected,

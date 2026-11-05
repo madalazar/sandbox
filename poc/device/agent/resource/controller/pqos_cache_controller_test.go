@@ -64,7 +64,7 @@ func TestPqosCacheControllerApply(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -142,6 +142,20 @@ func TestPqosCacheControllerApply(t *testing.T) {
 			t.Fatalf("expected error containing 'cannot use reserved default pqos class', got %v", err)
 		}
 	})
+
+	t.Run("multiple cache masks rejected for pqos", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, caches, 8)
+		resMulti := res
+		alloc := *res.L3CacheAssignment
+		alloc.Masks = map[string]string{"0": "0x3", "1": "0x1"}
+		resMulti.L3CacheAssignment = &alloc
+
+		err := ctrl.Apply(context.Background(), resMulti)
+		if err == nil {
+			t.Fatal("expected error when multiple cache masks are passed to pqos, got nil")
+		}
+	})
 }
 
 func TestPqosCacheControllerVerify(t *testing.T) {
@@ -154,7 +168,7 @@ func TestPqosCacheControllerVerify(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -180,7 +194,7 @@ func TestPqosCacheControllerRelease(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
