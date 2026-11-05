@@ -4,13 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 )
+
+func newFakeBalloonsPolicy(namespace, name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "config.nri/v1alpha1",
+			"kind":       "BalloonsPolicy",
+			"metadata": map[string]any{
+				"namespace": namespace,
+				"name":      name,
+			},
+			"spec": map[string]any{
+				"control": map[string]any{
+					"rdt": map[string]any{
+						"partitions": map[string]any{},
+					},
+				},
+			},
+		},
+	}
+}
 
 type fakePolicyReader struct {
 	policy *model.ParsedBalloonPolicy
@@ -30,8 +54,8 @@ func TestRdtPolicyControllerInterface(t *testing.T) {
 }
 
 func TestRdtPolicyControllerNoCache(t *testing.T) {
-	runner := &fakeRunner{}
-	ctrl := NewRdtPolicyControllerWithReader(runner, nil, nil)
+	fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, nil)
 	ctx := context.Background()
 
 	res := model.Reservation{
@@ -47,8 +71,8 @@ func TestRdtPolicyControllerNoCache(t *testing.T) {
 	if err := ctrl.Release(ctx, res); err != nil {
 		t.Fatalf("expected nil for Release without cache, got %v", err)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("expected 0 calls to runner, got %d", len(runner.calls))
+	if len(fakeClient.Actions()) != 0 {
+		t.Fatalf("expected 0 client actions, got %d", len(fakeClient.Actions()))
 	}
 }
 
@@ -66,35 +90,34 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
 	t.Run("successful apply with multi-cache filler synthesis", func(t *testing.T) {
-		runner := &fakeRunner{}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
 		if err := ctrl.Apply(context.Background(), res); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
-		if len(runner.calls) != 1 {
-			t.Fatalf("expected 1 runner call, got %d", len(runner.calls))
+		actions := fakeClient.Actions()
+		if len(actions) != 1 {
+			t.Fatalf("expected 1 client action, got %d", len(actions))
 		}
 
-		call := runner.calls[0]
-		if !strings.Contains(call, "kubectl -n kube-system patch balloonspolicies default --type=merge --patch") {
-			t.Fatalf("unexpected patch command: %s", call)
+		patchAction, ok := actions[0].(clienttesting.PatchAction)
+		if !ok {
+			t.Fatalf("expected PatchAction, got %T", actions[0])
 		}
-
-		// Verify patch JSON contents
-		patchIdx := strings.Index(call, "--patch ")
-		if patchIdx == -1 {
-			t.Fatalf("could not find patch in command: %s", call)
+		if patchAction.GetNamespace() != "kube-system" {
+			t.Errorf("expected namespace kube-system, got %s", patchAction.GetNamespace())
 		}
-		patchStr := call[patchIdx+len("--patch "):]
+		if patchAction.GetName() != "default" {
+			t.Errorf("expected name default, got %s", patchAction.GetName())
+		}
 
 		var patchMap map[string]any
-		if err := json.Unmarshal([]byte(patchStr), &patchMap); err != nil {
-			t.Fatalf("failed to unmarshal patch JSON %q: %v", patchStr, err)
+		if err := json.Unmarshal(patchAction.GetPatch(), &patchMap); err != nil {
+			t.Fatalf("failed to unmarshal patch JSON: %v", err)
 		}
 
 		spec := patchMap["spec"].(map[string]any)
@@ -125,7 +148,7 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 	})
 
 	t.Run("successful apply with custom policy namespace and name", func(t *testing.T) {
-		runner := &fakeRunner{}
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("custom-ns", "custom-balloons"))
 		reader := &fakePolicyReader{
 			policy: &model.ParsedBalloonPolicy{
 				Name:      "custom-balloons",
@@ -136,31 +159,40 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 				},
 			},
 		}
-		ctrl := NewRdtPolicyControllerWithReader(runner, reader, caches)
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, reader, caches)
 
 		if err := ctrl.Apply(context.Background(), res); err != nil {
 			t.Fatalf("Apply failed: %v", err)
 		}
-		if len(runner.calls) != 1 {
-			t.Fatalf("expected 1 runner call, got %d", len(runner.calls))
+		actions := fakeClient.Actions()
+		if len(actions) != 1 {
+			t.Fatalf("expected 1 client action, got %d", len(actions))
 		}
-		if !strings.Contains(runner.calls[0], "-n custom-ns patch balloonspolicies custom-balloons") {
-			t.Fatalf("expected custom namespace and policy name in command: %s", runner.calls[0])
+		patchAction, ok := actions[0].(clienttesting.PatchAction)
+		if !ok {
+			t.Fatalf("expected PatchAction, got %T", actions[0])
+		}
+		if patchAction.GetNamespace() != "custom-ns" || patchAction.GetName() != "custom-balloons" {
+			t.Fatalf("expected custom namespace custom-ns and name custom-balloons, got %s/%s",
+				patchAction.GetNamespace(), patchAction.GetName())
 		}
 	})
 
-	t.Run("runner failure returns error", func(t *testing.T) {
-		runner := &fakeRunner{err: errors.New("kubectl connection failed")}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+	t.Run("client failure returns error", func(t *testing.T) {
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		fakeClient.PrependReactor("patch", "*", func(action clienttesting.Action) (handled bool, ret runtime.Object, err error) {
+			return true, nil, errors.New("k8s api server unavailable")
+		})
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
 		if err := ctrl.Apply(context.Background(), res); err == nil {
-			t.Fatal("expected error on runner failure, got nil")
+			t.Fatal("expected error on client failure, got nil")
 		}
 	})
 
 	t.Run("missing cache id returns error", func(t *testing.T) {
-		runner := &fakeRunner{}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 		badRes := res
 		badRes.L3CacheAssignment = &model.CacheAssignment{
 			CacheId: "",
@@ -174,8 +206,8 @@ func TestRdtPolicyControllerApply(t *testing.T) {
 	})
 
 	t.Run("missing cache mask returns error", func(t *testing.T) {
-		runner := &fakeRunner{}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 		badRes := res
 		badRes.L3CacheAssignment = &model.CacheAssignment{
 			CacheId: "0",
@@ -202,17 +234,16 @@ func TestRdtPolicyControllerVerify(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
-	runner := &fakeRunner{}
-	ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+	fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+	ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
 	if err := ctrl.Verify(context.Background(), res); err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("expected 0 runner calls for Verify, got %d", len(runner.calls))
+	if len(fakeClient.Actions()) != 0 {
+		t.Fatalf("expected 0 client actions for Verify, got %d", len(fakeClient.Actions()))
 	}
 }
 
@@ -229,38 +260,45 @@ func TestRdtPolicyControllerRelease(t *testing.T) {
 			Mask:    "0x7",
 			Clos:    "worker_class",
 		},
-		Clos: "worker_class",
 	}
 
 	t.Run("successful release sets partition and class to null", func(t *testing.T) {
-		runner := &fakeRunner{}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
 		if err := ctrl.Release(context.Background(), res); err != nil {
 			t.Fatalf("Release failed: %v", err)
 		}
-		if len(runner.calls) != 1 {
-			t.Fatalf("expected 1 runner call, got %d", len(runner.calls))
+		actions := fakeClient.Actions()
+		if len(actions) != 1 {
+			t.Fatalf("expected 1 client action, got %d", len(actions))
 		}
 
-		expectedCall := `kubectl -n kube-system patch balloonspolicies default --type=merge --patch {"spec":{"control":{"rdt":{"partitions":{"worker":null},"classes":{"worker_class":null}}}}}`
-		if runner.calls[0] != expectedCall {
-			t.Fatalf("expected call %q, got %q", expectedCall, runner.calls[0])
+		patchAction, ok := actions[0].(clienttesting.PatchAction)
+		if !ok {
+			t.Fatalf("expected PatchAction, got %T", actions[0])
+		}
+		expectedPatch := `{"spec":{"control":{"rdt":{"partitions":{"worker":null},"classes":{"worker_class":null}}}}}`
+		if string(patchAction.GetPatch()) != expectedPatch {
+			t.Fatalf("expected patch %q, got %q", expectedPatch, string(patchAction.GetPatch()))
 		}
 	})
 
-	t.Run("runner failure returns error", func(t *testing.T) {
-		runner := &fakeRunner{err: errors.New("failed to patch")}
-		ctrl := NewRdtPolicyControllerWithReader(runner, nil, caches)
+	t.Run("client failure returns error", func(t *testing.T) {
+		fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
+		fakeClient.PrependReactor("patch", "*", func(action clienttesting.Action) (handled bool, ret runtime.Object, err error) {
+			return true, nil, errors.New("failed to patch")
+		})
+		ctrl := NewRdtPolicyControllerWithClient(fakeClient, nil, caches)
 
 		if err := ctrl.Release(context.Background(), res); err == nil {
-			t.Fatal("expected error on runner failure, got nil")
+			t.Fatal("expected error on client failure, got nil")
 		}
 	})
 }
 
 func TestRdtPolicyControllerWaitTimeout(t *testing.T) {
-	runner := &fakeRunner{}
+	fakeClient := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), newFakeBalloonsPolicy("kube-system", "default"))
 	reader := &fakePolicyReader{
 		policy: &model.ParsedBalloonPolicy{
 			Name:      "default",
@@ -271,7 +309,7 @@ func TestRdtPolicyControllerWaitTimeout(t *testing.T) {
 			},
 		},
 	}
-	ctrl := NewRdtPolicyControllerWithReader(runner, reader, nil)
+	ctrl := NewRdtPolicyControllerWithClient(fakeClient, reader, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
