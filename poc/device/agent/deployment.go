@@ -430,7 +430,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		// update pod annotations for this helm component
-		values, err = helmConfigurator.Apply(plan.Cpu, owner, values)
+		values, err = helmConfigurator.Apply(plan.Cpu, plan.Cache, owner, values)
 		if err != nil {
 			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", helmComp.Name, err)
 		}
