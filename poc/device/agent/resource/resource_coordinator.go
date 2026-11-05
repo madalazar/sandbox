@@ -10,6 +10,7 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
+	"github.com/margo/sandbox/poc/device/agent/types"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"go.uber.org/zap"
 )
@@ -59,6 +60,8 @@ type ResourceCoordinator struct {
 	planner         planner.CpuPlanner
 	cachePlanner    planner.CachePlanner
 	cacheController controller.CacheIsolationController
+	cacheCapacity   model.CacheCapacity
+	classNamer      controller.ClassNamer
 }
 
 // constructs a ResourceCoordinator ensuring all dependencies are non-nil.
@@ -67,6 +70,8 @@ type ResourceCoordinatorBuilder struct {
 	planner         planner.CpuPlanner
 	cachePlanner    planner.CachePlanner
 	cacheController controller.CacheIsolationController
+	cacheCapacity   model.CacheCapacity
+	classNamer      controller.ClassNamer
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -93,6 +98,26 @@ func (b *ResourceCoordinatorBuilder) WithCacheController(ctrl controller.CacheIs
 	return b
 }
 
+func (b *ResourceCoordinatorBuilder) WithCacheTopology(caches []types.HostTopologyCache, maxClos int) *ResourceCoordinatorBuilder {
+	ways := make(map[string]int64, len(caches))
+	for _, c := range caches {
+		ways[c.Id] = c.Ways
+	}
+	b.cacheCapacity = model.CacheCapacity{
+		Ways: ways,
+		ClosPool: model.ClosPool{
+			NumClos:  maxClos,
+			Reserved: 1,
+		},
+	}
+	return b
+}
+
+func (b *ResourceCoordinatorBuilder) WithClassNamer(namer controller.ClassNamer) *ResourceCoordinatorBuilder {
+	b.classNamer = namer
+	return b
+}
+
 func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	var errs []error
 	if b.store == nil {
@@ -115,6 +140,8 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 		planner:         b.planner,
 		cachePlanner:    b.cachePlanner,
 		cacheController: b.cacheController,
+		cacheCapacity:   b.cacheCapacity,
+		classNamer:      b.classNamer,
 	}, nil
 }
 
@@ -126,7 +153,8 @@ func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.Allocation
 	if err != nil {
 		return nil, err
 	}
-	return ledger.NewAllocationLedger(snapshot, deploymentId, model.CacheCapacity{}, nil), nil
+
+	return ledger.NewAllocationLedger(snapshot, deploymentId, c.cacheCapacity, c.classNamer), nil
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
@@ -181,7 +209,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 // records the plan before the workload starts, so nothing is ever applied to the device
 // that is not already recoverable from storage
 func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) error {
-	if !plan.Cpu.HasCpus() && !plan.HasCache() {
+	if !plan.HasCpu() && !plan.HasCache() {
 		return nil
 	}
 
@@ -191,12 +219,15 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		L3CacheAssignment: plan.Cache.L3CacheAssignment,
 	}
 
+	fmt.Printf("[resource coordinator] cache plan details: %#v\n", plan.Cache)
+
 	if err := c.store.SaveReservation(plan.Owner.Deployment, reservation); err != nil {
 		return err
 	}
 
 	if c.cacheController != nil && reservation.HasL3Cache() {
 		if err := c.cacheController.Apply(ctx, reservation); err != nil {
+			_ = c.store.ClearComponent(reservation.Owner)
 			return err
 		}
 	}
