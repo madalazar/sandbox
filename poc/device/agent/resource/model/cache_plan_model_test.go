@@ -26,6 +26,129 @@ func TestWayInterval(t *testing.T) {
 	}
 }
 
+func TestParseContiguousWayMask(t *testing.T) {
+	tests := []struct {
+		name    string
+		mask    string
+		maxWays int64
+		want    WayInterval
+		wantErr bool
+	}{
+		{
+			name:    "valid low bits 0x3",
+			mask:    "0x3",
+			maxWays: 12,
+			want:    WayInterval{Start: 0, Length: 2},
+		},
+		{
+			name:    "valid middle bits 0xF0",
+			mask:    "0xF0",
+			maxWays: 12,
+			want:    WayInterval{Start: 4, Length: 4},
+		},
+		{
+			name:    "valid high bits 0xF00",
+			mask:    "0xF00",
+			maxWays: 12,
+			want:    WayInterval{Start: 8, Length: 4},
+		},
+		{
+			name:    "non-contiguous mask 0xF00F rejected",
+			mask:    "0xF00F",
+			maxWays: 16,
+			wantErr: true,
+		},
+		{
+			name:    "non-contiguous mask 0x5 rejected",
+			mask:    "0x5",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "zero mask rejected",
+			mask:    "0x0",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "empty mask rejected",
+			mask:    "",
+			maxWays: 12,
+			wantErr: true,
+		},
+		{
+			name:    "exceeds maxWays rejected",
+			mask:    "0x1000",
+			maxWays: 12,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseContiguousWayMask(tc.mask, tc.maxWays)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseContiguousWayMask(%q, %d) error = %v, wantErr %v", tc.mask, tc.maxWays, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("ParseContiguousWayMask(%q, %d) = %+v, want %+v", tc.mask, tc.maxWays, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFreeWayIntervals(t *testing.T) {
+	tests := []struct {
+		name string
+		used []bool
+		want []WayInterval
+	}{
+		{
+			name: "empty array",
+			used: nil,
+			want: []WayInterval{},
+		},
+		{
+			name: "all free",
+			used: []bool{false, false, false, false},
+			want: []WayInterval{{Start: 0, Length: 4}},
+		},
+		{
+			name: "all used",
+			used: []bool{true, true, true, true},
+			want: []WayInterval{},
+		},
+		{
+			name: "fragmented intervals",
+			used: []bool{false, false, true, true, false, true, false, false, false},
+			want: []WayInterval{
+				{Start: 0, Length: 2},
+				{Start: 4, Length: 1},
+				{Start: 6, Length: 3},
+			},
+		},
+		{
+			name: "used at start and end",
+			used: []bool{true, false, false, true},
+			want: []WayInterval{{Start: 1, Length: 2}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FreeWayIntervals(tc.used)
+			if len(got) != len(tc.want) {
+				t.Fatalf("expected %d intervals, got %d: %+v", len(tc.want), len(got), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("at index %d: expected %+v, got %+v", i, tc.want[i], got[i])
+				}
+			}
+		})
+	}
+}
+
 func TestClassID(t *testing.T) {
 	if ClassUnset.Held() {
 		t.Fatal("expected ClassUnset not to be held")
