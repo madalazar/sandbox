@@ -3,13 +3,18 @@ package resource
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
+	"github.com/margo/sandbox/poc/device/agent/types"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
+	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 )
 
@@ -508,5 +513,292 @@ func TestResourceRollbackReleasesOnlyOnFailure(t *testing.T) {
 	nilErrRollback.ReleaseOnFailure(&noErr)
 	if len(store.cleared) != 0 {
 		t.Fatalf("nil err rollback cleared count = %d, want 0", len(store.cleared))
+	}
+}
+
+type mockIsolationController struct {
+	mock.Mock
+}
+
+func (m *mockIsolationController) Apply(ctx context.Context, r model.Reservation) error {
+	args := m.Called(ctx, r)
+	return args.Error(0)
+}
+
+func (m *mockIsolationController) Verify(ctx context.Context, r model.Reservation) error {
+	args := m.Called(ctx, r)
+	return args.Error(0)
+}
+
+func (m *mockIsolationController) Release(ctx context.Context, r model.Reservation) error {
+	args := m.Called(ctx, r)
+	return args.Error(0)
+}
+
+type staticBalloonPolicyReader struct {
+	policy *model.ParsedBalloonPolicy
+}
+
+func (r staticBalloonPolicyReader) Parsed() *model.ParsedBalloonPolicy {
+	return r.policy
+}
+
+func makeCpuAndCacheReqs(comp string, cores float32, cacheSize string) *sbi.CapacityRequirements {
+	class := sbi.DeploymentCpuRequirementClassPerformance
+	cpuType := sbi.DeploymentCpuRequirementTypeIsolated
+	level := sbi.DeploymentCacheRequirementLevelL3
+	mode := sbi.DeploymentCacheRequirementAllocationExclusive
+
+	return &sbi.CapacityRequirements{
+		Cpu: &[]sbi.DeploymentCpuRequirement{
+			{
+				Name:  &comp,
+				Cores: cores,
+				Class: &class,
+				Type:  &cpuType,
+			},
+		},
+		Cache: &[]sbi.DeploymentCacheRequirement{
+			{
+				Level:      level,
+				Allocation: mode,
+				Size:       &cacheSize,
+			},
+		},
+	}
+}
+
+func TestResourceCoordinatorConcurrentAllocateAndRelease(t *testing.T) {
+	db := database.NewDatabase(t.TempDir())
+
+	isolatedIndices := []int{1, 2, 3, 4, 5, 6, 7, 8}
+	isolatedSet := make(map[int]struct{}, len(isolatedIndices))
+	balloonTypes := make([]model.ParsedBalloonType, 0, len(isolatedIndices))
+	preferIsol := true
+
+	for _, cpu := range isolatedIndices {
+		isolatedSet[cpu] = struct{}{}
+		balloonTypes = append(balloonTypes, model.ParsedBalloonType{
+			Name:                 fmt.Sprintf("ipc%d", cpu),
+			PreferIsolCpus:       &preferIsol,
+			PreferCloseToDevices: []string{fmt.Sprintf("/sys/devices/system/cpu/cpu%d/cache/index2", cpu)},
+		})
+	}
+
+	l3Caches := []types.HostTopologyCache{
+		{
+			Id:        "0",
+			Level:     "L3",
+			Ways:      12,
+			WaySizeKB: 2048,
+			Cores:     "1-8",
+		},
+	}
+	const maxClos = 16
+
+	sharedAllocMu := &sync.Mutex{}
+
+	composeIsoMock := &mockIsolationController{}
+	composeIsoMock.On("Apply", mock.Anything, mock.AnythingOfType("model.Reservation")).Return(nil)
+	composeIsoMock.On("Release", mock.Anything, mock.AnythingOfType("model.Reservation")).Return(nil)
+
+	composeCoord, err := NewResourceCoordinatorBuilder().
+		WithStore(NewDatabaseReservationStore(db, isolatedSet)).
+		WithCpuPlanner(planner.NewTopologyCpuPlanner(isolatedIndices)).
+		WithCachePlanner(planner.NewL3CachePlanner(l3Caches)).
+		WithCacheTopology(l3Caches, maxClos).
+		WithClassNamer(controller.NewPqosClassNamer()).
+		WithCacheController(composeIsoMock).
+		WithAllocationLock(sharedAllocMu).
+		Build()
+	if err != nil {
+		t.Fatalf("failed to build compose coordinator: %v", err)
+	}
+
+	policyReader := staticBalloonPolicyReader{
+		policy: &model.ParsedBalloonPolicy{
+			Name:         "default",
+			Namespace:    "kube-system",
+			BalloonTypes: balloonTypes,
+		},
+	}
+
+	helmIsoMock := &mockIsolationController{}
+	helmIsoMock.On("Apply", mock.Anything, mock.AnythingOfType("model.Reservation")).Return(nil)
+	helmIsoMock.On("Release", mock.Anything, mock.AnythingOfType("model.Reservation")).Return(nil)
+
+	helmCoord, err := NewResourceCoordinatorBuilder().
+		WithStore(NewDatabaseReservationStore(db, isolatedSet)).
+		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, isolatedIndices)).
+		WithCachePlanner(planner.NewL3CachePlanner(l3Caches)).
+		WithCacheTopology(l3Caches, maxClos).
+		WithClassNamer(controller.NewRdtClassNamer()).
+		WithCacheController(helmIsoMock).
+		WithAllocationLock(sharedAllocMu).
+		Build()
+	if err != nil {
+		t.Fatalf("failed to build helm coordinator: %v", err)
+	}
+
+	// Phase 1: N concurrent fresh allocations (mixed Compose + Helm, 8 deployments for 8 CPUs / 8 cache ways)
+	const numConcurrent = 8
+	for i := range numConcurrent {
+		depID := fmt.Sprintf("dep-%02d", i)
+		if err := db.SetDesiredState(depID, database.AppDeploymentState{}); err != nil {
+			t.Fatalf("SetDesiredState(%s) error = %v", depID, err)
+		}
+	}
+
+	type allocResult struct {
+		owner model.OwnerRef
+		coord *ResourceCoordinator
+		plan  ResourcePlan
+		err   error
+	}
+
+	startBarrier := make(chan struct{})
+	results := make([]allocResult, numConcurrent)
+	var wg sync.WaitGroup
+
+	for i := range numConcurrent {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-startBarrier
+
+			depID := fmt.Sprintf("dep-%02d", idx)
+			compName := fmt.Sprintf("comp-%02d", idx)
+			owner := model.NewOwnerRef(depID, compName)
+
+			coord := composeCoord
+			if idx%2 == 1 {
+				coord = helmCoord
+			}
+
+			plan, allocErr := coord.Allocate(context.Background(), ResourceRequest{
+				Owner:        owner,
+				Requirements: makeCpuAndCacheReqs(compName, 1, "2048 KI"), // 1 isolated core, 1 L3 way
+			})
+			results[idx] = allocResult{owner: owner, coord: coord, plan: plan, err: allocErr}
+		}(i)
+	}
+
+	close(startBarrier)
+	wg.Wait()
+
+	// Verify 4 Compose and 4 Helm Apply calls occurred during Phase 1
+	composeIsoMock.AssertNumberOfCalls(t, "Apply", 4)
+	helmIsoMock.AssertNumberOfCalls(t, "Apply", 4)
+
+	// Verify zero overlap in CPUs, L3 cache ways, and CLOS IDs
+	seenCpus := make(map[int]model.OwnerRef)
+	seenWays := make(map[int64]model.OwnerRef)
+	seenClos := make(map[model.ClosId]model.OwnerRef)
+
+	for _, res := range results {
+		if res.err != nil {
+			t.Fatalf("Allocate(%v) unexpected error = %v", res.owner, res.err)
+		}
+		if len(res.plan.Cpu.Cpus) != 1 {
+			t.Fatalf("Allocate(%v) cpus = %v, want 1 CPU", res.owner, res.plan.Cpu.Cpus)
+		}
+		cpu := res.plan.Cpu.Cpus[0]
+		if prev, exists := seenCpus[cpu]; exists {
+			t.Fatalf("CPU %d allocated to both %v and %v", cpu, prev, res.owner)
+		}
+		seenCpus[cpu] = res.owner
+
+		cacheAssign := res.plan.Cache.L3CacheAssignment
+		if cacheAssign == nil {
+			t.Fatalf("Allocate(%v) expected L3CacheAssignment, got nil", res.owner)
+		}
+		interval, err := model.ParseContiguousWayMask(cacheAssign.Mask, 12)
+		if err != nil {
+			t.Fatalf("ParseContiguousWayMask(%q) error = %v", cacheAssign.Mask, err)
+		}
+		for way := interval.Start; way < interval.End(); way++ {
+			if prev, exists := seenWays[way]; exists {
+				t.Fatalf("L3 cache way %d allocated to both %v and %v", way, prev, res.owner)
+			}
+			seenWays[way] = res.owner
+		}
+
+		if prev, exists := seenClos[cacheAssign.Clos]; exists {
+			t.Fatalf("CLOS %q allocated to both %v and %v", cacheAssign.Clos, prev, res.owner)
+		}
+		seenClos[cacheAssign.Clos] = res.owner
+	}
+
+	// Phase 2: Concurrent Release of half the deployments while new deployments contend for freed resources
+	const numChurn = 4
+	for i := range numChurn {
+		depID := fmt.Sprintf("dep-churn-%02d", i)
+		if err := db.SetDesiredState(depID, database.AppDeploymentState{}); err != nil {
+			t.Fatalf("SetDesiredState(%s) error = %v", depID, err)
+		}
+	}
+
+	churnBarrier := make(chan struct{})
+	var churnWg sync.WaitGroup
+
+	// Release first 4 deployments concurrently (2 Compose + 2 Helm)
+	for i := range numChurn {
+		churnWg.Add(1)
+		go func(idx int) {
+			defer churnWg.Done()
+			<-churnBarrier
+			if err := results[idx].coord.Release(context.Background(), results[idx].owner); err != nil {
+				t.Errorf("Release(%v) error = %v", results[idx].owner, err)
+			}
+		}(i)
+	}
+
+	// Simultaneously try to allocate 4 new deployments
+	for i := range numChurn {
+		churnWg.Add(1)
+		go func(idx int) {
+			defer churnWg.Done()
+			<-churnBarrier
+
+			depID := fmt.Sprintf("dep-churn-%02d", idx)
+			compName := fmt.Sprintf("comp-churn-%02d", idx)
+			owner := model.NewOwnerRef(depID, compName)
+			coord := composeCoord
+			if idx%2 == 1 {
+				coord = helmCoord
+			}
+
+			_, _ = coord.Allocate(context.Background(), ResourceRequest{
+				Owner:        owner,
+				Requirements: makeCpuAndCacheReqs(compName, 1, "2048 KI"),
+			})
+		}(i)
+	}
+
+	close(churnBarrier)
+	churnWg.Wait()
+
+	// Verify 2 Compose and 2 Helm Release calls occurred during Phase 2
+	composeIsoMock.AssertNumberOfCalls(t, "Release", 2)
+	helmIsoMock.AssertNumberOfCalls(t, "Release", 2)
+
+	// Verify persisted DB snapshot still has no overlapping CPUs or cache ways
+	allocCpus, allocCaches := db.AllocatedResources()
+	if len(allocCpus) > len(isolatedIndices) {
+		t.Fatalf("persisted CPUs (%d) exceed isolated pool (%d)", len(allocCpus), len(isolatedIndices))
+	}
+
+	persistedWays := make(map[int64]string)
+	for _, c := range allocCaches {
+		interval, err := model.ParseContiguousWayMask(c.Mask, 12)
+		if err != nil {
+			t.Fatalf("invalid persisted mask %q: %v", c.Mask, err)
+		}
+		for way := interval.Start; way < interval.End(); way++ {
+			if prev, exists := persistedWays[way]; exists {
+				t.Fatalf("persisted L3 way %d owned by both %s and %s", way, prev, c.Owner)
+			}
+			persistedWays[way] = c.Owner
+		}
 	}
 }
