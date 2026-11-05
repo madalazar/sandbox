@@ -71,12 +71,7 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 		return model.CachePlan{}, err
 	}
 
-	// 4. reserve ways on ledger
-	if err := request.Ledger.ReserveWays(request.Requirements.Component, selectedCache.Id, selectedInterval); err != nil {
-		return model.CachePlan{}, err
-	}
-
-	// 5. reserve class slot on ledger
+	// 4. reserve class slot on ledger
 	clos, err := request.Ledger.ReserveClass(request.Requirements.Component)
 	if err != nil {
 		return model.CachePlan{}, err

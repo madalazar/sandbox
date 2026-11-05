@@ -49,17 +49,13 @@ func NewAllocationSnapshot(
 	}
 }
 
-// answers free-versus-taken for one deployment's reconcile pass. It
-// keeps the persisted snapshot separate from what this pass has handed out, because a
-// component may reuse the cpus and cache ways it already holds but may not take a sibling's
+// answers free-versus-taken for one component's planning pass against the
+// device-wide persisted AllocationSnapshot. Because each component's plan is
+// committed to storage before the next component is planned, the snapshot is
+// the single source of truth for both other deployments and sibling components.
 type AllocationLedger struct {
-	snapshot     AllocationSnapshot
-	deploymentId string
-
-	reservedCpus    map[int]model.ComponentRef
-	reservedWays    map[string]map[model.ComponentRef]model.WayInterval
-	reservedClasses map[model.ComponentRef]model.ClosId
-
+	snapshot      AllocationSnapshot
+	deploymentId  string
 	cacheCapacity model.CacheCapacity
 	classNamer    controller.ClassNamer
 }
@@ -71,40 +67,17 @@ func NewAllocationLedger(
 	classNamer controller.ClassNamer,
 ) *AllocationLedger {
 	return &AllocationLedger{
-		snapshot:        snapshot,
-		deploymentId:    deploymentId,
-		reservedCpus:    map[int]model.ComponentRef{},
-		reservedWays:    map[string]map[model.ComponentRef]model.WayInterval{},
-		reservedClasses: map[model.ComponentRef]model.ClosId{},
-		cacheCapacity:   cacheCapacity,
-		classNamer:      classNamer,
+		snapshot:      snapshot,
+		deploymentId:  deploymentId,
+		cacheCapacity: cacheCapacity,
+		classNamer:    classNamer,
 	}
 }
 
 // reports whether ref may take cpuIndex: unheld, or already persisted to
 // ref itself
 func (l *AllocationLedger) IsCpuAvailable(cpuIndex int, ref model.ComponentRef) bool {
-	if holder, reserved := l.reservedCpus[cpuIndex]; reserved {
-		return holder == ref
-	}
-
 	return model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(l.snapshot.CpuOwners[cpuIndex])
-}
-
-// records an exclusive claim for this pass; it reserves nothing when any
-// index is unavailable.
-func (l *AllocationLedger) ReserveCpus(ref model.ComponentRef, cpus []int) error {
-	for _, cpuIndex := range cpus {
-		if !l.IsCpuAvailable(cpuIndex, ref) {
-			return fmt.Errorf("cpu %d is not available to component %q", cpuIndex, ref)
-		}
-	}
-
-	for _, cpuIndex := range cpus {
-		l.reservedCpus[cpuIndex] = ref
-	}
-
-	return nil
 }
 
 // returns the contiguous way intervals on cacheId that ref may take: unused,
@@ -138,65 +111,17 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 		}
 	}
 
-	// mark ways from current reconcile pass
-	for holder, wayInterval := range l.reservedWays[cacheId] {
-		if holder == ref {
-			continue
-		}
-		if wayInterval.Start >= 0 && wayInterval.Length > 0 {
-			for bit := wayInterval.Start; bit < wayInterval.End() && bit < totalWays; bit++ {
-				used[bit] = true
-			}
-		}
-	}
-
 	return model.FreeWayIntervals(used)
-}
-
-// records an exclusive claim on contiguous cache ways for ref on cacheId
-func (l *AllocationLedger) ReserveWays(ref model.ComponentRef, cacheId string, wayInterval model.WayInterval) error {
-	totalWays, exists := l.cacheCapacity.Ways[cacheId]
-	if !exists {
-		return fmt.Errorf("cache id %q not found in device inventory", cacheId)
-	}
-	if wayInterval.Start < 0 || wayInterval.Length <= 0 || wayInterval.End() > totalWays {
-		return fmt.Errorf("interval [%d, %d) out of range for cache %s (total ways %d)", wayInterval.Start, wayInterval.End(), cacheId, totalWays)
-	}
-
-	// verify interval is free for ref
-	freeIntervals := l.FreeWays(cacheId, ref)
-	canFit := false
-	for _, free := range freeIntervals {
-		if wayInterval.Start >= free.Start && wayInterval.End() <= free.End() {
-			canFit = true
-			break
-		}
-	}
-	if !canFit {
-		return fmt.Errorf("interval [%d, %d) on cache %s overlaps already-claimed ways: %w", wayInterval.Start, wayInterval.End(), cacheId, ErrCapacityExhausted)
-	}
-
-	if l.reservedWays[cacheId] == nil {
-		l.reservedWays[cacheId] = make(map[model.ComponentRef]model.WayInterval)
-	}
-	l.reservedWays[cacheId][ref] = wayInterval
-
-	return nil
 }
 
 // reserves one class of service from the shared device pool and names it via ClassNamer
 func (l *AllocationLedger) ReserveClass(ref model.ComponentRef) (model.ClosId, error) {
-	// if ref already reserved a class in this pass, return it
-	if existing, found := l.reservedClasses[ref]; found {
-		return existing, nil
-	}
-
 	usable := l.cacheCapacity.ClosPool.Usable()
 	if usable <= 0 {
 		return model.ClassUnset, fmt.Errorf("no usable classes in class pool: %w", ErrCapacityExhausted)
 	}
 
-	// gather all taken classes (persisted + in-flight)
+	// gather all taken classes from persisted snapshot
 	takenMap := make(map[model.ClosId]struct{})
 
 	for _, res := range l.snapshot.Caches {
@@ -206,12 +131,6 @@ func (l *AllocationLedger) ReserveClass(ref model.ComponentRef) (model.ClosId, e
 				continue
 			}
 			takenMap[res.Clos] = struct{}{}
-		}
-	}
-
-	for holderRef, closId := range l.reservedClasses {
-		if holderRef != ref && closId.Held() {
-			takenMap[closId] = struct{}{}
 		}
 	}
 
@@ -234,21 +153,5 @@ func (l *AllocationLedger) ReserveClass(ref model.ComponentRef) (model.ClosId, e
 		return model.ClassUnset, fmt.Errorf("failed to name class for component %q: %w", ref, err)
 	}
 
-	l.reservedClasses[ref] = namedClass
 	return namedClass, nil
-}
-
-// rolls back any claims (cpus, ways, classes) made by ref in this pass.
-func (l *AllocationLedger) RollbackComponent(ref model.ComponentRef) {
-	for cpu, holder := range l.reservedCpus {
-		if holder == ref {
-			delete(l.reservedCpus, cpu)
-		}
-	}
-
-	for _, claims := range l.reservedWays {
-		delete(claims, ref)
-	}
-
-	delete(l.reservedClasses, ref)
 }

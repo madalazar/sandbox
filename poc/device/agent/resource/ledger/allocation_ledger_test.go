@@ -54,22 +54,7 @@ func TestAllocationLedgerIsCpuAvailable(t *testing.T) {
 	}
 }
 
-func TestAllocationLedgerReserveBlocksSiblingsInSamePass(t *testing.T) {
-	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil, nil), "deployment-1", model.CacheCapacity{}, nil)
-
-	if err := ledger.ReserveCpus("component-a", []int{4}); err != nil {
-		t.Fatalf("ReserveCpus() error = %v", err)
-	}
-
-	if ledger.IsCpuAvailable(4, "component-b") {
-		t.Fatal("IsCpuAvailable() = true for a cpu reserved earlier in this pass")
-	}
-	if !ledger.IsCpuAvailable(4, "component-a") {
-		t.Fatal("IsCpuAvailable() = false for the component that reserved the cpu")
-	}
-}
-
-func TestAllocationLedgerFreeWaysAndReserveWays(t *testing.T) {
+func TestAllocationLedgerFreeWays(t *testing.T) {
 	caps := model.CacheCapacity{
 		Ways: map[string]int64{
 			"0": 12,
@@ -132,27 +117,6 @@ func TestAllocationLedgerFreeWaysAndReserveWays(t *testing.T) {
 	}
 	if !reflect.DeepEqual(freeNew, wantFreeNew) {
 		t.Fatalf("FreeWays for component-new got %+v, want %+v", freeNew, wantFreeNew)
-	}
-
-	// Reserve ways in this pass for component-new
-	err := ledger.ReserveWays("component-new", "0", model.WayInterval{Start: 4, Length: 2})
-	if err != nil {
-		t.Fatalf("ReserveWays failed: %v", err)
-	}
-
-	// Sibling component-newer now only has [6, 8) free
-	freeNewer := ledger.FreeWays("0", "component-newer")
-	wantFreeNewer := []model.WayInterval{
-		{Start: 6, Length: 2},
-	}
-	if !reflect.DeepEqual(freeNewer, wantFreeNewer) {
-		t.Fatalf("FreeWays for component-newer after reserve got %+v, want %+v", freeNewer, wantFreeNewer)
-	}
-
-	// Attempting to reserve overlapping ways fails
-	err = ledger.ReserveWays("component-newer", "0", model.WayInterval{Start: 5, Length: 2})
-	if err == nil || !errors.Is(err, ErrCapacityExhausted) {
-		t.Fatalf("expected ErrCapacityExhausted on overlapping reserve, got %v", err)
 	}
 
 	// Verify persisted mask parsing: contiguous mask marks ways used, non-contiguous mask (e.g. 0xF00F) is ignored
@@ -224,49 +188,14 @@ func TestAllocationLedgerReserveClass(t *testing.T) {
 		t.Fatalf("expected comp-c to get '3', got %s", clsC)
 	}
 
-	// comp-d fails due to class exhaustion
-	_, err = ledger.ReserveClass("comp-d")
+	// Once comp-c's reservation is in the snapshot, comp-d fails due to class exhaustion
+	exhaustedSnapshot := NewAllocationSnapshot(nil, nil, append(persistedCaches, model.CacheAssignment{
+		Owner: model.NewOwnerRef("deployment-1", "comp-c"),
+		Clos:  clsC,
+	}))
+	exhaustedLedger := NewAllocationLedger(exhaustedSnapshot, "deployment-1", caps, namer)
+	_, err = exhaustedLedger.ReserveClass("comp-d")
 	if err == nil || !errors.Is(err, ErrCapacityExhausted) {
 		t.Fatalf("expected ErrCapacityExhausted for comp-d, got %v", err)
-	}
-}
-
-func TestAllocationLedgerRollbackComponent(t *testing.T) {
-	caps := model.CacheCapacity{
-		Ways:     map[string]int64{"0": 12},
-		ClosPool: model.ClosPool{NumClos: 8, Reserved: 1},
-	}
-	ledger := NewAllocationLedger(NewAllocationSnapshot(nil, nil, nil), "deployment-1", caps, &fakeClassNamer{})
-
-	if err := ledger.ReserveCpus("comp-a", []int{1, 2}); err != nil {
-		t.Fatalf("ReserveCpus failed: %v", err)
-	}
-	if err := ledger.ReserveWays("comp-a", "0", model.WayInterval{Start: 0, Length: 4}); err != nil {
-		t.Fatalf("ReserveWays failed: %v", err)
-	}
-	cls, err := ledger.ReserveClass("comp-a")
-	if err != nil || cls == model.ClassUnset {
-		t.Fatalf("ReserveClass failed: %v", err)
-	}
-
-	// Assert CPU, way, class taken
-	if ledger.IsCpuAvailable(1, "comp-b") {
-		t.Fatal("expected CPU 1 to be blocked for comp-b")
-	}
-	freeWaysBefore := ledger.FreeWays("0", "comp-b")
-	if len(freeWaysBefore) != 1 || freeWaysBefore[0].Start != 4 {
-		t.Fatalf("expected free ways [4, 12) for comp-b, got %+v", freeWaysBefore)
-	}
-
-	// Rollback comp-a
-	ledger.RollbackComponent("comp-a")
-
-	// Assert CPU is released
-	if !ledger.IsCpuAvailable(1, "comp-b") {
-		t.Fatal("expected CPU 1 to be available after rollback")
-	}
-	freeWaysAfter := ledger.FreeWays("0", "comp-b")
-	if len(freeWaysAfter) != 1 || freeWaysAfter[0].Start != 0 || freeWaysAfter[0].Length != 12 {
-		t.Fatalf("expected all 12 ways free for comp-b after rollback, got %+v", freeWaysAfter)
 	}
 }
