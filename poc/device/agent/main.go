@@ -203,10 +203,13 @@ func NewAgent(configPath string) (*Agent, error) {
 	topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
 	hostTopology, err := types.LoadHostTopology(topologyArtifactPath)
 	if err != nil {
-		log.Errorw("unable to load host topology artifact", "path", topologyArtifactPath, "error", err)
+		return nil, fmt.Errorf("unable to load host topology artifact %s: %w", topologyArtifactPath, err)
 	}
 
-	deployer := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, dynClient, hostTopology, log)
+	deployer, err := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, dynClient, hostTopology, log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize deployment manager: %w", err)
+	}
 	monitor := NewDeploymentMonitor(db, capabilities, helmClient, composeClient, log)
 	syncer := NewStateSyncer(
 		db,

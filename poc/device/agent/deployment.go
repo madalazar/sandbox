@@ -58,7 +58,7 @@ func NewDeploymentManager(
 	dynClient dynamic.Interface,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
-) *DeploymentManager {
+) (*DeploymentManager, error) {
 	allocMu := &sync.Mutex{}
 
 	composeCoord, err := resource.NewResourceCoordinatorBuilder().
@@ -71,7 +71,7 @@ func NewDeploymentManager(
 		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
-		log.Errorw("failed to build compose resource coordinator", "error", err)
+		return nil, fmt.Errorf("failed to build compose resource coordinator: %w", err)
 	}
 
 	helmCoord, err := resource.NewResourceCoordinatorBuilder().
@@ -84,7 +84,7 @@ func NewDeploymentManager(
 		WithAllocationLock(allocMu).
 		Build()
 	if err != nil {
-		log.Errorw("failed to build helm resource coordinator", "error", err)
+		return nil, fmt.Errorf("failed to build helm resource coordinator: %w", err)
 	}
 
 	return &DeploymentManager{
@@ -100,7 +100,7 @@ func NewDeploymentManager(
 		capabilities:       capabilities,
 		stopChan:           make(chan struct{}),
 		reconcileLocks:     sync.Map{},
-	}
+	}, nil
 }
 
 func (dm *DeploymentManager) Start() {

@@ -106,6 +106,8 @@ func newTestCoordinator(store ReservationStore, cpu planner.CpuPlanner, cache pl
 		WithCpuPlanner(cpu).
 		WithCachePlanner(cache).
 		WithCacheController(iso).
+		WithClassNamer(controller.NewPqosClassNamer()).
+		WithAllocationLock(&sync.Mutex{}).
 		Build()
 	if err != nil {
 		panic(err)
@@ -118,6 +120,8 @@ func TestResourceCoordinatorBuilderFailsOnNil(t *testing.T) {
 	cpu := &fakeCpuPlanner{}
 	cache := &fakeCachePlanner{}
 	iso := &fakeIsolationController{}
+	namer := controller.NewPqosClassNamer()
+	mu := &sync.Mutex{}
 
 	tests := []struct {
 		name        string
@@ -125,13 +129,17 @@ func TestResourceCoordinatorBuilderFailsOnNil(t *testing.T) {
 		cpu         planner.CpuPlanner
 		cache       planner.CachePlanner
 		iso         controller.CacheIsolationController
+		namer       controller.ClassNamer
+		mu          *sync.Mutex
 		expectError bool
 	}{
-		{"all non-nil", store, cpu, cache, iso, false},
-		{"nil store", nil, cpu, cache, iso, true},
-		{"nil cpu", store, nil, cache, iso, true},
-		{"nil cache", store, cpu, nil, iso, true},
-		{"nil iso", store, cpu, cache, nil, true},
+		{"all non-nil", store, cpu, cache, iso, namer, mu, false},
+		{"nil store", nil, cpu, cache, iso, namer, mu, true},
+		{"nil cpu", store, nil, cache, iso, namer, mu, true},
+		{"nil cache", store, cpu, nil, iso, namer, mu, true},
+		{"nil iso", store, cpu, cache, nil, namer, mu, true},
+		{"nil namer", store, cpu, cache, iso, nil, mu, true},
+		{"nil allocMu", store, cpu, cache, iso, namer, nil, true},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +149,8 @@ func TestResourceCoordinatorBuilderFailsOnNil(t *testing.T) {
 				WithCpuPlanner(tt.cpu).
 				WithCachePlanner(tt.cache).
 				WithCacheController(tt.iso).
+				WithClassNamer(tt.namer).
+				WithAllocationLock(tt.mu).
 				Build()
 			if (err != nil) != tt.expectError {
 				t.Fatalf("NewResourceCoordinator() error = %v, expectError = %v", err, tt.expectError)
@@ -153,7 +163,9 @@ func TestResourceCoordinatorBuilderFailsOnNil(t *testing.T) {
 			WithStore(nil).
 			WithCpuPlanner(nil).
 			WithCachePlanner(nil).
-			WithCacheController(nil)
+			WithCacheController(nil).
+			WithClassNamer(nil).
+			WithAllocationLock(nil)
 
 		_, err := b.Build()
 		if err == nil {

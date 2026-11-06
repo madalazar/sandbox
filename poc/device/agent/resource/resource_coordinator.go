@@ -144,11 +144,14 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	if b.cacheController == nil {
 		errs = append(errs, errors.New("cache isolation controller cannot be nil"))
 	}
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
+	if b.classNamer == nil {
+		errs = append(errs, errors.New("class namer cannot be nil"))
 	}
 	if b.allocMu == nil {
-		b.allocMu = &sync.Mutex{}
+		errs = append(errs, errors.New("allocation lock cannot be nil"))
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return &ResourceCoordinator{
 		store:           b.store,
@@ -268,7 +271,7 @@ func (c *ResourceCoordinator) commit(ctx context.Context, plan ResourcePlan) err
 		return err
 	}
 
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Apply(ctx, reservation); err != nil {
 			_ = c.store.ClearComponent(reservation.Owner)
 			return err
@@ -289,11 +292,7 @@ func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef
 		return nil
 	}
 
-	if c.cacheController != nil {
-		return c.cacheController.Verify(ctx, reservation)
-	}
-
-	return nil
+	return c.cacheController.Verify(ctx, reservation)
 }
 
 // releases everything the component holds. Releasing what was never reserved is not an
@@ -311,7 +310,7 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef)
 		return nil
 	}
 
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Release(ctx, reservation); err != nil {
 			return err
 		}
