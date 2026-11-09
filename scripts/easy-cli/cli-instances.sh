@@ -148,13 +148,12 @@ get_supported_deployments_for_device() {
     esac
   done <<< "$supported_types"
 
-  if [ ${#unknown_types[@]} -gt 0 ]; then
-    echo "❌ Device '$device_id' has unsupported supportedDeploymentTypes: ${unknown_types[*]}" >&2
-    return 1
-  fi
-
   if [ ${#normalized[@]} -eq 0 ]; then
-    echo "❌ Device '$device_id' has no usable supportedDeploymentTypes in capabilities" >&2
+    if [ ${#unknown_types[@]} -gt 0 ]; then
+      echo "❌ Device '$device_id' has no usable supportedDeploymentTypes (unsupported: ${unknown_types[*]})" >&2
+    else
+      echo "❌ Device '$device_id' has no usable supportedDeploymentTypes in capabilities" >&2
+    fi
     return 1
   fi
 
