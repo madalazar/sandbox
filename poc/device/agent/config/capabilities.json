@@ -41,19 +41,15 @@
          "cache": [
             {
                 "level": "L3",
-                "cacheId": "0",
-                "size": "115200KB",
+                "size": "1100KB",
                 "allocationTypes": [
-                    "shared",
-                    "exclusive"
+                    "shared"
                 ]
             },
             {
                 "level": "L3",
-                "cacheId": "1",
-                "size": "115200KB",
+                "size": "500KB",
                 "allocationTypes": [
-                    "shared",
                     "exclusive"
                 ]
             }
