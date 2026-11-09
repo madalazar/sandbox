@@ -778,10 +778,10 @@ components:
           description: Description of the device capabilties required for this particular application
           $ref: "#/components/schemas/DeviceConstraints"
         workload:
-          # x-go-field-tags: 'json:"workload" yaml:"workload"'
+          # x-go-field-tags: 'json:"workload,omitempty" yaml:"workload,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "workload"
-            yaml: "workload"
+            json: "workload,omitempty"
+            yaml: "workload,omitempty"
           $ref: '#/components/schemas/Workload'
           description: Workload scheduling policy and tuning for this component
       required:
@@ -1492,19 +1492,19 @@ components:
             $ref: '#/components/schemas/DeploymentCpuRequirement'
           description: CPU elements specifying the CPU requirements for the deployment.
         cache:
-          # x-go-field-tags: 'json:"cache" yaml:"cache"'
+          # x-go-field-tags: 'json:"cache,omitempty" yaml:"cache,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "cache"
-            yaml: "cache"
+            json: "cache,omitempty"
+            yaml: "cache,omitempty"
           type: array
           items:
             $ref: '#/components/schemas/DeploymentCacheRequirement'
           description: Cache requirements
         memory:
-          # x-go-field-tags: 'json:"memory" yaml:"memory"'
+          # x-go-field-tags: 'json:"memory,omitempty" yaml:"memory,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "memory"
-            yaml: "memory"
+            json: "memory,omitempty"
+            yaml: "memory,omitempty"
           $ref: '#/components/schemas/DeploymentMemoryRequirement'
           description: Required memory and optional bandwidth allocation
         storage:
@@ -1529,10 +1529,10 @@ components:
             enum: [amd64, arm64, arm, riscv64, other]
           description: The CPU architectures supported by the deployment.
         class:
-          # x-go-field-tags: 'json:"class" yaml:"class"'
+          # x-go-field-tags: 'json:"class,omitempty" yaml:"class,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "class"
-            yaml: "class"
+            json: "class,omitempty"
+            yaml: "class,omitempty"
           description: Core class required by the workload
           type: string
           enum:
@@ -1540,26 +1540,26 @@ components:
           - efficiency
           - low-power
         type:
-          # x-go-field-tags: 'json:"type" yaml:"type"'
+          # x-go-field-tags: 'json:"type,omitempty" yaml:"type,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "type"
-            yaml: "type"
+            json: "type,omitempty"
+            yaml: "type,omitempty"
           description: Whether requested cores must be isolated or can be shared
           type: string
           enum:
           - shared
           - isolated
         name:
-          # x-go-field-tags: 'json:"name" yaml:"name"'
+          # x-go-field-tags: 'json:"name,omitempty" yaml:"name,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "name"
-            yaml: "name"
+            json: "name,omitempty"
+            yaml: "name,omitempty"
           description: Name of the container this CPU requirement applies to
           type: string
     DeploymentCacheRequirement:
       type: object
       description: Cache requirement or capability
-      required: [level, allocation]
+      required: [level, allocation, size]
       properties:
         level:
           # x-go-field-tags: 'json:"level" yaml:"level"'
@@ -1625,10 +1625,10 @@ components:
           type: string
           description: Required memory size (e.g., "1Gi")
         bandwidthAllocation:
-          # x-go-field-tags: 'json:"bandwidthAllocation" yaml:"bandwidthAllocation"'
+          # x-go-field-tags: 'json:"bandwidthAllocation,omitempty" yaml:"bandwidthAllocation,omitempty"'
           x-oapi-codegen-extra-tags:
-            json: "bandwidthAllocation"
-            yaml: "bandwidthAllocation"
+            json: "bandwidthAllocation,omitempty"
+            yaml: "bandwidthAllocation,omitempty"
           $ref: '#/components/schemas/MemoryBandwidthAllocation'
           description: Optional memory bandwidth capping
     EligibilityRule:
