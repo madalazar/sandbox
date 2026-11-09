@@ -337,7 +337,7 @@ func TestIsDeviceEligible_CapacityRequirements_CPU(t *testing.T) {
 			wantEligible: true,
 		},
 		{
-			name: "multiple architectures required [amd64, arm64], device has amd64 → eligible",
+			name: "multiple architectures required [amd64, arm64], device has only amd64 → not eligible",
 			device: withCPU(
 				buildDevice("dev-107", "Stark Industries", "MK-VII", "SN-0107"),
 				4,
@@ -354,7 +354,7 @@ func TestIsDeviceEligible_CapacityRequirements_CPU(t *testing.T) {
 					},
 				},
 			}, nil),
-			wantEligible: true,
+			wantEligible: false,
 		},
 		{
 			name: "CapacityRequirements.Cpu is nil → eligible regardless of device CPU",
@@ -379,7 +379,7 @@ func TestIsDeviceEligible_CapacityRequirements_CPU(t *testing.T) {
 			wantEligible: false,
 		},
 		{
-			name: "device has multiple CPU entries summing above requirement → not eligible",
+			name: "device has multiple CPU entries summing to requirement → eligible",
 			device: withCPU(
 				withCPU(buildDevice("dev-110", "Stark Industries", "MK-X", "SN-0110"), 2, amd64),
 				2, amd64,
@@ -389,7 +389,7 @@ func TestIsDeviceEligible_CapacityRequirements_CPU(t *testing.T) {
 					{Cores: 4},
 				},
 			}, nil),
-			wantEligible: false,
+			wantEligible: true,
 		},
 	}
 

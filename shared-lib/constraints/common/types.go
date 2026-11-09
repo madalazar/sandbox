@@ -36,7 +36,8 @@ type DeviceSelectorIface interface {
 // CapacityEligibilityCheckerIface defines the contract for checking whether a device
 // meets specific hardware capacity requirements.
 type CapacityEligibilityCheckerIface interface {
-	HasEnoughCPUCores(arch *[]string, cores float32) bool
+	HasEnoughCpu(reqs []clModels.DeploymentCpuRequirement) bool
+	HasEnoughCache(cacheReqs *[]clModels.DeploymentCacheRequirement) (bool, error)
 	HasEnoughMemory(mem *clModels.DeploymentMemoryRequirement) (bool, error)
 	HasEnoughStorage(storage *string) (bool, error)
 	CheckEligibility(checks *clModels.CapacityRequirements) (bool, string, error)

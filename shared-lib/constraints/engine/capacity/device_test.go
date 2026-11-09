@@ -35,71 +35,149 @@ func makeDevice(cpus *[]deviceCPU, memory, storage *string) clModels.DeviceCapab
 	return d
 }
 
-// ── HasEnoughCPUCores ────────────────────────────────────────────────────────
+// ── HasEnoughCpu ─────────────────────────────────────────────────────────────
 
-func TestHasEnoughCPUCores(t *testing.T) {
+func TestHasEnoughCpu(t *testing.T) {
 	amd64 := clModels.DeviceCapabilitiesManifestPropertiesCpusArchitectureAmd64
 	arm64 := clModels.DeviceCapabilitiesManifestPropertiesCpusArchitectureArm64
+	isolatedDev := clModels.DeviceCapabilitiesManifestPropertiesCpusTypeIsolated
+	sharedDev := clModels.DeviceCapabilitiesManifestPropertiesCpusTypeShared
+
+	reqAmd64 := clModels.DeploymentCpuRequirementArchitecturesAmd64
+	reqArm64 := clModels.DeploymentCpuRequirementArchitecturesArm64
+	reqRiscv64 := clModels.DeploymentCpuRequirementArchitecturesRiscv64
+	reqIsolated := clModels.DeploymentCpuRequirementTypeIsolated
+	reqShared := clModels.DeploymentCpuRequirementTypeShared
 
 	cpus := &[]deviceCPU{
-		{Architecture: pointers.Ptr(amd64), Cores: 8},
-		{Architecture: pointers.Ptr(arm64), Cores: 4},
-		{Cores: 2}, // no architecture reported
+		{Architecture: pointers.Ptr(amd64), Type: pointers.Ptr(isolatedDev), Cores: 8},
+		{Architecture: pointers.Ptr(arm64), Type: pointers.Ptr(sharedDev), Cores: 4},
+		{Cores: 2}, // no architecture or type reported
 	}
 
 	tests := []struct {
-		name  string
-		arch  *[]string
-		cores float32
-		want  bool
+		name string
+		reqs []clModels.DeploymentCpuRequirement
+		want bool
 	}{
 		{
-			name:  "no arch filter, device has enough cores",
-			arch:  nil,
-			cores: 2,
-			want:  true,
+			name: "empty requirements always passes",
+			reqs: nil,
+			want: true,
 		},
 		{
-			name:  "no arch filter, required cores exceed all CPUs",
-			arch:  nil,
-			cores: 16,
-			want:  false,
+			name: "no arch filter, device has enough cores",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{Cores: 2},
+			},
+			want: true,
 		},
 		{
-			name:  "arch filter matches amd64 with enough cores",
-			arch:  &[]string{"amd64"},
-			cores: 8,
-			want:  true,
+			name: "no arch filter, required cores exceed all CPUs",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{Cores: 16},
+			},
+			want: false,
 		},
 		{
-			name:  "arch filter matches amd64 but not enough cores",
-			arch:  &[]string{"amd64"},
-			cores: 10,
-			want:  false,
+			name: "arch filter matches amd64 with enough cores",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Cores:         8,
+				},
+			},
+			want: true,
 		},
 		{
-			name:  "arch filter matches arm64 with enough cores",
-			arch:  &[]string{"arm64"},
-			cores: 4,
-			want:  true,
+			name: "arch filter matches amd64 but not enough cores",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Cores:         10,
+				},
+			},
+			want: false,
 		},
 		{
-			name:  "arch filter does not match any CPU",
-			arch:  &[]string{"riscv64"},
-			cores: 1,
-			want:  false,
+			name: "arch filter matches arm64 with enough cores",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqArm64},
+					Cores:         4,
+				},
+			},
+			want: true,
 		},
 		{
-			name:  "CPU without architecture is skipped when arch filter is set",
-			arch:  &[]string{"amd64"},
-			cores: 1,
-			want:  true, // amd64 CPU with 8 cores satisfies
+			name: "arch filter does not match any CPU",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqRiscv64},
+					Cores:         1,
+				},
+			},
+			want: false,
 		},
 		{
-			name:  "no CPUs on device",
-			arch:  nil,
-			cores: 1,
-			want:  false,
+			name: "CPU without architecture is skipped when arch filter is set",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Cores:         1,
+				},
+			},
+			want: true, // amd64 CPU with 8 cores satisfies
+		},
+		{
+			name: "type and arch filter matches isolated amd64",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Type:          pointers.Ptr(reqIsolated),
+					Cores:         4,
+				},
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Type:          pointers.Ptr(reqIsolated),
+					Cores:         4,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "multiple requirements exceed isolated amd64 capacity",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Type:          pointers.Ptr(reqIsolated),
+					Cores:         5,
+				},
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Type:          pointers.Ptr(reqIsolated),
+					Cores:         4,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "type filter mismatch fails",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{
+					Architectures: &[]clModels.DeploymentCpuRequirementArchitectures{reqAmd64},
+					Type:          pointers.Ptr(reqShared),
+					Cores:         1,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "no CPUs on device",
+			reqs: []clModels.DeploymentCpuRequirement{
+				{Cores: 1},
+			},
+			want: false,
 		},
 	}
 
@@ -111,7 +189,149 @@ func TestHasEnoughCPUCores(t *testing.T) {
 			}
 			d := makeDevice(deviceCPUs, nil, nil)
 			checker := New(d)
-			assert.Equal(t, tc.want, checker.HasEnoughCPUCores(tc.arch, tc.cores))
+			assert.Equal(t, tc.want, checker.HasEnoughCpu(tc.reqs))
+		})
+	}
+}
+
+// ── HasEnoughCache ───────────────────────────────────────────────────────────
+
+func TestHasEnoughCache(t *testing.T) {
+	type deviceCache = struct {
+		AllocationTypes []clModels.DeviceCapabilitiesManifestPropertiesCacheAllocationTypes `json:"allocationTypes"`
+		Level           clModels.DeviceCapabilitiesManifestPropertiesCacheLevel             `json:"level"`
+		Size            string                                                              `json:"size"`
+	}
+
+	devL3 := clModels.DeviceCapabilitiesManifestPropertiesCacheLevel("L3")
+	devL2 := clModels.DeviceCapabilitiesManifestPropertiesCacheLevel("L2")
+
+	reqL3 := clModels.DeploymentCacheRequirementLevelL3
+	reqL2 := clModels.DeploymentCacheRequirementLevelL2
+	reqL1d := clModels.DeploymentCacheRequirementLevelL1d
+	reqExclusive := clModels.DeploymentCacheRequirementAllocationExclusive
+	reqShared := clModels.DeploymentCacheRequirementAllocationShared
+
+	defaultCaches := &[]deviceCache{
+		{Level: devL3, Size: "8Mi"},
+		{Level: devL2, Size: "2Mi"},
+	}
+
+	tests := []struct {
+		name         string
+		deviceCaches *[]deviceCache
+		reqs         *[]clModels.DeploymentCacheRequirement
+		wantOk       bool
+		wantErr      bool
+	}{
+		{
+			name:         "nil requirements always passes",
+			deviceCaches: defaultCaches,
+			reqs:         nil,
+			wantOk:       true,
+		},
+		{
+			name:         "empty requirements always passes",
+			deviceCaches: defaultCaches,
+			reqs:         &[]clModels.DeploymentCacheRequirement{},
+			wantOk:       true,
+		},
+		{
+			name:         "no cache on device fails",
+			deviceCaches: nil,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("4Mi")},
+			},
+			wantOk: false,
+		},
+		{
+			name:         "single cache requirement satisfied",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("8Mi")},
+			},
+			wantOk: true,
+		},
+		{
+			name:         "exclusive and shared summed within level and satisfied",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("4Mi")},
+				{Level: reqL3, Allocation: reqShared, Size: pointers.Ptr("4Mi")},
+			},
+			wantOk: true,
+		},
+		{
+			name:         "exclusive and shared summed exceeds level capacity",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("5Mi")},
+				{Level: reqL3, Allocation: reqShared, Size: pointers.Ptr("4Mi")},
+			},
+			wantOk: false,
+		},
+		{
+			name:         "missing cache level on device fails",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL1d, Allocation: reqShared, Size: pointers.Ptr("32Ki")},
+			},
+			wantOk: false,
+		},
+		{
+			name: "multiple device cache entries of same level are summed",
+			deviceCaches: &[]deviceCache{
+				{Level: devL3, Size: "4Mi"},
+				{Level: devL3, Size: "4Mi"},
+			},
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("8Mi")},
+			},
+			wantOk: true,
+		},
+		{
+			name:         "invalid required cache size returns error",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("invalid")},
+			},
+			wantOk:  false,
+			wantErr: true,
+		},
+		{
+			name: "invalid device cache size returns error",
+			deviceCaches: &[]deviceCache{
+				{Level: devL3, Size: "invalid"},
+			},
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("4Mi")},
+			},
+			wantOk:  false,
+			wantErr: true,
+		},
+		{
+			name:         "multiple levels satisfied simultaneously",
+			deviceCaches: defaultCaches,
+			reqs: &[]clModels.DeploymentCacheRequirement{
+				{Level: reqL3, Allocation: reqExclusive, Size: pointers.Ptr("4Mi")},
+				{Level: reqL2, Allocation: reqShared, Size: pointers.Ptr("2Mi")},
+			},
+			wantOk: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := makeDevice(nil, nil, nil)
+			d.Properties.Cache = tc.deviceCaches
+			checker := New(d)
+			ok, err := checker.HasEnoughCache(tc.reqs)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantOk, ok)
 		})
 	}
 }
