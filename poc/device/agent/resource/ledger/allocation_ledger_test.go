@@ -124,12 +124,12 @@ func TestAllocationLedgerFreeWays(t *testing.T) {
 		{
 			Owner:   model.NewOwnerRef("deployment-2", "comp-valid-mask"),
 			CacheId: "0",
-			Mask:    "0x0F", // ways [0, 4)
+			Masks:   map[string]string{"0": "0x0F"}, // ways [0, 4)
 		},
 		{
 			Owner:   model.NewOwnerRef("deployment-3", "comp-non-contiguous"),
 			CacheId: "0",
-			Mask:    "0xF00F", // non-contiguous / invalid -> ignored
+			Masks:   map[string]string{"0": "0xF00F"}, // non-contiguous / invalid -> ignored
 		},
 	})
 	maskLedger := NewAllocationLedger(maskSnapshot, "deployment-1", caps, &fakeClassNamer{})
@@ -139,6 +139,32 @@ func TestAllocationLedgerFreeWays(t *testing.T) {
 	}
 	if !reflect.DeepEqual(freeWithMasks, wantFreeWithMasks) {
 		t.Fatalf("FreeWays with persisted masks got %+v, want %+v", freeWithMasks, wantFreeWithMasks)
+	}
+
+	// Verify multi-cache masks mark ways as used across all cache IDs for other owners
+	multiCaps := model.CacheCapacity{
+		Ways:     map[string]int64{"0": 12, "1": 12},
+		ClosPool: model.ClosPool{NumClos: 8, Reserved: 1},
+	}
+	multiCacheSnapshot := NewAllocationSnapshot(nil, nil, []model.CacheAssignment{
+		{
+			Owner:   model.NewOwnerRef("deployment-1", "component-a"),
+			CacheId: "0",
+			Masks:   map[string]string{"0": "0x1E", "1": "0x1"},
+		},
+		{
+			Owner:   model.NewOwnerRef("deployment-2", "component-b"),
+			CacheId: "0",
+			Masks:   map[string]string{"0": "0x1", "1": "0x2"},
+		},
+	})
+	multiCacheLedger := NewAllocationLedger(multiCacheSnapshot, "deployment-3", multiCaps, &fakeClassNamer{})
+	freeCache1 := multiCacheLedger.FreeWays("1", "component-c")
+	wantFreeCache1 := []model.WayInterval{
+		{Start: 2, Length: 10},
+	}
+	if !reflect.DeepEqual(freeCache1, wantFreeCache1) {
+		t.Fatalf("FreeWays on cache '1' got %+v, want %+v", freeCache1, wantFreeCache1)
 	}
 }
 

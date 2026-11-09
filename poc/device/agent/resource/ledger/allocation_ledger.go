@@ -90,20 +90,25 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 	}
 
 	used := make([]bool, totalWays)
+	requester := model.NewOwnerRef(l.deploymentId, string(ref))
 
 	// mark ways from persisted snapshot
 	for _, res := range l.snapshot.Caches {
-		if res.CacheId != cacheId || model.NewOwnerRef(l.deploymentId, string(ref)).CanTake(res.Owner) {
+		if requester.CanTake(res.Owner) {
 			continue
 		}
 
-		interval := res.Interval
+		var interval model.WayInterval
+		if res.CacheId == cacheId {
+			interval = res.Interval
+		}
 
-		if res.Mask != "" {
-			if parsedInterval, err := model.ParseContiguousWayMask(res.Mask, totalWays); err == nil {
+		if mask := res.Masks[cacheId]; mask != "" {
+			if parsedInterval, err := model.ParseContiguousWayMask(mask, totalWays); err == nil {
 				interval = parsedInterval
 			}
 		}
+
 		if interval.Start >= 0 && interval.Length > 0 {
 			for bit := interval.Start; bit < interval.End() && bit < totalWays; bit++ {
 				used[bit] = true

@@ -210,7 +210,7 @@ func TestPqosIsolationContract(t *testing.T) {
 			Cpus:  []int{2, 3},
 			L3CacheAssignment: &model.CacheAssignment{
 				CacheId: "0",
-				Mask:    "0x3",
+				Masks:   map[string]string{"0": "0x3"},
 				Clos:    "1",
 			},
 		}
@@ -319,7 +319,7 @@ func TestRdtIsolationContract(t *testing.T) {
 			Cpus:  []int{2, 3},
 			L3CacheAssignment: &model.CacheAssignment{
 				CacheId: "0",
-				Mask:    "0x3",
+				Masks:   map[string]string{"0": "0x3"},
 				Clos:    "comp-a_class",
 			},
 		}

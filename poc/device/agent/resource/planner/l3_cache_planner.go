@@ -71,7 +71,26 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 		return model.CachePlan{}, err
 	}
 
-	// 4. reserve class slot on ledger
+	selectedCacheId := strings.TrimSpace(selectedCache.Id)
+	masks := map[string]string{
+		selectedCacheId: maskHex,
+	}
+
+	// 4. when placed into an NRI balloon (Helm/k3s RDT), pick non-overlapping 1-way
+	// masks on remaining L3 caches as required by the NRI plugin
+	if request.CpuPlan.PlacementClass() != "" {
+		for _, cache := range p.caches {
+			id := strings.TrimSpace(cache.Id)
+			if id == "" || id == selectedCacheId {
+				continue
+			}
+			if masks[id], err = pickFillerMask(cache, request.Ledger, request.Requirements.Component); err != nil {
+				return model.CachePlan{}, err
+			}
+		}
+	}
+
+	// 5. reserve class slot on ledger
 	clos, err := request.Ledger.ReserveClass(request.Requirements.Component)
 	if err != nil {
 		return model.CachePlan{}, err
@@ -79,10 +98,10 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 
 	assignment := &model.CacheAssignment{
 		Level:    selectedCache.Level,
-		CacheId:  selectedCache.Id,
+		CacheId:  selectedCacheId,
 		SizeKiB:  neededWays * selectedCache.WaySizeKB,
 		Interval: selectedInterval,
-		Mask:     maskHex,
+		Masks:    masks,
 		Clos:     clos,
 	}
 
@@ -178,6 +197,14 @@ func pickSmallestFittingCacheInterval(
 	}
 
 	return bestCache, bestInterval, bestNeededWays, nil
+}
+
+func pickFillerMask(cache types.HostTopologyCache, l *ledger.AllocationLedger, ref model.ComponentRef) (string, error) {
+	_, interval, _, err := pickSmallestFittingCacheInterval([]types.HostTopologyCache{cache}, l, ref, cache.WaySizeKB)
+	if err != nil {
+		return "", fmt.Errorf("no free filler way on L3 cache %q: %w", cache.Id, err)
+	}
+	return wayMaskHexForInterval(interval.Start, interval.Length)
 }
 
 func maskWays(mask string, maxWays int64) []int64 {

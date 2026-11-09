@@ -78,27 +78,13 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("component %q has empty cache id", componentName)
 	}
 
-	selectedMask := strings.TrimSpace(alloc.Mask)
-	if selectedMask == "" {
+	if len(alloc.Masks) == 0 {
 		return fmt.Errorf("component %q has empty cache mask", componentName)
-	}
-
-	partitionMasks := make(map[string]string)
-	partitionMasks[selectedCacheId] = selectedMask
-
-	// synthesize non-exclusive filler masks for other l3 caches
-	// as it required by the nri plugin
-	for _, cache := range c.caches {
-		id := strings.TrimSpace(cache.Id)
-		if id == "" || id == selectedCacheId {
-			continue
-		}
-		partitionMasks[id] = model.RdtFillerCacheMask
 	}
 
 	namespace, policyName := c.policyTarget()
 
-	patchBytes, err := c.buildApplyPatch(partitionName, cosId, selectedCacheId, partitionMasks)
+	patchBytes, err := c.buildApplyPatch(partitionName, cosId, selectedCacheId, alloc.Masks)
 	if err != nil {
 		return fmt.Errorf("failed to marshal balloons policy patch for component %q: %w", componentName, err)
 	}

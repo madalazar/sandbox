@@ -266,7 +266,7 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 				Level:   "L3",
 				CacheId: "0",
 				SizeKiB: 4096,
-				Mask:    "0x3",
+				Masks:   map[string]string{"0": "0x3"},
 				Clos:    "1",
 			},
 		},
@@ -358,7 +358,7 @@ func TestResourceCoordinatorCommitWithCache(t *testing.T) {
 				Level:   "L3",
 				CacheId: "0",
 				SizeKiB: 2048,
-				Mask:    "0x1",
+				Masks:   map[string]string{"0": "0x1"},
 				Clos:    "2",
 			},
 		},
@@ -388,7 +388,7 @@ func TestResourceCoordinatorActivate(t *testing.T) {
 		Owner: owner,
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -437,7 +437,7 @@ func TestResourceCoordinatorReleaseClearsReservation(t *testing.T) {
 		Cpus:  []int{2},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -462,7 +462,7 @@ func TestResourceCoordinatorReleaseRetainsReservationWhenIsolationFails(t *testi
 		Owner: owner,
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -724,9 +724,10 @@ func TestResourceCoordinatorConcurrentAllocateAndRelease(t *testing.T) {
 		if cacheAssign == nil {
 			t.Fatalf("Allocate(%v) expected L3CacheAssignment, got nil", res.owner)
 		}
-		interval, err := model.ParseContiguousWayMask(cacheAssign.Mask, 12)
+		mask := cacheAssign.Masks[cacheAssign.CacheId]
+		interval, err := model.ParseContiguousWayMask(mask, 12)
 		if err != nil {
-			t.Fatalf("ParseContiguousWayMask(%q) error = %v", cacheAssign.Mask, err)
+			t.Fatalf("ParseContiguousWayMask(%q) error = %v", mask, err)
 		}
 		for way := interval.Start; way < interval.End(); way++ {
 			if prev, exists := seenWays[way]; exists {
@@ -802,9 +803,10 @@ func TestResourceCoordinatorConcurrentAllocateAndRelease(t *testing.T) {
 
 	persistedWays := make(map[int64]string)
 	for _, c := range allocCaches {
-		interval, err := model.ParseContiguousWayMask(c.Mask, 12)
+		mask := c.Masks[c.CacheId]
+		interval, err := model.ParseContiguousWayMask(mask, 12)
 		if err != nil {
-			t.Fatalf("invalid persisted mask %q: %v", c.Mask, err)
+			t.Fatalf("invalid persisted mask %q: %v", mask, err)
 		}
 		for way := interval.Start; way < interval.End(); way++ {
 			if prev, exists := persistedWays[way]; exists {

@@ -299,8 +299,8 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 		if plan.L3CacheAssignment.Interval.Start != 0 || plan.L3CacheAssignment.Interval.Length != 2 {
 			t.Fatalf("expected interval [0, 2), got %+v", plan.L3CacheAssignment.Interval)
 		}
-		if plan.L3CacheAssignment.Mask != "0x3" {
-			t.Fatalf("expected mask 0x3, got %s", plan.L3CacheAssignment.Mask)
+		if plan.L3CacheAssignment.Masks["0"] != "0x3" {
+			t.Fatalf("expected mask 0x3, got %s", plan.L3CacheAssignment.Masks["0"])
 		}
 	})
 
@@ -332,6 +332,98 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 		})
 		if err == nil || !errors.Is(err, ledger.ErrCapacityExhausted) {
 			t.Fatalf("expected ErrCapacityExhausted, got %v", err)
+		}
+	})
+
+	t.Run("rdt multi-cache masks do not overlap across deployments", func(t *testing.T) {
+		multiCaches := []types.HostTopologyCache{
+			{Id: "0", Level: "L3", Cores: "0-3", Ways: 12, WaySizeKB: 2304},
+			{Id: "1", Level: "L3", Cores: "4-7", Ways: 12, WaySizeKB: 2304},
+		}
+		multiCaps := model.CacheCapacity{
+			Ways:     map[string]int64{"0": 12, "1": 12},
+			ClosPool: model.ClosPool{NumClos: 8, Reserved: 1},
+		}
+		multiPlanner := NewL3CachePlanner(multiCaches)
+
+		// Component 2 requests 578 KiB on L3 "0" -> 1 way (0x1), filler on L3 "1" -> 0x1
+		l1 := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "e32acdad", multiCaps, &testClassNamer{name: "part2_e32acdad_class"})
+		plan2, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "part2",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    578,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "part2",
+				Cpus:      []int{1},
+				Placement: model.CpuPlacement{Class: "ipc1"},
+			},
+			Ledger: l1,
+		})
+		if err != nil {
+			t.Fatalf("PlanCache for part2 failed: %v", err)
+		}
+		if plan2.L3CacheAssignment.Masks["0"] != "0x1" || plan2.L3CacheAssignment.Masks["1"] != "0x1" {
+			t.Fatalf("unexpected part2 masks: %v", plan2.L3CacheAssignment.Masks)
+		}
+
+		// Persist part2 and plan Component 1 requesting 9216 KiB on L3 "0" -> 4 ways (0x1E), filler on L3 "1" -> 0x2
+		persistedPart2 := *plan2.L3CacheAssignment
+		persistedPart2.Owner = model.NewOwnerRef("e32acdad", "part2")
+		snap2 := ledger.NewAllocationSnapshot(nil, nil, []model.CacheAssignment{persistedPart2})
+		l2 := ledger.NewAllocationLedger(snap2, "99b59365", multiCaps, &testClassNamer{name: "part1_99b59365_class"})
+
+		plan1, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "part1",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    9216,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "part1",
+				Cpus:      []int{2},
+				Placement: model.CpuPlacement{Class: "ipc2"},
+			},
+			Ledger: l2,
+		})
+		if err != nil {
+			t.Fatalf("PlanCache for part1 failed: %v", err)
+		}
+		if plan1.L3CacheAssignment.Masks["0"] != "0x1E" {
+			t.Fatalf("expected part1 mask 0x1E on cache 0, got %s", plan1.L3CacheAssignment.Masks["0"])
+		}
+		if plan1.L3CacheAssignment.Masks["1"] != "0x2" {
+			t.Fatalf("expected part1 non-overlapping filler mask 0x2 on cache 1, got %s", plan1.L3CacheAssignment.Masks["1"])
+		}
+
+		// Compose (no Placement.Class) on multi-cache only populates 1 entry in Masks
+		composePlan, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "compose-comp",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    2304,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "compose-comp",
+				Cpus:      []int{3},
+			},
+			Ledger: l2,
+		})
+		if err != nil {
+			t.Fatalf("PlanCache for compose-comp failed: %v", err)
+		}
+		if len(composePlan.L3CacheAssignment.Masks) != 1 || composePlan.L3CacheAssignment.Masks["0"] != "0x2" {
+			t.Fatalf("expected single mask entry 0x2 on cache 0 for compose, got %v", composePlan.L3CacheAssignment.Masks)
 		}
 	})
 }

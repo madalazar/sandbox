@@ -28,13 +28,18 @@ type AppDeploymentState struct {
 }
 
 type CacheAllocation struct {
-	Owner         string `json:"owner,omitempty"`
-	ComponentName string `json:"componentName"`
-	Level         string `json:"level"`
-	CacheId       string `json:"cacheId"`
-	SizeKB        int64  `json:"sizeKb"`
-	Mask          string `json:"mask"`
-	Clos          string `json:"clos,omitempty"`
+	Owner         string            `json:"owner,omitempty"`
+	ComponentName string            `json:"componentName"`
+	Level         string            `json:"level"`
+	CacheId       string            `json:"cacheId"`
+	SizeKB        int64             `json:"sizeKb"`
+	Masks         map[string]string `json:"masks"`
+	Clos          string            `json:"clos,omitempty"`
+}
+
+func (c CacheAllocation) clone() CacheAllocation {
+	c.Masks = maps.Clone(c.Masks)
+	return c
 }
 
 // this is one deployment's complete holdings, keyed by component name
@@ -55,7 +60,9 @@ func (a Allocations) clone() Allocations {
 		cloned.Cpus[component] = copied
 	}
 
-	maps.Copy(cloned.Caches, a.Caches)
+	for component, cache := range a.Caches {
+		cloned.Caches[component] = cache.clone()
+	}
 
 	return cloned
 }
@@ -617,7 +624,7 @@ func (db *Database) SetComponentAllocations(
 		record.Allocations.Caches = make(map[string]CacheAllocation)
 	}
 	if cache, hasCache := allocations.Caches[componentName]; hasCache {
-		record.Allocations.Caches[componentName] = cache
+		record.Allocations.Caches[componentName] = cache.clone()
 	} else {
 		delete(record.Allocations.Caches, componentName)
 	}
@@ -690,7 +697,7 @@ func (db *Database) AllocatedResources() (map[int]string, []CacheAllocation) {
 			}
 		}
 		for component, assignment := range deployment.Allocations.Caches {
-			alloc := assignment
+			alloc := assignment.clone()
 			alloc.Owner = formatOwner(deploymentID, component)
 			allocatedCaches = append(allocatedCaches, alloc)
 		}
