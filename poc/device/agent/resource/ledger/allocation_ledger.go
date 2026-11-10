@@ -98,21 +98,18 @@ func (l *AllocationLedger) FreeWays(cacheId string, ref model.ComponentRef) []mo
 			continue
 		}
 
-		var interval model.WayInterval
-		if res.CacheId == cacheId {
-			interval = res.Interval
+		mask := res.Masks[cacheId]
+		if mask == "" {
+			continue
 		}
 
-		if mask := res.Masks[cacheId]; mask != "" {
-			if parsedInterval, err := model.ParseContiguousWayMask(mask, totalWays); err == nil {
-				interval = parsedInterval
-			}
+		interval, err := model.ParseContiguousWayMask(mask, totalWays)
+		if err != nil {
+			continue
 		}
 
-		if interval.Start >= 0 && interval.Length > 0 {
-			for bit := interval.Start; bit < interval.End() && bit < totalWays; bit++ {
-				used[bit] = true
-			}
+		for bit := interval.Start; bit < interval.End() && bit < totalWays; bit++ {
+			used[bit] = true
 		}
 	}
 

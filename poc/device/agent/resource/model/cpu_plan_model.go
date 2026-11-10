@@ -74,6 +74,61 @@ func FormatCpuSet(cpus []int) string {
 	return strings.Join(compact, ",")
 }
 
+// parses a Linux cpuset list (e.g. "0-3,8-11") into sorted unique CPU indices
+func ParseCpuSet(raw string) ([]int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	seen := make(map[int]struct{}, len(parts))
+	out := make([]int, 0, len(parts))
+
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" {
+			continue
+		}
+
+		var start, end int
+		if startStr, endStr, hasRange := strings.Cut(token, "-"); hasRange {
+			var err error
+			start, err = strconv.Atoi(strings.TrimSpace(startStr))
+			if err != nil {
+				return nil, fmt.Errorf("invalid cpu core range start %q: %w", token, err)
+			}
+			end, err = strconv.Atoi(strings.TrimSpace(endStr))
+			if err != nil {
+				return nil, fmt.Errorf("invalid cpu core range end %q: %w", token, err)
+			}
+			if start < 0 || end < 0 || start > end {
+				return nil, fmt.Errorf("invalid cpu core range %q", token)
+			}
+		} else {
+			var err error
+			start, err = strconv.Atoi(token)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cpu core index %q: %w", token, err)
+			}
+			if start < 0 {
+				return nil, fmt.Errorf("invalid negative cpu core index %d", start)
+			}
+			end = start
+		}
+
+		for idx := start; idx <= end; idx++ {
+			if _, exists := seen[idx]; !exists {
+				seen[idx] = struct{}{}
+				out = append(out, idx)
+			}
+		}
+	}
+
+	sort.Ints(out)
+	return out, nil
+}
+
 // returns the plan's placement class, empty when the runtime pins cpus
 // directly. One component deploys one unit, so at most one class is in play
 func (p CpuPlan) PlacementClass() string {
