@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// maximum number of cache ways supported when encoding or decoding bitmasks
+const MaxCacheWays int64 = 64
+
 // represents a contiguous range of cache ways
 type WayInterval struct {
 	Start  int64
@@ -23,13 +26,29 @@ func (w WayInterval) Overlaps(other WayInterval) bool {
 	return w.Start < other.End() && other.Start < w.End()
 }
 
+// renders the interval as a hex bitmask within MaxCacheWays (e.g. Start=4, Length=4 -> "0xF0")
+func (w WayInterval) MaskHex() (string, error) {
+	if w.Start < 0 {
+		return "", fmt.Errorf("interval start must be >= 0")
+	}
+	if w.Length <= 0 {
+		return "", fmt.Errorf("interval length must be > 0")
+	}
+	if w.Start >= MaxCacheWays || w.Length > MaxCacheWays-w.Start {
+		return "", fmt.Errorf("interval [start=%d, length=%d] exceeds max ways %d", w.Start, w.Length, MaxCacheWays)
+	}
+
+	mask := (^uint64(0) >> (MaxCacheWays - w.Length)) << w.Start
+	return fmt.Sprintf("0x%X", mask), nil
+}
+
 // parses a hex or decimal bitmask string into a contiguous WayInterval
 // within [0, maxWays)
 // returns an error if the mask is invalid, empty/zero, out of bounds,
 // or has non-contiguous set bits (e.g. 0xF00F)
 func ParseContiguousWayMask(mask string, maxWays int64) (WayInterval, error) {
-	if maxWays <= 0 || maxWays > 64 {
-		return WayInterval{}, fmt.Errorf("maxWays must be in (0, 64], got %d", maxWays)
+	if maxWays <= 0 || maxWays > MaxCacheWays {
+		return WayInterval{}, fmt.Errorf("maxWays must be in (0, %d], got %d", MaxCacheWays, maxWays)
 	}
 
 	trimmed := strings.TrimSpace(mask)
@@ -123,13 +142,12 @@ type CacheCapacity struct {
 
 // represents a planned cache assignment for one component on one cache domain
 type CacheAssignment struct {
-	Owner    OwnerRef
-	Level    string
-	CacheId  string
-	SizeKiB  int64
-	Interval WayInterval
-	Masks    map[string]string
-	Clos     ClosId
+	Owner   OwnerRef
+	Level   string
+	CacheId string
+	SizeKiB int64
+	Masks   map[string]string
+	Clos    ClosId
 }
 
 // represents what cache planning decided for one component

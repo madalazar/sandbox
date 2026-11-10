@@ -64,28 +64,28 @@ func TestAllocationLedgerFreeWays(t *testing.T) {
 
 	persistedCaches := []model.CacheAssignment{
 		{
-			Owner:    model.NewOwnerRef("deployment-1", "component-a"),
-			Level:    "L3",
-			CacheId:  "0",
-			SizeKiB:  2048,
-			Interval: model.WayInterval{Start: 0, Length: 2},
-			Clos:     model.ClosId("1"),
+			Owner:   model.NewOwnerRef("deployment-1", "component-a"),
+			Level:   "L3",
+			CacheId: "0",
+			SizeKiB: 2048,
+			Masks:   map[string]string{"0": "0x3"}, // ways [0, 2)
+			Clos:    model.ClosId("1"),
 		},
 		{
-			Owner:    model.NewOwnerRef("deployment-1", "component-b"),
-			Level:    "L3",
-			CacheId:  "0",
-			SizeKiB:  2048,
-			Interval: model.WayInterval{Start: 2, Length: 2},
-			Clos:     model.ClosId("2"),
+			Owner:   model.NewOwnerRef("deployment-1", "component-b"),
+			Level:   "L3",
+			CacheId: "0",
+			SizeKiB: 2048,
+			Masks:   map[string]string{"0": "0xc"}, // ways [2, 4)
+			Clos:    model.ClosId("2"),
 		},
 		{
-			Owner:    model.NewOwnerRef("deployment-2", "component-c"),
-			Level:    "L3",
-			CacheId:  "0",
-			SizeKiB:  2048,
-			Interval: model.WayInterval{Start: 8, Length: 4},
-			Clos:     model.ClosId("3"),
+			Owner:   model.NewOwnerRef("deployment-2", "component-c"),
+			Level:   "L3",
+			CacheId: "0",
+			SizeKiB: 2048,
+			Masks:   map[string]string{"0": "0xf00"}, // ways [8, 12)
+			Clos:    model.ClosId("3"),
 		},
 	}
 
