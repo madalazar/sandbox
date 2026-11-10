@@ -229,4 +229,19 @@ func TestPqosCacheControllerRelease(t *testing.T) {
 			t.Fatal("expected error when cache ID not found in topology, got nil")
 		}
 	})
+
+	t.Run("invalid cache ways in topology", func(t *testing.T) {
+		runner := &fakeRunner{}
+		badCaches := []types.HostTopologyCache{
+			{Id: "0", Level: "L3", Ways: 0, WaySizeKB: 1024},
+		}
+		ctrl := NewPqosCacheController(runner, badCaches, 8)
+
+		if err := ctrl.Release(context.Background(), res); err == nil {
+			t.Fatal("expected error when cache Ways is 0, got nil")
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected 0 runner calls on error, got %d", len(runner.calls))
+		}
+	})
 }

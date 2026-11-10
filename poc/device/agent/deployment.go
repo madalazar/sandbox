@@ -533,12 +533,8 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, err := dm.composeClient.DownloadCompose(
-			ctx,
-			composeComp.Properties.PackageLocation,
-			composeComp.Properties.KeyLocation,
-			projectName,
-		)
+		composeFilename, err := dm.composeClient.DownloadCompose(ctx, composeComp.Properties.PackageLocation,
+			composeComp.Properties.KeyLocation, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
