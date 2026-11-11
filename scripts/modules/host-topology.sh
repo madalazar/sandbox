@@ -121,6 +121,13 @@ _write_host_topology_json() {
 # Export a deterministic JSON artifact from existing CPU and cache topology TSV files.
 generate_topology_artefact() {
 	local output_path="${1:-$HOST_TOPOLOGY_FILE}"
+
+	if ! is_rt_enabled; then
+		echo "[INFO] RT feature is disabled; skipping host topology artifact generation."
+		rm -f "$output_path"
+		return 0
+	fi
+
 	local cpu_tsv_file="${2:-$CPU_TOPOLOGY_CACHE_FILE}"
 	local cache_tsv_file="${3:-$CACHE_TOPOLOGY_CACHE_FILE}"
 	local max_clos

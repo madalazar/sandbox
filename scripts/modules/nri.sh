@@ -66,6 +66,11 @@ _nri_build_rdt_control_yaml() {
 #   topology_cache_file: topology cache file (default: $CPU_TOPOLOGY_CACHE_FILE)
 # ---------------------------------------------------------------------------
 generate_default_nri_policy() {
+  if ! is_rt_enabled; then
+    echo "[INFO] RT feature is disabled in config.yaml; skipping NRI balloon policy generation."
+    return 0
+  fi
+
   local available_cpus_range="${1:-}"
   local reserved_cpus_range="${2:-}"
   local output_file="${3:-$HOME/sandbox/balloon-policy.yaml}"
@@ -209,6 +214,11 @@ HEADER
 #   balloon policy is generated automatically from host CPU topology.
 # ---------------------------------------------------------------------------
 install_balloon_nri_plugin() {
+  if ! is_rt_enabled; then
+    echo "[INFO] RT feature is disabled in config.yaml; skipping NRI Balloon Resource Policy plugin installation."
+    return 0
+  fi
+
   local values_file="${1:-$HOME/sandbox/balloon-policy.yaml}"
 
   if [[ ! -f "$values_file" ]]; then
@@ -243,6 +253,11 @@ install_balloon_nri_plugin() {
 # update_balloon_nri_plugin <values_file>
 # ---------------------------------------------------------------------------
 update_balloon_nri_plugin() {
+  if ! is_rt_enabled; then
+    echo "[INFO] RT feature is disabled in config.yaml; skipping NRI Balloon Resource Policy plugin upgrade."
+    return 0
+  fi
+
   local values_file="${1}"
   if [[ -z "$values_file" ]]; then
     echo "[ERROR] Values file is required."

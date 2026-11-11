@@ -15,7 +15,32 @@
 [[ -n "${_CPU_TOPOLOGY_LOADED:-}" ]] && return 0
 readonly _CPU_TOPOLOGY_LOADED=1
 
+SCRIPT_DIR_CPU="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPU_TOPOLOGY_CACHE_FILE="${CPU_TOPOLOGY_CACHE_FILE:-$HOME/sandbox/cpu-topology.tsv}"
+AGENT_CONFIG_FILE="${AGENT_CONFIG_FILE:-$HOME/sandbox/poc/device/agent/config/config.yaml}"
+
+# Return 0 if rt.enabled is true in config.yaml (or RT_ENABLED env var), 1 otherwise.
+is_rt_enabled() {
+  if [[ -n "${RT_ENABLED:-}" ]]; then
+    [[ "${RT_ENABLED,,}" == "true" || "${RT_ENABLED}" == "1" ]]
+    return $?
+  fi
+
+  local cfg_file="${1:-$AGENT_CONFIG_FILE}"
+  if [[ ! -r "$cfg_file" ]]; then
+    local repo_cfg="${SCRIPT_DIR_CPU}/../../poc/device/agent/config/config.yaml"
+    if [[ -r "$repo_cfg" ]]; then
+      cfg_file="$repo_cfg"
+    else
+      return 1
+    fi
+  fi
+
+  command -v yq >/dev/null 2>&1 || return 1
+  local rt_val
+  rt_val="$(yq eval -r '.rt.enabled == true' "$cfg_file" 2>/dev/null || echo "false")"
+  [[ "$rt_val" == "true" ]]
+}
 
 # ---------------------------------------------------------------------------
 # 1. Pure helpers
@@ -283,14 +308,17 @@ build_cpu_topology() {
 
   # ---- derive isolated CPU set (union of kernel + sysfs sources) --------
   local isolated_range_sysfs=""
-  [[ -r /sys/devices/system/cpu/isolated ]] && \
-    isolated_range_sysfs="$(tr -d '[:space:]' </sys/devices/system/cpu/isolated 2>/dev/null || true)"
   local isolated_range_cmdline=""
-  isolated_range_cmdline="$(get_isolcpus_range_from_proc_cmdline)"
-
   declare -A isolated_cpus=()
-  mark_cpu_set_from_range_list "$isolated_range_sysfs" isolated_cpus
-  mark_cpu_set_from_range_list "$isolated_range_cmdline" isolated_cpus
+
+  if is_rt_enabled; then
+    [[ -r /sys/devices/system/cpu/isolated ]] && \
+      isolated_range_sysfs="$(tr -d '[:space:]' </sys/devices/system/cpu/isolated 2>/dev/null || true)"
+    isolated_range_cmdline="$(get_isolcpus_range_from_proc_cmdline)"
+
+    mark_cpu_set_from_range_list "$isolated_range_sysfs" isolated_cpus
+    mark_cpu_set_from_range_list "$isolated_range_cmdline" isolated_cpus
+  fi
 
   # ---- derive cgroup-visible CPU set -------------------------------------
   local cgroup_cpuset_range=""

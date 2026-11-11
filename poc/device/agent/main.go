@@ -88,16 +88,18 @@ func NewAgent(configPath string) (*Agent, error) {
 			if err != nil {
 				return nil, err
 			}
-			if dynClient == nil {
-				dynClient, err = workloads.NewDynamicClient(runtime.Kubernetes.KubeconfigPath)
-				if err != nil {
-					return nil, fmt.Errorf("failed to initialize kubernetes dynamic client: %w", err)
+			if cfg.RT.Enabled {
+				if dynClient == nil {
+					dynClient, err = workloads.NewDynamicClient(runtime.Kubernetes.KubeconfigPath)
+					if err != nil {
+						return nil, fmt.Errorf("failed to initialize kubernetes dynamic client: %w", err)
+					}
 				}
-			}
-			if balloonPolicyInformer == nil {
-				balloonPolicyInformer, err = resource.NewBalloonPolicyInformer(dynClient, log)
-				if err != nil {
-					return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
+				if balloonPolicyInformer == nil {
+					balloonPolicyInformer, err = resource.NewBalloonPolicyInformer(dynClient, log)
+					if err != nil {
+						return nil, fmt.Errorf("failed to initialize balloon policy informer: %w", err)
+					}
 				}
 			}
 			opts = append(opts, WithEnableHelmDeployment())
@@ -200,13 +202,16 @@ func NewAgent(configPath string) (*Agent, error) {
 		"supportedRuntimes", deviceSettings.supportedRuntimes,
 	)
 
-	topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
-	hostTopology, err := types.LoadHostTopology(topologyArtifactPath)
-	if err != nil {
-		return nil, fmt.Errorf("unable to load host topology artifact %s: %w", topologyArtifactPath, err)
+	var hostTopology types.HostTopology
+	if cfg.RT.Enabled {
+		topologyArtifactPath := types.ResolveHostTopologyArtifactPath()
+		hostTopology, err = types.LoadHostTopology(topologyArtifactPath)
+		if err != nil {
+			return nil, fmt.Errorf("unable to load host topology artifact %s: %w", topologyArtifactPath, err)
+		}
 	}
 
-	deployer, err := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, dynClient, hostTopology, log)
+	deployer, err := NewDeploymentManager(db, capabilities, helmClient, composeClient, balloonPolicyInformer, dynClient, hostTopology, cfg.RT.Enabled, log)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize deployment manager: %w", err)
 	}
@@ -314,7 +319,7 @@ func (a *Agent) Start() error {
 		time.Sleep(5 * time.Second)
 	}
 
-	if a.balloonPolicyInformer != nil {
+	if a.config.RT.Enabled && a.balloonPolicyInformer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -343,7 +348,7 @@ func (a *Agent) Stop() error {
 	a.log.Info("Stopping Workload Fleet Management Client")
 	a.tbCacher.Stop()
 
-	if a.balloonPolicyInformer != nil {
+	if a.config.RT.Enabled && a.balloonPolicyInformer != nil {
 		a.balloonPolicyInformer.Stop()
 	}
 

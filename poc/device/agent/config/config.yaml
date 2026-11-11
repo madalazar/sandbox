@@ -50,3 +50,7 @@ runtimes:
 # Path to the capabilities file (required).
 capabilities:
   readFromFile: ./config/capabilities.json
+
+rt:
+  enabled: false
+

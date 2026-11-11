@@ -265,7 +265,11 @@ install_prerequisites() {
   install_docker_and_compose
   clone_dev_repo
   validate_and_copy_certs
-  ensure_intel_rdt_ready
+  if is_rt_enabled; then
+    ensure_intel_rdt_ready
+  else
+    echo "[INFO] RT feature is disabled; skipping Intel RDT readiness check"
+  fi
   # Only install k3s for k3s device type
   if [ "$DEVICE_TYPE" = "k3s" ]; then
     setup_k3s

@@ -65,7 +65,12 @@ prepare_host_resources() {
   build_cpu_topology "$CPU_TOPOLOGY_CACHE_FILE" || return 1
   build_cache_topology "$CACHE_TOPOLOGY_CACHE_FILE" || return 1
   update_capabilities_resources_from_host || return 1
-  generate_topology_artefact || return 1
+  if is_rt_enabled; then
+    generate_topology_artefact || return 1
+  else
+    echo "[INFO] RT feature is disabled; skipping host-topology.json generation"
+    rm -f "$HOST_TOPOLOGY_FILE"
+  fi
 }
 
 enable_kubernetes_runtime() {
@@ -194,7 +199,11 @@ start_device_agent_docker_service() {
   prepare_host_resources || return 1
 
   cp ../poc/device/agent/config/capabilities.json ./config/
-  cp ../poc/device/agent/config/host-topology.json ./config/
+  if is_rt_enabled && [[ -f ../poc/device/agent/config/host-topology.json ]]; then
+    cp ../poc/device/agent/config/host-topology.json ./config/
+  else
+    rm -f ./config/host-topology.json
+  fi
   cp ../poc/device/agent/config/config.yaml ./config/
 
 
@@ -292,7 +301,11 @@ build_start_device_agent_k3s_service() {
 
     echo "Copying configuration files..."
     mkdir -p config
+    rm -f ./config/host-topology.json
     cp -r ../poc/device/agent/config/* ./config
+    if ! is_rt_enabled; then
+      rm -f ./config/host-topology.json
+    fi
     set_capabilities_deployment_type helm
     set_authz_path_for_pod
 

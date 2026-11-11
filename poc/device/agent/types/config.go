@@ -46,6 +46,10 @@ const (
 	DeviceOnboardStateOnboardFailed     DeviceOnboardState = "FAILED"
 )
 
+type RTConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 // Config struct
 type Config struct {
 	Logging      LoggingConfig               `yaml:"logging"      validate:"required"`
@@ -55,6 +59,7 @@ type Config struct {
 	StateSeeking StateSeekingConfig          `yaml:"stateSeeking" validate:"required"`
 	Capabilities CapabilitiesDiscoveryConfig `yaml:"capabilities" validate:"required"`
 	Runtimes     []RuntimeInfo               `yaml:"runtimes"     validate:"required"`
+	RT           RTConfig                    `yaml:"rt"`
 }
 
 type DatabaseConfig struct {

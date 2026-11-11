@@ -45,6 +45,7 @@ type DeploymentManager struct {
 	log                *zap.SugaredLogger
 	stopChan           chan struct{}
 	hostTopology       types.HostTopology
+	rtEnabled          bool
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
 }
@@ -57,34 +58,41 @@ func NewDeploymentManager(
 	policyReader model.BalloonPolicyReader,
 	dynClient dynamic.Interface,
 	hostTopology types.HostTopology,
+	rtEnabled bool,
 	log *zap.SugaredLogger,
 ) (*DeploymentManager, error) {
-	allocMu := &sync.Mutex{}
+	var composeCoord *resource.ResourceCoordinator
+	var helmCoord *resource.ResourceCoordinator
 
-	composeCoord, err := resource.NewResourceCoordinatorBuilder().
-		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
-		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
-		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
-		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
-		WithClassNamer(controller.NewPqosClassNamer()).
-		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
-		WithAllocationLock(allocMu).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build compose resource coordinator: %w", err)
-	}
+	if rtEnabled {
+		allocMu := &sync.Mutex{}
 
-	helmCoord, err := resource.NewResourceCoordinatorBuilder().
-		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
-		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
-		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
-		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
-		WithClassNamer(controller.NewRdtClassNamer()).
-		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
-		WithAllocationLock(allocMu).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build helm resource coordinator: %w", err)
+		var err error
+		composeCoord, err = resource.NewResourceCoordinatorBuilder().
+			WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
+			WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
+			WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+			WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+			WithClassNamer(controller.NewPqosClassNamer()).
+			WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+			WithAllocationLock(allocMu).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build compose resource coordinator: %w", err)
+		}
+
+		helmCoord, err = resource.NewResourceCoordinatorBuilder().
+			WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
+			WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
+			WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+			WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+			WithClassNamer(controller.NewRdtClassNamer()).
+			WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
+			WithAllocationLock(allocMu).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to build helm resource coordinator: %w", err)
+		}
 	}
 
 	return &DeploymentManager{
@@ -96,6 +104,7 @@ func NewDeploymentManager(
 		helmCoordinator:    helmCoord,
 		dynClient:          dynClient,
 		hostTopology:       hostTopology,
+		rtEnabled:          rtEnabled,
 		log:                log,
 		capabilities:       capabilities,
 		stopChan:           make(chan struct{}),
@@ -421,12 +430,21 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator, err := dm.HelmResourceCoordinator()
-	if err != nil {
-		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	var coordinator *resource.ResourceCoordinator
+	var helmConfigurator *configurator.HelmConfigurator
+	if dm.rtEnabled {
+		coordinator, err = dm.HelmResourceCoordinator()
+		if err != nil {
+			return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+		}
+		helmConfigurator = configurator.NewHelmConfigurator()
+	} else {
+		for _, component := range appDeployment.Spec.DeploymentProfile.Components {
+			if err = dm.rejectRTRequirementsWhenDisabled(component); err != nil {
+				return err
+			}
+		}
 	}
-
-	helmConfigurator := configurator.NewHelmConfigurator()
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		if err != nil {
@@ -454,33 +472,35 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		values["fullnameOverride"] = releaseName
 
-		var plan resource.ResourcePlan
-		plan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
-			Owner:        owner,
-			Requirements: dm.extractComponentCapacityRequirements(component),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
-		}
-
 		var rollback *resource.ResourceRollback
-		if plan.HasCpu() {
-			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
-			defer rollback.ReleaseOnFailure(&err)
-
-			if err = coordinator.Activate(ctx, owner); err != nil {
-				return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
+		if dm.rtEnabled {
+			var plan resource.ResourcePlan
+			plan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
+				Owner:        owner,
+				Requirements: dm.extractComponentCapacityRequirements(component),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
 			}
-		}
 
-		// update pod annotations for this helm component
-		values, err = helmConfigurator.Apply(plan.Cpu, plan.Cache, owner, values)
-		if err != nil {
-			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", component.Name, err)
-		}
+			if plan.HasCpu() {
+				rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+				defer rollback.ReleaseOnFailure(&err)
 
-		dm.log.Infow("Applied resource annotations to Helm values", "componentName", component.Name, "releaseName",
-			releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", plan.Cpu.CpuSet())
+				if err = coordinator.Activate(ctx, owner); err != nil {
+					return fmt.Errorf("failed to activate cache isolation for component %s: %w", component.Name, err)
+				}
+			}
+
+			// update pod annotations for this helm component
+			values, err = helmConfigurator.Apply(plan.Cpu, plan.Cache, owner, values)
+			if err != nil {
+				return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", component.Name, err)
+			}
+
+			dm.log.Infow("Applied resource annotations to Helm values", "componentName", component.Name, "releaseName",
+				releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", plan.Cpu.CpuSet())
+		}
 
 		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
@@ -532,12 +552,21 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator, err := dm.ComposeResourceCoordinator()
-	if err != nil {
-		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	var coordinator *resource.ResourceCoordinator
+	var composeConfigurator *configurator.ComposeConfigurator
+	if dm.rtEnabled {
+		coordinator, err = dm.ComposeResourceCoordinator()
+		if err != nil {
+			return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+		}
+		composeConfigurator = configurator.NewComposeConfigurator()
+	} else {
+		for _, component := range appDeployment.Spec.DeploymentProfile.Components {
+			if err = dm.rejectRTRequirementsWhenDisabled(component); err != nil {
+				return err
+			}
+		}
 	}
-
-	composeConfigurator := configurator.NewComposeConfigurator()
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		if err != nil {
@@ -578,40 +607,42 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		}
 		dm.log.Debugw("compose file downloaded", "composeFilename", composeFilename)
 
-		var resourcePlan resource.ResourcePlan
-		resourcePlan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
-			Owner:        owner,
-			Requirements: dm.extractComponentCapacityRequirements(component),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
-		}
-
-		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
-
 		var rollback *resource.ResourceRollback
 		preparedComposeFilename := composeFilename
 
-		if resourcePlan.HasCpu() {
-			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
-			defer rollback.ReleaseOnFailure(&err)
-		}
-
-		if resourcePlan.HasCpu() {
-			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
-			if prepErr != nil {
-				err = fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
-				return err
+		if dm.rtEnabled {
+			var resourcePlan resource.ResourcePlan
+			resourcePlan, err = coordinator.Allocate(ctx, resource.ResourceRequest{
+				Owner:        owner,
+				Requirements: dm.extractComponentCapacityRequirements(component),
+			})
+			if err != nil {
+				return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
 			}
 
-			defer func(prep string, src string) {
-				if prep != src {
-					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
-					}
+			dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
+
+			if resourcePlan.HasCpu() {
+				rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+				defer rollback.ReleaseOnFailure(&err)
+			}
+
+			if resourcePlan.HasCpu() {
+				var prepErr error
+				preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
+				if prepErr != nil {
+					err = fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+					return err
 				}
-			}(preparedComposeFilename, composeFilename)
+
+				defer func(prep string, src string) {
+					if prep != src {
+						if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+							dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
+						}
+					}
+				}(preparedComposeFilename, composeFilename)
+			}
 		}
 
 		// Convert parameters to environment variables
@@ -795,9 +826,13 @@ func (dm *DeploymentManager) removeHelm(
 		return nil
 	}
 
-	coordinator, err := dm.HelmResourceCoordinator()
-	if err != nil {
-		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	var coordinator *resource.ResourceCoordinator
+	if dm.rtEnabled {
+		var err error
+		coordinator, err = dm.HelmResourceCoordinator()
+		if err != nil {
+			return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+		}
 	}
 
 	var errs []error
@@ -827,13 +862,15 @@ func (dm *DeploymentManager) removeHelm(
 			"componentName", component.Name,
 		)
 
-		owner := model.NewOwnerRef(deploymentId, component.Name)
-		if err := coordinator.Release(ctx, owner); err != nil {
-			dm.log.Warnw("Failed to release helm component reservation during removal",
-				"deploymentId", deploymentId,
-				"componentName", component.Name,
-				"error", err)
-			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
+		if coordinator != nil {
+			owner := model.NewOwnerRef(deploymentId, component.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release helm component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", component.Name,
+					"error", err)
+				errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -849,9 +886,13 @@ func (dm *DeploymentManager) removeCompose(
 		return nil
 	}
 
-	coordinator, err := dm.ComposeResourceCoordinator()
-	if err != nil {
-		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	var coordinator *resource.ResourceCoordinator
+	if dm.rtEnabled {
+		var err error
+		coordinator, err = dm.ComposeResourceCoordinator()
+		if err != nil {
+			return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+		}
 	}
 
 	var errs []error
@@ -884,13 +925,15 @@ func (dm *DeploymentManager) removeCompose(
 			"componentName", component.Name,
 		)
 
-		owner := model.NewOwnerRef(deploymentId, component.Name)
-		if err := coordinator.Release(ctx, owner); err != nil {
-			dm.log.Warnw("Failed to release compose component reservation during removal",
-				"deploymentId", deploymentId,
-				"componentName", component.Name,
-				"error", err)
-			errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
+		if coordinator != nil {
+			owner := model.NewOwnerRef(deploymentId, component.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release compose component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", component.Name,
+					"error", err)
+				errs = append(errs, fmt.Errorf("failed to release reservation for component %q: %w", component.Name, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -942,6 +985,42 @@ func (dm *DeploymentManager) extractComponentCapacityRequirements(
 ) *sbi.CapacityRequirements {
 	if component.DeviceConstraints != nil && component.DeviceConstraints.CapacityRequirements != nil {
 		return component.DeviceConstraints.CapacityRequirements
+	}
+
+	return nil
+}
+
+// rejectRTRequirementsWhenDisabled returns an error if a component requests
+// isolated CPU cores or exclusive L3 cache when the RT feature is disabled.
+func (dm *DeploymentManager) rejectRTRequirementsWhenDisabled(
+	component sbi.ApplicationDeploymentProfileComponent,
+) error {
+	reqs := dm.extractComponentCapacityRequirements(component)
+	if reqs == nil {
+		return nil
+	}
+
+	ref := model.ComponentRef(component.Name)
+	cpuReqs, err := model.NormalizeCpuRequirements(ref, reqs)
+	if err != nil {
+		return err
+	}
+	if cpuReqs.HasIsolatedCores() {
+		return fmt.Errorf(
+			"component %q requests isolated CPU cores, but RT feature is not supported",
+			component.Name,
+		)
+	}
+
+	cacheReqs, err := model.NormalizeCacheRequirements(ref, reqs)
+	if err != nil {
+		return err
+	}
+	if cacheReqs.HasCache() {
+		return fmt.Errorf(
+			"component %q requests exclusive cache, but RT feature is not supported",
+			component.Name,
+		)
 	}
 
 	return nil
