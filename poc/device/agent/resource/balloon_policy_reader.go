@@ -106,6 +106,10 @@ func (b *BalloonPolicyInformer) Start(ctx context.Context) error {
 	})
 
 	if ok := cache.WaitForCacheSync(ctx.Done(), b.informer.HasSynced); !ok {
+		b.Stop()
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("timed out waiting for balloons policy informer cache sync: %w", err)
+		}
 		return fmt.Errorf("timed out waiting for balloons policy informer cache sync")
 	}
 

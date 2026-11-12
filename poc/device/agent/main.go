@@ -276,7 +276,8 @@ func (a *Agent) Start() error {
 		defer cancel()
 
 		if err := a.balloonPolicyInformer.Start(ctx); err != nil {
-			a.log.Warnw("balloon policy informer failed initial sync; background sync will keep retrying(NRI annotations delayed or unavailable)", "err", err)
+			a.log.Errorw("balloon policy informer failed initial sync", "err", err)
+			return fmt.Errorf("balloon policy informer failed initial sync: %w", err)
 		}
 	}
 
