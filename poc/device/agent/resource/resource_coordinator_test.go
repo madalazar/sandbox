@@ -307,6 +307,14 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 	if plan.Cache.L3CacheAssignment.Clos != "1" {
 		t.Fatalf("plan.Cache.Clos = %v, want 1", plan.Cache.L3CacheAssignment.Clos)
 	}
+
+	fakeCacheErr := &fakeCachePlanner{
+		err: errors.New("cache planning failed"),
+	}
+	cWithErr := newTestCoordinator(nil, fakeCpu, fakeCacheErr, nil)
+	if _, err := cWithErr.Plan(nil, req); err == nil {
+		t.Fatal("Plan() expected error when cache planner fails, got nil")
+	}
 }
 
 func TestResourceCoordinatorCommit(t *testing.T) {

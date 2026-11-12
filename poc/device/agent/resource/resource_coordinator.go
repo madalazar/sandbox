@@ -224,15 +224,6 @@ func (c *ResourceCoordinator) plan(allocLedger *ledger.AllocationLedger, request
 		return ResourcePlan{}, err
 	}
 
-	if !cpuPlan.HasCpus() {
-		if cacheReqs.HasCache() {
-			return ResourcePlan{}, fmt.Errorf("component %q requests exclusive cache but has no cpu assignments",
-				request.Owner.Component)
-		}
-
-		return ResourcePlan{Owner: request.Owner, Cpu: cpuPlan}, nil
-	}
-
 	cachePlan := model.CachePlan{Component: request.Owner.Component}
 	if cacheReqs.HasCache() {
 		cachePlan, err = c.cachePlanner.PlanCache(planner.CachePlanningRequest{
