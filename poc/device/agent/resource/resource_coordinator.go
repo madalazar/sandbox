@@ -3,7 +3,6 @@ package resource
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/controller"
@@ -148,15 +147,6 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 	})
 	if err != nil {
 		return ResourcePlan{}, err
-	}
-
-	if !cpuPlan.HasCpus() {
-		if cacheReqs.HasCache() {
-			return ResourcePlan{}, fmt.Errorf("component %q requests exclusive cache but has no cpu assignments",
-				request.Owner.Component)
-		}
-
-		return ResourcePlan{Owner: request.Owner, Cpu: cpuPlan}, nil
 	}
 
 	cachePlan := model.CachePlan{Component: request.Owner.Component}
