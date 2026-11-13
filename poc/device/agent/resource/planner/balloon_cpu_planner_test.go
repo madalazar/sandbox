@@ -41,11 +41,11 @@ func newTestBalloonCpuPlanner() BalloonCpuPlanner {
 
 func TestBalloonCpuPlannerPlanCpu(t *testing.T) {
 	planner := newTestBalloonCpuPlanner()
-	l := newCpuPlanningTestLedger("deployment-123")
 
 	tests := []struct {
 		name              string
 		componentName     string
+		allocated         map[int]string
 		requiredResources *sbi.RequiredResources
 		wantCpus          []int
 		wantClass         string
@@ -60,6 +60,7 @@ func TestBalloonCpuPlannerPlanCpu(t *testing.T) {
 		{
 			name:              "cyclictest gets cpu3 balloon",
 			componentName:     "cyclictest",
+			allocated:         map[int]string{1: "deployment-123/caterpillar"},
 			requiredResources: isolatedCpuRequirement("cyclictest"),
 			wantCpus:          []int{3},
 			wantClass:         "ipc3",
@@ -74,6 +75,7 @@ func TestBalloonCpuPlannerPlanCpu(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			l := newCpuPlanningTestLedger("deployment-123", test.allocated)
 			plan, err := planner.PlanCpu(
 				newCpuPlanningRequest(t, test.componentName, test.requiredResources, l),
 			)
@@ -92,15 +94,10 @@ func TestBalloonCpuPlannerPlanCpu(t *testing.T) {
 
 func TestBalloonCpuPlannerFailsWhenEveryBalloonIsOccupied(t *testing.T) {
 	planner := newTestBalloonCpuPlanner()
-	l := newCpuPlanningTestLedger("deployment-123")
-
-	for _, component := range []string{"component-a", "component-b"} {
-		if _, err := planner.PlanCpu(
-			newCpuPlanningRequest(t, component, isolatedCpuRequirement(component), l),
-		); err != nil {
-			t.Fatalf("PlanCpu(%s) error = %v", component, err)
-		}
-	}
+	l := newCpuPlanningTestLedger("deployment-123", map[int]string{
+		1: "deployment-123/component-a",
+		3: "deployment-123/component-b",
+	})
 
 	plan, err := planner.PlanCpu(
 		newCpuPlanningRequest(t, "component-c", isolatedCpuRequirement("component-c"), l),
@@ -117,7 +114,7 @@ func TestBalloonCpuPlannerRequiresAPolicySnapshot(t *testing.T) {
 		t,
 		"cyclictest",
 		isolatedCpuRequirement("cyclictest"),
-		newCpuPlanningTestLedger("deployment-123"),
+		newCpuPlanningTestLedger("deployment-123", nil),
 	))
 	if err == nil {
 		t.Fatalf("PlanCpu() = %#v, want an error", plan)

@@ -4,9 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
@@ -55,7 +52,7 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 	}
 
 	// 2. pick smallest fitting cache interval
-	selectedCache, selectedInterval, neededWays, err := pickSmallestFittingCacheInterval(
+	selectedCache, selectedInterval, err := pickSmallestFittingCacheInterval(
 		candidateCaches,
 		request.Ledger,
 		request.Requirements.Component,
@@ -66,14 +63,30 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 	}
 
 	// 3. generate way mask
-	maskHex, err := wayMaskHexForInterval(selectedInterval.Start, selectedInterval.Length)
+	maskHex, err := selectedInterval.MaskHex()
 	if err != nil {
 		return model.CachePlan{}, err
 	}
 
-	// 4. reserve ways on ledger
-	if err := request.Ledger.ReserveWays(request.Requirements.Component, selectedCache.Id, selectedInterval); err != nil {
-		return model.CachePlan{}, err
+	masks := map[string]string{
+		selectedCache.Id: maskHex,
+	}
+
+	// 4. when placed into an NRI balloon (Helm/k3s RDT), pick non-overlapping 1-way
+	// masks on remaining L3 caches as required by the NRI plugin
+	if request.CpuPlan.PlacementClass() != "" {
+		for _, cache := range p.caches {
+			if cache.Id == "" || cache.Id == selectedCache.Id {
+				continue
+			}
+			_, fillerInterval, err := pickSmallestFittingCacheInterval([]types.HostTopologyCache{cache}, request.Ledger, request.Requirements.Component, cache.WaySizeKB)
+			if err != nil {
+				return model.CachePlan{}, fmt.Errorf("no free filler way on L3 cache %q: %w", cache.Id, err)
+			}
+			if masks[cache.Id], err = fillerInterval.MaskHex(); err != nil {
+				return model.CachePlan{}, err
+			}
+		}
 	}
 
 	// 5. reserve class slot on ledger
@@ -83,12 +96,11 @@ func (p *L3CachePlanner) PlanCache(request CachePlanningRequest) (model.CachePla
 	}
 
 	assignment := &model.CacheAssignment{
-		Level:    selectedCache.Level,
-		CacheId:  selectedCache.Id,
-		SizeKiB:  neededWays * selectedCache.WaySizeKB,
-		Interval: selectedInterval,
-		Mask:     maskHex,
-		Clos:     clos,
+		Level:   selectedCache.Level,
+		CacheId: selectedCache.Id,
+		SizeKiB: selectedInterval.Length * selectedCache.WaySizeKB,
+		Masks:   masks,
+		Clos:    clos,
 	}
 
 	fmt.Printf("[cache planner] cache assignment %+v, clos: %v\n", assignment, clos)
@@ -111,7 +123,7 @@ func filterL3CachesByAssignedCpus(caches []types.HostTopologyCache, assignedCpus
 
 	candidates := make([]types.HostTopologyCache, 0)
 	for _, cache := range caches {
-		cores, err := parseCpuRangeList(cache.Cores)
+		cores, err := model.ParseCpuSet(cache.Cores)
 		if err != nil {
 			return nil, fmt.Errorf("invalid cores range %q for cache id %q: %w", cache.Cores, cache.Id, err)
 		}
@@ -139,13 +151,12 @@ func pickSmallestFittingCacheInterval(
 	l *ledger.AllocationLedger,
 	ref model.ComponentRef,
 	requiredKiB int64,
-) (types.HostTopologyCache, model.WayInterval, int64, error) {
+) (types.HostTopologyCache, model.WayInterval, error) {
 	var bestCache types.HostTopologyCache
 	var bestInterval model.WayInterval
 	bestIntervalFound := false
 	bestLength := int64(math.MaxInt64)
 	bestCacheID := ""
-	bestNeededWays := int64(0)
 
 	for _, cache := range caches {
 		if cache.WaySizeKB <= 0 || cache.Ways <= 0 {
@@ -173,99 +184,13 @@ func pickSmallestFittingCacheInterval(
 				bestIntervalFound = true
 				bestLength = interval.Length
 				bestCacheID = cache.Id
-				bestNeededWays = neededWays
 			}
 		}
 	}
 
 	if !bestIntervalFound {
-		return types.HostTopologyCache{}, model.WayInterval{}, 0, fmt.Errorf("no contiguous L3 cache interval can fit %d KiB: %w", requiredKiB, ledger.ErrCapacityExhausted)
+		return types.HostTopologyCache{}, model.WayInterval{}, fmt.Errorf("no contiguous L3 cache interval can fit %d KiB: %w", requiredKiB, ledger.ErrCapacityExhausted)
 	}
 
-	return bestCache, bestInterval, bestNeededWays, nil
-}
-
-func maskWays(mask string, maxWays int64) []int64 {
-	parsed := new(big.Int)
-	if _, ok := parsed.SetString(strings.TrimSpace(mask), 0); !ok {
-		return nil
-	}
-
-	ways := make([]int64, 0)
-	for bit := range maxWays {
-		if parsed.Bit(int(bit)) == 1 {
-			ways = append(ways, bit)
-		}
-	}
-
-	return ways
-}
-
-func wayMaskHexForInterval(start, length int64) (string, error) {
-	if start < 0 {
-		return "", fmt.Errorf("interval start must be >= 0")
-	}
-	if length <= 0 {
-		return "", fmt.Errorf("interval length must be > 0")
-	}
-
-	mask := new(big.Int).Lsh(big.NewInt(1), uint(length))
-	mask.Sub(mask, big.NewInt(1))
-	mask.Lsh(mask, uint(start))
-
-	return fmt.Sprintf("0x%X", mask), nil
-}
-
-func parseCpuRangeList(raw string) ([]int, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-
-	parts := strings.Split(raw, ",")
-	seen := make(map[int]struct{}, len(parts))
-	out := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		token := strings.TrimSpace(part)
-		if token == "" {
-			continue
-		}
-
-		var start, end int
-		if startStr, endStr, hasRange := strings.Cut(token, "-"); hasRange {
-			var err error
-			start, err = strconv.Atoi(strings.TrimSpace(startStr))
-			if err != nil {
-				return nil, fmt.Errorf("invalid cpu core range start %q: %w", token, err)
-			}
-			end, err = strconv.Atoi(strings.TrimSpace(endStr))
-			if err != nil {
-				return nil, fmt.Errorf("invalid cpu core range end %q: %w", token, err)
-			}
-			if start < 0 || end < 0 || start > end {
-				return nil, fmt.Errorf("invalid cpu core range %q", token)
-			}
-		} else {
-			var err error
-			start, err = strconv.Atoi(token)
-			if err != nil {
-				return nil, fmt.Errorf("invalid cpu core index %q: %w", token, err)
-			}
-			if start < 0 {
-				return nil, fmt.Errorf("invalid negative cpu core index %d", start)
-			}
-			end = start
-		}
-
-		for idx := start; idx <= end; idx++ {
-			if _, exists := seen[idx]; !exists {
-				seen[idx] = struct{}{}
-				out = append(out, idx)
-			}
-		}
-	}
-
-	sort.Ints(out)
-	return out, nil
+	return bestCache, bestInterval, nil
 }

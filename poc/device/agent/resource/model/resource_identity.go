@@ -19,7 +19,7 @@ func NewOwnerRef(deploymentId string, componentName string) OwnerRef {
 	}
 }
 
-// persisted owner encoding used by database.AllocatedCpus and AllocatedCaches
+// persisted owner encoding used by database.AllocatedResources
 func (o OwnerRef) String() string {
 	if o.Component == "" {
 		return o.Deployment

@@ -3,6 +3,8 @@ package resource
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/controller"
@@ -45,7 +47,7 @@ func (p ResourcePlan) HasCache() bool {
 //	         deployment's ledger
 //	commit   record the reservation before the workload is started, so every later
 //	         stage can work from storage rather than from memory
-//	activate verify, after the workload is running, that the device still matches
+//	verify   verify, after the workload is running, that the device still matches
 //	         what was committed; might not be needed
 //	release  works from storage, never from an in-memory plan: it loads what
 //			 was committed for the owner and undoes that
@@ -54,6 +56,10 @@ func (p ResourcePlan) HasCache() bool {
 // one runtime and a helm values map for the other, so the deploy (deployOrUpdate* methods)
 // code will calls its own configurator directly. A shared configurator might need to be
 // further researched
+//
+// allocMu serializes allocation against release across every coordinator that draws
+// from the same isolated cpus and l3 ways. Both Allocate (snapshot -> plan -> commit)
+// and Release acquire and release it internally.
 type ResourceCoordinator struct {
 	store           ReservationStore
 	planner         planner.CpuPlanner
@@ -61,6 +67,7 @@ type ResourceCoordinator struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	allocMu         *sync.Mutex
 }
 
 // constructs a ResourceCoordinator ensuring all dependencies are non-nil.
@@ -71,6 +78,7 @@ type ResourceCoordinatorBuilder struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	allocMu         *sync.Mutex
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -117,6 +125,11 @@ func (b *ResourceCoordinatorBuilder) WithClassNamer(namer controller.ClassNamer)
 	return b
 }
 
+func (b *ResourceCoordinatorBuilder) WithAllocationLock(mu *sync.Mutex) *ResourceCoordinatorBuilder {
+	b.allocMu = mu
+	return b
+}
+
 func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	var errs []error
 	if b.store == nil {
@@ -131,6 +144,12 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	if b.cacheController == nil {
 		errs = append(errs, errors.New("cache isolation controller cannot be nil"))
 	}
+	if b.classNamer == nil {
+		errs = append(errs, errors.New("class namer cannot be nil"))
+	}
+	if b.allocMu == nil {
+		errs = append(errs, errors.New("allocation lock cannot be nil"))
+	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -141,24 +160,43 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 		cacheController: b.cacheController,
 		cacheCapacity:   b.cacheCapacity,
 		classNamer:      b.classNamer,
+		allocMu:         b.allocMu,
 	}, nil
 }
 
-// takes the device-wide snapshot once, for one reconcile of one deployment. The caller
-// threads the result through every component of that deployment, so a component cannot
-// be planned onto cpus a sibling took earlier in the same pass
-func (c *ResourceCoordinator) NewLedger(deploymentId string) (*ledger.AllocationLedger, error) {
+// Allocate atomically takes a fresh device-wide snapshot, plans the component's
+// CPU and L3 cache resources, and commits the reservation under allocMu.
+func (c *ResourceCoordinator) Allocate(
+	ctx context.Context,
+	request ResourceRequest,
+) (ResourcePlan, error) {
+	c.allocMu.Lock()
+	defer c.allocMu.Unlock()
+
 	snapshot, err := c.store.LoadSnapshot()
 	if err != nil {
-		return nil, err
+		return ResourcePlan{}, fmt.Errorf("unable to create ledger: %w", err)
 	}
 
-	return ledger.NewAllocationLedger(snapshot, deploymentId, c.cacheCapacity, c.classNamer), nil
+	allocLedger := ledger.NewAllocationLedger(snapshot, request.Owner.Deployment, c.cacheCapacity, c.classNamer)
+
+	resourcePlan, err := c.plan(allocLedger, request)
+	if err != nil {
+		return ResourcePlan{}, err
+	}
+
+	if resourcePlan.HasCpu() {
+		if err := c.commit(ctx, resourcePlan); err != nil {
+			return ResourcePlan{}, fmt.Errorf("failed to persist allocations for component %s: %w", request.Owner.Component, err)
+		}
+	}
+
+	return resourcePlan, nil
 }
 
 // normalizes the request and asks the planner for cpus, reserving them on the ledger.
 // no i/o and no context: planning must stay reproducible from its inputs alone
-func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
+func (c *ResourceCoordinator) plan(allocLedger *ledger.AllocationLedger, request ResourceRequest) (ResourcePlan, error) {
 	cpuRequirements, err := model.NormalizeCpuRequirements(request.Owner.Component, request.Requirements)
 	if err != nil {
 		return ResourcePlan{}, err
@@ -171,7 +209,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 
 	cpuPlan, err := c.planner.PlanCpu(planner.CpuPlanningRequest{
 		Requirements: cpuRequirements,
-		Ledger:       ledger,
+		Ledger:       allocLedger,
 	})
 	if err != nil {
 		return ResourcePlan{}, err
@@ -182,7 +220,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 		cachePlan, err = c.cachePlanner.PlanCache(planner.CachePlanningRequest{
 			Requirements: cacheReqs,
 			CpuPlan:      cpuPlan,
-			Ledger:       ledger,
+			Ledger:       allocLedger,
 		})
 		if err != nil {
 			return ResourcePlan{}, err
@@ -198,7 +236,7 @@ func (c *ResourceCoordinator) Plan(ledger *ledger.AllocationLedger, request Reso
 
 // records the plan before the workload starts, so nothing is ever applied to the device
 // that is not already recoverable from storage
-func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) error {
+func (c *ResourceCoordinator) commit(ctx context.Context, plan ResourcePlan) error {
 	if !plan.HasCpu() && !plan.HasCache() {
 		return nil
 	}
@@ -215,7 +253,7 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		return err
 	}
 
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Apply(ctx, reservation); err != nil {
 			_ = c.store.ClearComponent(reservation.Owner)
 			return err
@@ -227,7 +265,7 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 
 // verifies, after the workload is running, that the device still matches what was
 // committed
-func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef) error {
+func (c *ResourceCoordinator) Verify(ctx context.Context, owner model.OwnerRef) error {
 	reservation, found, err := c.store.LoadReservation(owner)
 	if err != nil {
 		return err
@@ -236,17 +274,16 @@ func (c *ResourceCoordinator) Activate(ctx context.Context, owner model.OwnerRef
 		return nil
 	}
 
-	if c.cacheController != nil {
-		return c.cacheController.Verify(ctx, reservation)
-	}
-
-	return nil
+	return c.cacheController.Verify(ctx, reservation)
 }
 
 // releases everything the component holds. Releasing what was never reserved is not an
 // error. The context is the release deadline, and the seam the deferred cache
 // isolation reset hooks into
 func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef) error {
+	c.allocMu.Lock()
+	defer c.allocMu.Unlock()
+
 	reservation, found, err := c.store.LoadReservation(owner)
 	if err != nil {
 		return err
@@ -255,18 +292,13 @@ func (c *ResourceCoordinator) Release(ctx context.Context, owner model.OwnerRef)
 		return nil
 	}
 
-	var errs []error
-	if c.cacheController != nil && reservation.HasL3Cache() {
+	if reservation.HasL3Cache() {
 		if err := c.cacheController.Release(ctx, reservation); err != nil {
-			errs = append(errs, err)
+			return err
 		}
 	}
 
-	if err := c.store.ClearComponent(reservation.Owner); err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
+	return c.store.ClearComponent(reservation.Owner)
 }
 
 // detaches from the caller's context, because a deploy that failed precisely because

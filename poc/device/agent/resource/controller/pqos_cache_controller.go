@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -65,9 +64,15 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("component %q has empty cache id", componentName)
 	}
 
-	mask := strings.TrimSpace(alloc.Mask)
+	// we expect exactly one cache allocation for a partition for this
+	// c-ller
+	if len(alloc.Masks) != 1 {
+		return fmt.Errorf("component %q expected 1 cache mask for pqos, got %d", componentName, len(alloc.Masks))
+	}
+
+	mask := strings.TrimSpace(alloc.Masks[cacheID])
 	if mask == "" {
-		return fmt.Errorf("component %q has empty cache mask", componentName)
+		return fmt.Errorf("component %q has empty cache mask for cache id %q", componentName, cacheID)
 	}
 
 	cpuset := reservation.CpuSet()
@@ -118,7 +123,7 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 		return fmt.Errorf("component %q cache id %q not found in topology for pqos reset", componentName, cacheId)
 	}
 
-	fullMask, err := fullWayMaskHex(cacheInfo.Ways)
+	fullMask, err := model.WayInterval{Start: 0, Length: cacheInfo.Ways}.MaskHex()
 	if err != nil {
 		return fmt.Errorf("failed to compute full-way mask for cache id %q: %w", cacheId, err)
 	}
@@ -131,13 +136,4 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 
 	return nil
-}
-
-func fullWayMaskHex(ways int64) (string, error) {
-	if ways <= 0 {
-		return "", fmt.Errorf("cache ways must be > 0")
-	}
-	mask := new(big.Int).Lsh(big.NewInt(1), uint(ways))
-	mask.Sub(mask, big.NewInt(1))
-	return "0x" + strings.ToUpper(mask.Text(16)), nil
 }

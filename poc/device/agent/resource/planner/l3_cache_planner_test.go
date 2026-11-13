@@ -15,7 +15,7 @@ type testClassNamer struct {
 	err  error
 }
 
-func (f *testClassNamer) Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error) {
+func (f *testClassNamer) Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error) {
 	if f.err != nil {
 		return model.ClassUnset, f.err
 	}
@@ -88,90 +88,6 @@ func TestFilterL3CachesByAssignedCPUs(t *testing.T) {
 	}
 }
 
-func TestMaskWays(t *testing.T) {
-	tests := []struct {
-		name    string
-		mask    string
-		maxWays int64
-		want    []int64
-	}{
-		{
-			name:    "mask 0x3",
-			mask:    "0x3",
-			maxWays: 12,
-			want:    []int64{0, 1},
-		},
-		{
-			name:    "mask 0xF0",
-			mask:    "0xF0",
-			maxWays: 12,
-			want:    []int64{4, 5, 6, 7},
-		},
-		{
-			name:    "invalid mask",
-			mask:    "not-a-mask",
-			maxWays: 12,
-			want:    nil,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := maskWays(tc.mask, tc.maxWays)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("maskWays() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestWayMaskHexForInterval(t *testing.T) {
-	tests := []struct {
-		name    string
-		start   int64
-		length  int64
-		want    string
-		wantErr bool
-	}{
-		{
-			name:   "start 0 length 2",
-			start:  0,
-			length: 2,
-			want:   "0x3",
-		},
-		{
-			name:   "start 4 length 4",
-			start:  4,
-			length: 4,
-			want:   "0xF0",
-		},
-		{
-			name:    "negative start",
-			start:   -1,
-			length:  2,
-			wantErr: true,
-		},
-		{
-			name:    "zero length",
-			start:   0,
-			length:  0,
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := wayMaskHexForInterval(tc.start, tc.length)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("wayMaskHexForInterval() error = %v, wantErr %v", err, tc.wantErr)
-			}
-			if !tc.wantErr && got != tc.want {
-				t.Fatalf("wayMaskHexForInterval() = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestPickSmallestFittingCacheInterval(t *testing.T) {
 	caches := []types.HostTopologyCache{
 		{Id: "0", Level: "L3", Ways: 12, WaySizeKB: 1024},
@@ -187,16 +103,16 @@ func TestPickSmallestFittingCacheInterval(t *testing.T) {
 
 	persisted := []model.CacheAssignment{
 		{
-			Owner:    model.NewOwnerRef("other", "other"),
-			Level:    "L3",
-			CacheId:  "0",
-			Interval: model.WayInterval{Start: 6, Length: 6},
+			Owner:   model.NewOwnerRef("other", "other"),
+			Level:   "L3",
+			CacheId: "0",
+			Masks:   map[string]string{"0": "0xfc0"}, // ways [6, 12)
 		},
 		{
-			Owner:    model.NewOwnerRef("other", "other"),
-			Level:    "L3",
-			CacheId:  "1",
-			Interval: model.WayInterval{Start: 4, Length: 8},
+			Owner:   model.NewOwnerRef("other", "other"),
+			Level:   "L3",
+			CacheId: "1",
+			Masks:   map[string]string{"1": "0xff0"}, // ways [4, 12)
 		},
 	}
 
@@ -206,15 +122,12 @@ func TestPickSmallestFittingCacheInterval(t *testing.T) {
 	// Required 2048 KiB -> 2 ways
 	// Cache 1 has free run length 4, Cache 0 has free run length 6
 	// Best-fit picks Cache 1 (length 4 < length 6)
-	bestCache, bestInterval, neededWays, err := pickSmallestFittingCacheInterval(caches, l, "comp-a", 2048)
+	bestCache, bestInterval, err := pickSmallestFittingCacheInterval(caches, l, "comp-a", 2048)
 	if err != nil {
 		t.Fatalf("pickSmallestFittingCacheInterval() error = %v", err)
 	}
 	if bestCache.Id != "1" {
 		t.Fatalf("expected Cache 1, got %s", bestCache.Id)
-	}
-	if neededWays != 2 {
-		t.Fatalf("expected 2 needed ways, got %d", neededWays)
 	}
 	if bestInterval.Start != 0 || bestInterval.Length != 2 {
 		t.Fatalf("expected interval [0, 2), got %+v", bestInterval)
@@ -222,22 +135,19 @@ func TestPickSmallestFittingCacheInterval(t *testing.T) {
 
 	// Required 5120 KiB -> 5 ways
 	// Cache 1 cannot fit 5 ways (only 4 free), Cache 0 fits (6 free)
-	bestCache, bestInterval, neededWays, err = pickSmallestFittingCacheInterval(caches, l, "comp-a", 5120)
+	bestCache, bestInterval, err = pickSmallestFittingCacheInterval(caches, l, "comp-a", 5120)
 	if err != nil {
 		t.Fatalf("pickSmallestFittingCacheInterval() error = %v", err)
 	}
 	if bestCache.Id != "0" {
 		t.Fatalf("expected Cache 0, got %s", bestCache.Id)
 	}
-	if neededWays != 5 {
-		t.Fatalf("expected 5 needed ways, got %d", neededWays)
-	}
 	if bestInterval.Start != 0 || bestInterval.Length != 5 {
 		t.Fatalf("expected interval [0, 5), got %+v", bestInterval)
 	}
 
 	// Required 8192 KiB -> 8 ways -> neither fits
-	_, _, _, err = pickSmallestFittingCacheInterval(caches, l, "comp-a", 8192)
+	_, _, err = pickSmallestFittingCacheInterval(caches, l, "comp-a", 8192)
 	if err == nil || !errors.Is(err, ledger.ErrCapacityExhausted) {
 		t.Fatalf("expected ErrCapacityExhausted, got %v", err)
 	}
@@ -296,21 +206,18 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 		if plan.L3CacheAssignment.CacheId != "0" {
 			t.Fatalf("expected cacheId '0', got %s", plan.L3CacheAssignment.CacheId)
 		}
-		if plan.L3CacheAssignment.Interval.Start != 0 || plan.L3CacheAssignment.Interval.Length != 2 {
-			t.Fatalf("expected interval [0, 2), got %+v", plan.L3CacheAssignment.Interval)
-		}
-		if plan.L3CacheAssignment.Mask != "0x3" {
-			t.Fatalf("expected mask 0x3, got %s", plan.L3CacheAssignment.Mask)
+		if plan.L3CacheAssignment.Masks["0"] != "0x3" {
+			t.Fatalf("expected mask 0x3, got %s", plan.L3CacheAssignment.Masks["0"])
 		}
 	})
 
 	t.Run("capacity exhaustion", func(t *testing.T) {
 		persisted := []model.CacheAssignment{
 			{
-				Owner:    model.NewOwnerRef("other", "other"),
-				Level:    "L3",
-				CacheId:  "0",
-				Interval: model.WayInterval{Start: 0, Length: 12},
+				Owner:   model.NewOwnerRef("other", "other"),
+				Level:   "L3",
+				CacheId: "0",
+				Masks:   map[string]string{"0": "0xfff"}, // ways [0, 12)
 			},
 		}
 		snap := ledger.NewAllocationSnapshot(nil, nil, persisted)
@@ -334,71 +241,96 @@ func TestL3CachePlannerPlanCache(t *testing.T) {
 			t.Fatalf("expected ErrCapacityExhausted, got %v", err)
 		}
 	})
-}
 
-func TestParseCpuRangeList(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		want    []int
-		wantErr bool
-	}{
-		{
-			name: "empty string",
-			raw:  "",
-			want: nil,
-		},
-		{
-			name: "single cpu",
-			raw:  "3",
-			want: []int{3},
-		},
-		{
-			name: "comma separated cpus with duplicates",
-			raw:  "0, 4, 2, 4, 0",
-			want: []int{0, 2, 4},
-		},
-		{
-			name: "range",
-			raw:  "0-3",
-			want: []int{0, 1, 2, 3},
-		},
-		{
-			name: "mixed ranges and singles with whitespace",
-			raw:  "0-2, 6, 4-5, 2",
-			want: []int{0, 1, 2, 4, 5, 6},
-		},
-		{
-			name:    "invalid range start",
-			raw:     "a-3",
-			wantErr: true,
-		},
-		{
-			name:    "invalid range end",
-			raw:     "0-b",
-			wantErr: true,
-		},
-		{
-			name:    "invalid inverted range",
-			raw:     "4-2",
-			wantErr: true,
-		},
-		{
-			name:    "invalid negative index",
-			raw:     "-1",
-			wantErr: true,
-		},
-	}
+	t.Run("rdt multi-cache masks do not overlap across deployments", func(t *testing.T) {
+		multiCaches := []types.HostTopologyCache{
+			{Id: "0", Level: "L3", Cores: "0-3", Ways: 12, WaySizeKB: 2304},
+			{Id: "1", Level: "L3", Cores: "4-7", Ways: 12, WaySizeKB: 2304},
+		}
+		multiCaps := model.CacheCapacity{
+			Ways:     map[string]int64{"0": 12, "1": 12},
+			ClosPool: model.ClosPool{NumClos: 8, Reserved: 1},
+		}
+		multiPlanner := NewL3CachePlanner(multiCaches)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseCpuRangeList(tc.raw)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("parseCpuRangeList(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
-			}
-			if !tc.wantErr && !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("parseCpuRangeList(%q) = %v, want %v", tc.raw, got, tc.want)
-			}
+		// Component 2 requests 578 KiB on L3 "0" -> 1 way (0x1), filler on L3 "1" -> 0x1
+		l1 := ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, nil, nil), "e32acdad", multiCaps, &testClassNamer{name: "part2_e32acdad_class"})
+		plan2, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "part2",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    578,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "part2",
+				Cpus:      []int{1},
+				Placement: model.CpuPlacement{Class: "ipc1"},
+			},
+			Ledger: l1,
 		})
-	}
+		if err != nil {
+			t.Fatalf("PlanCache for part2 failed: %v", err)
+		}
+		if plan2.L3CacheAssignment.Masks["0"] != "0x1" || plan2.L3CacheAssignment.Masks["1"] != "0x1" {
+			t.Fatalf("unexpected part2 masks: %v", plan2.L3CacheAssignment.Masks)
+		}
+
+		// Persist part2 and plan Component 1 requesting 9216 KiB on L3 "0" -> 4 ways (0x1E), filler on L3 "1" -> 0x2
+		persistedPart2 := *plan2.L3CacheAssignment
+		persistedPart2.Owner = model.NewOwnerRef("e32acdad", "part2")
+		snap2 := ledger.NewAllocationSnapshot(nil, nil, []model.CacheAssignment{persistedPart2})
+		l2 := ledger.NewAllocationLedger(snap2, "99b59365", multiCaps, &testClassNamer{name: "part1_99b59365_class"})
+
+		plan1, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "part1",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    9216,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "part1",
+				Cpus:      []int{2},
+				Placement: model.CpuPlacement{Class: "ipc2"},
+			},
+			Ledger: l2,
+		})
+		if err != nil {
+			t.Fatalf("PlanCache for part1 failed: %v", err)
+		}
+		if plan1.L3CacheAssignment.Masks["0"] != "0x1E" {
+			t.Fatalf("expected part1 mask 0x1E on cache 0, got %s", plan1.L3CacheAssignment.Masks["0"])
+		}
+		if plan1.L3CacheAssignment.Masks["1"] != "0x2" {
+			t.Fatalf("expected part1 non-overlapping filler mask 0x2 on cache 1, got %s", plan1.L3CacheAssignment.Masks["1"])
+		}
+
+		// Compose (no Placement.Class) on multi-cache only populates 1 entry in Masks
+		composePlan, err := multiPlanner.PlanCache(CachePlanningRequest{
+			Requirements: model.NormalizedCacheRequirements{
+				Component: "compose-comp",
+				L3CacheRequirement: &model.CacheRequirement{
+					Level:      "L3",
+					Allocation: model.CacheAllocationExclusive,
+					SizeKiB:    2304,
+				},
+			},
+			CpuPlan: model.CpuPlan{
+				Component: "compose-comp",
+				Cpus:      []int{3},
+			},
+			Ledger: l2,
+		})
+		if err != nil {
+			t.Fatalf("PlanCache for compose-comp failed: %v", err)
+		}
+		if len(composePlan.L3CacheAssignment.Masks) != 1 || composePlan.L3CacheAssignment.Masks["0"] != "0x2" {
+			t.Fatalf("expected single mask entry 0x2 on cache 0 for compose, got %v", composePlan.L3CacheAssignment.Masks)
+		}
+	})
 }
