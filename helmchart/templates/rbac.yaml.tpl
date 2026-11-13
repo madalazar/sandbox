@@ -77,6 +77,16 @@ rules:
 - apiGroups: ["k8s.nginx.org"]
   resources: ["*"]
   verbs: ["*"]
+
+# benchmarking app permissions
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "update", "patch", "delete"]
+# NRI plugin permissions
+- apiGroups: ["config.nri"]
+  resources: ["balloonspolicies"]
+  verbs: ["*"]
+
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
