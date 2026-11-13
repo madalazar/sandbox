@@ -21,8 +21,6 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // HelmClient represents a Helm client with common settings
@@ -103,21 +101,7 @@ func NewHelmClient(kubeconfigPath string) (*HelmClient, error) {
 
 // createKubeClient creates a Kubernetes client
 func createKubeClient(kubeconfigPath string) (kubernetes.Interface, error) {
-
-	var config *rest.Config
-	var err error
-
-	if kubeconfigPath != "" {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	} else {
-		config, err = rest.InClusterConfig()
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return kubernetes.NewForConfig(config)
+	return newKubeClient(kubeconfigPath)
 }
 
 type HelmRepoAuth struct {
