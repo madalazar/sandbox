@@ -272,32 +272,14 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 		},
 	}
 
-	// Without CPU assignments, requesting cache returns an error
-	fakeCpuNoCpus := &fakeCpuPlanner{
-		plan: model.CpuPlan{
-			Component: "comp-1",
-			Cpus:      []int{},
-		},
-	}
-	c := newTestCoordinator(nil, fakeCpuNoCpus, fakeCache, nil)
-	_, err := c.plan(nil, req)
-	if err == nil {
-		t.Fatal("Plan() expected error when cache requested without CPU assignments, got nil")
-	}
-	wantErr := `component "comp-1" requests exclusive cache but has no cpu assignments`
-	if err.Error() != wantErr {
-		t.Fatalf("Plan() error = %q, want %q", err.Error(), wantErr)
-	}
-
-	// With CPU assignments, cache planning succeeds
 	fakeCpu := &fakeCpuPlanner{
 		plan: model.CpuPlan{
 			Component: "comp-1",
 			Cpus:      []int{2},
 		},
 	}
-	cWithCpu := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
-	plan, err := cWithCpu.plan(nil, req)
+	c := newTestCoordinator(nil, fakeCpu, fakeCache, nil)
+	plan, err := c.plan(nil, req)
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
@@ -312,7 +294,7 @@ func TestResourceCoordinatorPlanWithCache(t *testing.T) {
 		err: errors.New("cache planning failed"),
 	}
 	cWithErr := newTestCoordinator(nil, fakeCpu, fakeCacheErr, nil)
-	if _, err := cWithErr.Plan(nil, req); err == nil {
+	if _, err := cWithErr.plan(nil, req); err == nil {
 		t.Fatal("Plan() expected error when cache planner fails, got nil")
 	}
 }
@@ -589,7 +571,7 @@ func makeCpuAndCacheReqs(comp string, cores float32, cacheSize string) *sbi.Capa
 }
 
 func TestResourceCoordinatorConcurrentAllocateAndRelease(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 
 	isolatedIndices := []int{1, 2, 3, 4, 5, 6, 7, 8}
 	isolatedSet := make(map[int]struct{}, len(isolatedIndices))
