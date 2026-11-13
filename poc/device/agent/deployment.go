@@ -58,6 +58,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
 		Build()
 	if err != nil {
@@ -68,6 +70,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
 		Build()
 	if err != nil {
@@ -546,13 +550,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", composeComp.Name, err)
 		}
 
-		cpuPlan := resourcePlan.Cpu
-		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
+		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
 
 		var rollback *resource.ResourceRollback
 		preparedComposeFilename := composeFilename
 
-		if cpuPlan.HasCpus() {
+		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
@@ -561,26 +564,18 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 
 			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
+			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
 			if prepErr != nil {
 				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
 			}
 
-			removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
-				strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
-				strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
-			defer func(prep string, src string, rmSrc bool) {
-				if rmSrc {
-					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
-					}
-				}
+			defer func(prep string, src string) {
 				if prep != src {
 					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
 					}
 				}
-			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+			}(preparedComposeFilename, composeFilename)
 		}
 
 		// Convert parameters to environment variables
