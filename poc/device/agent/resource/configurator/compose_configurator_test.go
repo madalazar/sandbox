@@ -2,6 +2,8 @@ package configurator
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -130,16 +132,38 @@ func TestRewriteComposeYamlRejectsInvalidServices(t *testing.T) {
 	}
 }
 
-func TestRewriteComposeYamlRejectsListFormEnvironment(t *testing.T) {
+func TestRewriteComposeYamlSupportsListFormEnvironment(t *testing.T) {
 	source := `services:
   stress:
     image: stress:latest
     environment:
       - EXISTING=keep
+      - TEST_CPUSET=0
 `
 	var out bytes.Buffer
-	if err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err == nil {
-		t.Fatal("expected an error for list-form environment, got nil")
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err != nil {
+		t.Fatalf("rewriteComposeYaml() error = %v", err)
+	}
+	result := out.String()
+	for _, want := range []string{"EXISTING=keep", "TEST_CPUSET=1"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("rewritten compose missing %q:\n%s", want, result)
+		}
+	}
+}
+
+func TestRewriteComposeYamlPreservesComposeTags(t *testing.T) {
+	source := `services:
+  stress:
+    image: stress:latest
+    privileged: !reset true
+`
+	var out bytes.Buffer
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, cpuPlanFor("component", 1)); err != nil {
+		t.Fatalf("rewriteComposeYaml() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "privileged: !reset true") {
+		t.Errorf("expected !reset tag to be preserved, got:\n%s", out.String())
 	}
 }
 
@@ -159,26 +183,44 @@ func TestRewriteComposeYamlCopiesSourceWhenPlanHasNoCpus(t *testing.T) {
 	}
 }
 
-func TestSanitizeFileToken(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"", "unknown"},
-		{"   ", "unknown"},
-		{"simple", "simple"},
-		{"cyclictest_compose", "cyclictest_compose"},
-		{"foo/bar/baz", "foo-bar-baz"},
-		{"deployment#123!@$", "deployment-123"},
-		{"---", "unknown"},
-		{"-valid-name-", "valid-name"},
+func TestComposeConfiguratorApplyModifiesFileInPlace(t *testing.T) {
+	composePath := filepath.Join(t.TempDir(), "docker-compose.yaml")
+	source := `networks:
+  app-net:
+    driver: bridge
+services:
+  stress:
+    image: stress:latest
+    ports:
+      - "8080:80"
+    environment:
+      EXISTING: keep
+`
+	if err := os.WriteFile(composePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write compose file: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := sanitizeFileToken(tt.input); got != tt.want {
-				t.Errorf("SanitizeFileToken(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
+	configurator := NewComposeConfigurator()
+	if err := configurator.Apply(cpuPlanFor("stressng_compose", 2, 3), composePath); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	updated, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("read updated compose file: %v", err)
+	}
+
+	result := string(updated)
+	for _, want := range []string{
+		"networks:",
+		"app-net:",
+		"8080:80",
+		"cpuset: 2-3",
+		"EXISTING: keep",
+		"TEST_CPUSET: 2-3",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("updated compose file missing %q:\n%s", want, result)
+		}
 	}
 }

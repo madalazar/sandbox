@@ -1,91 +1,74 @@
 package configurator
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
 const ComposeCpuSetEnvVarName = "TEST_CPUSET"
 
-var fileTokenReplacer = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+type composeFile struct {
+	Services map[string]composeService `yaml:"services" validate:"required,min=1,dive"`
+	Extra    map[string]yamlv3.Node    `yaml:",inline"`
+}
 
-// applies a cpu plan to a compose package by rewriting the downloaded file into a
-// temporary copy it owns
+type composeService struct {
+	Cpuset      string                 `yaml:"cpuset,omitempty"`
+	Environment yamlv3.Node            `yaml:"environment,omitempty"`
+	Extra       map[string]yamlv3.Node `yaml:",inline"`
+}
+
+// applies a cpu plan to a compose package by updating the downloaded file in-place
 type ComposeConfigurator struct{}
 
 func NewComposeConfigurator() *ComposeConfigurator {
 	return &ComposeConfigurator{}
 }
 
-// writes the plan's cpuset into the services of the source file and returns the path of
-// the prepared copy. A plan with no cpus returns sourcePath unchanged, so the caller
-// must not assume it owns the returned file
+// writes the plan's cpuset into the services of sourcePath in-place
 func (c *ComposeConfigurator) Apply(
 	plan model.CpuPlan,
-	owner model.OwnerRef,
 	sourcePath string,
-) (preparedPath string, err error) {
+) error {
 	if !plan.HasCpus() {
-		return sourcePath, nil
+		return nil
 	}
 
-	file, err := os.CreateTemp("", fmt.Sprintf(
-		"compose-pinned-%s-%s-*.yaml",
-		sanitizeFileToken(string(owner.Component)),
-		sanitizeFileToken(owner.Deployment),
-	))
+	cleanPath := filepath.Clean(sourcePath)
+	data, err := os.ReadFile(cleanPath)
 	if err != nil {
-		return "", fmt.Errorf("create pinned compose file: %w", err)
+		return fmt.Errorf("read compose file: %w", err)
 	}
 
-	preparedPath = filepath.Clean(file.Name())
-
-	if err := file.Close(); err != nil {
-		removePreparedComposeFile(preparedPath)
-		return "", fmt.Errorf("close pinned compose file: %w", err)
+	var out bytes.Buffer
+	if err := rewriteComposeYaml(bytes.NewReader(data), &out, plan); err != nil {
+		return fmt.Errorf("rewrite compose yaml: %w", err)
 	}
 
-	if err := rewriteComposeFile(sourcePath, preparedPath, plan); err != nil {
-		removePreparedComposeFile(preparedPath)
-		return "", fmt.Errorf("rewrite compose yaml: %w", err)
-	}
-
-	return preparedPath, nil
-}
-
-func removePreparedComposeFile(path string) {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Println("Failed to remove temporary pinned compose file:", path, err)
-	}
-}
-
-func rewriteComposeFile(sourcePath string, targetPath string, plan model.CpuPlan) error {
-	in, err := os.Open(filepath.Clean(sourcePath))
+	tmp, err := os.CreateTemp(filepath.Dir(cleanPath), ".compose-*.yaml")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp compose file: %w", err)
 	}
-	defer in.Close()
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
 
-	out, err := os.Create(filepath.Clean(targetPath))
-	if err != nil {
-		return err
+	if err := os.WriteFile(tmpPath, out.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("write temp compose file: %w", err)
 	}
-
-	rewriteErr := rewriteComposeYaml(in, out, plan)
-	closeErr := out.Close()
-	if rewriteErr != nil {
-		return rewriteErr
+	if err := os.Rename(tmpPath, cleanPath); err != nil {
+		return fmt.Errorf("replace compose file: %w", err)
 	}
 
-	return closeErr
+	return nil
 }
 
 func rewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
@@ -99,134 +82,74 @@ func rewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
 		return fmt.Errorf("read compose file: %w", err)
 	}
 
-	var root yamlv3.Node
-	if err := yamlv3.Unmarshal(data, &root); err != nil {
+	var compose composeFile
+	if err := yamlv3.Unmarshal(data, &compose); err != nil {
 		return fmt.Errorf("parse compose yaml: %w", err)
 	}
 
-	serviceNodes, err := getComposeServiceNodes(&root)
-	if err != nil {
-		return err
+	if err := validator.New().Struct(&compose); err != nil {
+		return fmt.Errorf("validate compose yaml: %w", err)
 	}
 
 	cpuset := plan.CpuSet()
-
-	for serviceName, serviceNode := range serviceNodes {
-		if err := setServiceCpuset(serviceNode, cpuset); err != nil {
-			return fmt.Errorf("set cpuset for service %q: %w", serviceName, err)
+	// Assign the cpu plan to all services in the compose file
+	for name, service := range compose.Services {
+		service.Cpuset = cpuset
+		if err := setEnvironmentVarNode(&service.Environment, ComposeCpuSetEnvVarName, cpuset); err != nil {
+			return fmt.Errorf("set cpuset environment variable for service %q: %w", name, err)
 		}
-
-		if err := setServiceEnvironmentVariable(serviceNode, ComposeCpuSetEnvVarName, cpuset); err != nil {
-			return fmt.Errorf("set cpuset environment variable for service %q: %w", serviceName, err)
-		}
+		compose.Services[name] = service
 	}
 
 	encoder := yamlv3.NewEncoder(out)
 	encoder.SetIndent(2)
-	if err := encoder.Encode(&root); err != nil {
+	if err := encoder.Encode(&compose); err != nil {
 		return fmt.Errorf("encode patched compose yaml: %w", err)
 	}
 
-	return nil
+	return encoder.Close()
 }
 
-// IMPORTANT: we can't safely assume that we will have only one compose service inside a yaml
-// file so we will assume that we want to assign the cpu plan to all the services inside the file
-func getComposeServiceNodes(root *yamlv3.Node) (map[string]*yamlv3.Node, error) {
-	if root == nil || len(root.Content) == 0 {
-		return nil, fmt.Errorf("compose yaml is empty")
-	}
-	doc := root.Content[0]
-	if doc.Kind != yamlv3.MappingNode {
-		return nil, fmt.Errorf("compose yaml root must be a mapping")
+func setEnvironmentVarNode(env *yamlv3.Node, key string, value string) error {
+	if env.Kind == 0 || env.Tag == "!!null" {
+		env.Kind = yamlv3.MappingNode
+		env.Tag = "!!map"
+		env.Value = ""
+		env.Content = nil
 	}
 
-	services := mappingValueByKey(doc, "services")
-	if services == nil || services.Kind != yamlv3.MappingNode {
-		return nil, fmt.Errorf("compose yaml must declare a services mapping")
-	}
-
-	result := make(map[string]*yamlv3.Node)
-	for i := 0; i+1 < len(services.Content); i += 2 {
-		nameNode := services.Content[i]
-		valueNode := services.Content[i+1]
-		result[nameNode.Value] = valueNode
-	}
-	return result, nil
-}
-
-func mappingValueByKey(mapping *yamlv3.Node, key string) *yamlv3.Node {
-	if mapping == nil || mapping.Kind != yamlv3.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == key {
-			return mapping.Content[i+1]
+	switch env.Kind {
+	case yamlv3.MappingNode:
+		for i := 0; i+1 < len(env.Content); i += 2 {
+			if env.Content[i].Value == key {
+				env.Content[i+1].Kind = yamlv3.ScalarNode
+				env.Content[i+1].Tag = "!!str"
+				env.Content[i+1].Value = value
+				return nil
+			}
 		}
-	}
-	return nil
-}
-
-func setOrAppendMappingScalar(mapping *yamlv3.Node, key string, value string) {
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == key {
-			mapping.Content[i+1].Kind = yamlv3.ScalarNode
-			mapping.Content[i+1].Tag = "!!str"
-			mapping.Content[i+1].Value = value
-			return
-		}
-	}
-
-	mapping.Content = append(mapping.Content,
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: key},
-		&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: value},
-	)
-}
-
-func setServiceCpuset(serviceNode *yamlv3.Node, cpuset string) error {
-	if serviceNode.Kind != yamlv3.MappingNode {
-		return fmt.Errorf("service definition must be a mapping")
-	}
-
-	setOrAppendMappingScalar(serviceNode, "cpuset", cpuset)
-	return nil
-}
-
-func setServiceEnvironmentVariable(serviceNode *yamlv3.Node, varName string, varValue string) error {
-	if serviceNode.Kind != yamlv3.MappingNode {
-		return fmt.Errorf("service definition must be a mapping")
-	}
-
-	envNode := mappingValueByKey(serviceNode, "environment")
-	if envNode == nil {
-		envNode = &yamlv3.Node{
-			Kind:    yamlv3.MappingNode,
-			Tag:     "!!map",
-			Content: []*yamlv3.Node{},
-		}
-		serviceNode.Content = append(serviceNode.Content,
-			&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: "environment"},
-			envNode,
+		env.Content = append(env.Content,
+			&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: key},
+			&yamlv3.Node{Kind: yamlv3.ScalarNode, Tag: "!!str", Value: value},
 		)
+		return nil
+	case yamlv3.SequenceNode:
+		prefix := key + "="
+		entry := prefix + value
+		for _, item := range env.Content {
+			if item.Kind == yamlv3.ScalarNode && strings.HasPrefix(item.Value, prefix) {
+				item.Tag = "!!str"
+				item.Value = entry
+				return nil
+			}
+		}
+		env.Content = append(env.Content, &yamlv3.Node{
+			Kind:  yamlv3.ScalarNode,
+			Tag:   "!!str",
+			Value: entry,
+		})
+		return nil
+	default:
+		return fmt.Errorf("unsupported environment node kind: %d", env.Kind)
 	}
-
-	if envNode.Kind != yamlv3.MappingNode {
-		return fmt.Errorf("service environment must be a mapping")
-	}
-
-	setOrAppendMappingScalar(envNode, varName, varValue)
-	return nil
-}
-
-func sanitizeFileToken(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-	cleaned := fileTokenReplacer.ReplaceAllString(value, "-")
-	cleaned = strings.Trim(cleaned, "-")
-	if cleaned == "" {
-		return "unknown"
-	}
-	return cleaned
 }

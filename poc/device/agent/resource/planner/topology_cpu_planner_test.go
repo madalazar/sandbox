@@ -9,7 +9,7 @@ import (
 )
 
 func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
 	l := newCpuPlanningTestLedger("deployment-123")
 
 	tests := []struct {
@@ -53,7 +53,7 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
 		t,
@@ -72,7 +72,7 @@ func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerFailsWhenIsolatedCpusAreExhausted(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
 	l := newCpuPlanningTestLedger("deployment-123")
 
 	for _, component := range []string{"component-a", "component-b"} {
@@ -92,7 +92,7 @@ func TestTopologyCpuPlannerFailsWhenIsolatedCpusAreExhausted(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/cyclictest_compose"},
 		map[int]struct{}{1: {}, 3: {}},
@@ -116,7 +116,7 @@ func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
 
 // A sibling's persisted claim blocks, unlike the component's own.
 func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/caterpillar_compose"},
 		map[int]struct{}{1: {}, 3: {}},
@@ -138,8 +138,8 @@ func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
 	}
 }
 
-func TestTopologyCpuPlannerWithoutIsolatedCpusPlansNothing(t *testing.T) {
-	planner := NewTopologyCpuPlanner(nil)
+func TestTopologyCpuPlannerFailsWithoutIsolatedCpusWhenRequired(t *testing.T) {
+	planner := NewTopologyCpuPlanner(nil, nil)
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
 		t,
@@ -147,10 +147,7 @@ func TestTopologyCpuPlannerWithoutIsolatedCpusPlansNothing(t *testing.T) {
 		isolatedCpuRequirement("cyclictest_compose"),
 		newCpuPlanningTestLedger("deployment-123"),
 	))
-	if err != nil {
-		t.Fatalf("PlanCpu() error = %v", err)
-	}
-	if got.HasCpus() {
-		t.Fatalf("PlanCpu() = %#v, want an empty plan", got.Cpus)
+	if err == nil {
+		t.Fatalf("PlanCpu() = %#v, want an error when isolated cores are required on a host without any", got)
 	}
 }

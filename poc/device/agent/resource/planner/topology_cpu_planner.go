@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
+	"go.uber.org/zap"
 )
 
 var _ CpuPlanner = TopologyCpuPlanner{}
@@ -12,15 +13,16 @@ var _ CpuPlanner = TopologyCpuPlanner{}
 // It is the compose runtime's cpu planner
 type TopologyCpuPlanner struct {
 	isolated []int
+	log      *zap.SugaredLogger
 }
 
-func NewTopologyCpuPlanner(isolated []int) TopologyCpuPlanner {
-	if len(isolated) == 0 {
-		fmt.Println("[WARNING] no isolated cores found in host's topology;  cpu planner might not work correctly")
+func NewTopologyCpuPlanner(isolated []int, log *zap.SugaredLogger) TopologyCpuPlanner {
+	if log == nil {
+		log = zap.NewNop().Sugar()
 	}
 
-	fmt.Printf("[DEBUG] iso cores from topology: %v \n", isolated)
-	return TopologyCpuPlanner{isolated: isolated}
+	log.Debugw("isolated cores from topology", "isolated", isolated)
+	return TopologyCpuPlanner{isolated: isolated, log: log}
 }
 
 // picks the isolated cpu indices the component gets, then reserves them in a single
@@ -28,7 +30,7 @@ func NewTopologyCpuPlanner(isolated []int) TopologyCpuPlanner {
 func (p TopologyCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, error) {
 	requirements := request.Requirements
 
-	if !requirements.HasIsolatedCores() || len(p.isolated) == 0 {
+	if !requirements.HasIsolatedCores() {
 		return model.CpuPlan{Component: requirements.Component}, nil
 	}
 
@@ -40,12 +42,12 @@ func (p TopologyCpuPlanner) PlanCpu(request CpuPlanningRequest) (model.CpuPlan, 
 		}
 
 		if request.Ledger.IsCpuAvailable(cpu, requirements.Component) {
-			fmt.Printf("**** cpu %d: is available for use from the ledger\n", cpu)
+			p.log.Debugw("cpu is available for use from the ledger", "cpu", cpu)
 			selected = append(selected, cpu)
 		}
 	}
 
-	fmt.Printf("**** picked cores %v from host topology for component %s\n", selected, requirements.Component)
+	p.log.Debugw("picked cores from host topology", "cpus", selected, "component", requirements.Component)
 
 	if len(selected) < needed {
 		return model.CpuPlan{}, fmt.Errorf(
