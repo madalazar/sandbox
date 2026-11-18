@@ -105,6 +105,11 @@ func TestRewriteComposeYamlRejectsInvalidServices(t *testing.T) {
 `,
 		},
 		{
+			name: "empty services map",
+			source: `services: {}
+`,
+		},
+		{
 			name: "services is not a mapping",
 			source: `services: "not-a-map"
 `,

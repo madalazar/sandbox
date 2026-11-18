@@ -17,10 +17,6 @@ type TopologyCpuPlanner struct {
 }
 
 func NewTopologyCpuPlanner(isolated []int, log *zap.SugaredLogger) TopologyCpuPlanner {
-	if log == nil {
-		log = zap.NewNop().Sugar()
-	}
-
 	log.Debugw("isolated cores from topology", "isolated", isolated)
 	return TopologyCpuPlanner{isolated: isolated, log: log}
 }

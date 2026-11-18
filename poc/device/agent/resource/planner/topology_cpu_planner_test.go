@@ -6,10 +6,11 @@ import (
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
+	"go.uber.org/zap"
 )
 
 func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, zap.NewNop().Sugar())
 	l := newCpuPlanningTestLedger("deployment-123")
 
 	tests := []struct {
@@ -53,7 +54,7 @@ func TestTopologyCpuPlannerPlanCpu(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, zap.NewNop().Sugar())
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
 		t,
@@ -72,7 +73,7 @@ func TestTopologyCpuPlannerIgnoresRequirementName(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerFailsWhenIsolatedCpusAreExhausted(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, zap.NewNop().Sugar())
 	l := newCpuPlanningTestLedger("deployment-123")
 
 	for _, component := range []string{"component-a", "component-b"} {
@@ -92,7 +93,7 @@ func TestTopologyCpuPlannerFailsWhenIsolatedCpusAreExhausted(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, zap.NewNop().Sugar())
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/cyclictest_compose"},
 		map[int]struct{}{1: {}, 3: {}},
@@ -116,7 +117,7 @@ func TestTopologyCpuPlannerReusesOwnPersistedCpus(t *testing.T) {
 
 // A sibling's persisted claim blocks, unlike the component's own.
 func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
-	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, nil)
+	planner := NewTopologyCpuPlanner(testIsolatedCpuIndices, zap.NewNop().Sugar())
 	snapshot := ledger.NewAllocationSnapshot(
 		map[int]string{1: "deployment-123/caterpillar_compose"},
 		map[int]struct{}{1: {}, 3: {}},
@@ -139,7 +140,7 @@ func TestTopologyCpuPlannerSkipsSiblingPersistedCpus(t *testing.T) {
 }
 
 func TestTopologyCpuPlannerFailsWithoutIsolatedCpusWhenRequired(t *testing.T) {
-	planner := NewTopologyCpuPlanner(nil, nil)
+	planner := NewTopologyCpuPlanner(nil, zap.NewNop().Sugar())
 
 	got, err := planner.PlanCpu(newCpuPlanningRequest(
 		t,

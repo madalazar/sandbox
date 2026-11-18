@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/go-playground/validator/v10"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	yamlv3 "gopkg.in/yaml.v3"
 )
@@ -16,8 +15,15 @@ import (
 const ComposeCpuSetEnvVarName = "TEST_CPUSET"
 
 type composeFile struct {
-	Services map[string]composeService `yaml:"services" validate:"required,min=1,dive"`
+	Services map[string]composeService `yaml:"services"`
 	Extra    map[string]yamlv3.Node    `yaml:",inline"`
+}
+
+func (c composeFile) validate() error {
+	if len(c.Services) == 0 {
+		return fmt.Errorf("compose file must define at least one service")
+	}
+	return nil
 }
 
 type composeService struct {
@@ -87,7 +93,7 @@ func rewriteComposeYaml(in io.Reader, out io.Writer, plan model.CpuPlan) error {
 		return fmt.Errorf("parse compose yaml: %w", err)
 	}
 
-	if err := validator.New().Struct(&compose); err != nil {
+	if err := compose.validate(); err != nil {
 		return fmt.Errorf("validate compose yaml: %w", err)
 	}
 
