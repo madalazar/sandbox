@@ -2,23 +2,20 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-
-	"go.uber.org/zap"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
@@ -47,6 +44,10 @@ type BalloonPolicyInformer struct {
 	stopOnce  sync.Once
 	// for the poc we expect only one nri balloon resource policy to be stored in the cache
 	cache atomic.Pointer[model.ParsedBalloonPolicy]
+}
+
+type rawBalloonTypesConfig struct {
+	BalloonTypes []model.ParsedBalloonType `json:"balloonTypes"`
 }
 
 // builds the informer against the given kubeconfig, or against the in-cluster config
@@ -88,9 +89,7 @@ func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*B
 			// once we decide to suppport multiple nri resource policies this needs to be updated
 			// as we clear the cache completely when a policy is deleted
 			b.cache.Store(nil)
-			if b.log != nil {
-				b.log.Infow("nri balloons resource policy deleted; cleared local policy cache")
-			}
+			b.log.Infow("nri balloons resource policy deleted; cleared local policy cache")
 		},
 	})
 
@@ -126,82 +125,56 @@ func (b *BalloonPolicyInformer) Stop() {
 // or nil when no policy is present
 // callers cannot mutate the cached policy
 func (b *BalloonPolicyInformer) Parsed() *model.ParsedBalloonPolicy {
-	return cloneParsedBalloonPolicy(b.cache.Load())
+	return b.cache.Load().DeepCopy()
 }
 
 func (b *BalloonPolicyInformer) selectAndParse() {
 	items := b.informer.GetStore().List()
 	if len(items) == 0 {
 		b.cache.Store(nil)
-		if b.log != nil {
-			b.log.Infow("no nri resource balloon crs found; continuing without NRI annotations")
-		}
+		b.log.Infow("no nri resource balloon crs found; continuing without NRI annotations")
 		return
 	}
-	if len(items) > 1 && b.log != nil {
+	if len(items) > 1 {
 		b.log.Warnw("multiple nri resource balloon crs found; using first object", "count", len(items))
 	}
 
 	obj, ok := items[0].(*unstructured.Unstructured)
 	if !ok {
 		b.cache.Store(nil)
-		if b.log != nil {
-			b.log.Warnw("Unexpected informer object type for BalloonsPolicy; cache cleared")
-		}
+		b.log.Warnw("Unexpected informer object type for BalloonsPolicy; cache cleared")
 		return
 	}
 
 	parsed, err := parseBalloonsPolicy(obj)
 	if err != nil {
 		b.cache.Store(nil)
-		if b.log != nil {
-			b.log.Warnw("failed to parse nri resource balloon policy ; cache cleared", "name", obj.GetName(), "err", err)
-		}
+		b.log.Warnw("failed to parse nri resource balloon policy ; cache cleared", "name", obj.GetName(), "err", err)
 		return
 	}
 
 	b.cache.Store(parsed)
-	if b.log != nil {
-		b.log.Debugw("updated nri resource balloon policy cache", "name", parsed.Name, "balloonTypes", len(parsed.BalloonTypes))
-	}
+	b.log.Debugw("updated nri resource balloon policy cache", "name", parsed.Name, "balloonTypes", len(parsed.BalloonTypes))
 }
 
-// TODO: investigate if there are wasys of cloning an object without writing own method
-func cloneParsedBalloonPolicy(p *model.ParsedBalloonPolicy) *model.ParsedBalloonPolicy {
-	if p == nil {
-		return nil
-	}
-	out := &model.ParsedBalloonPolicy{
-		Name:      p.Name,
-		Namespace: p.Namespace,
-	}
-	if p.BalloonTypes != nil {
-		out.BalloonTypes = make([]model.ParsedBalloonType, len(p.BalloonTypes))
-		for i, bt := range p.BalloonTypes {
-			clonedBt := model.ParsedBalloonType{
-				Name:           bt.Name,
-				PreferCoreType: bt.PreferCoreType,
-			}
-			if bt.PreferIsolCpus != nil {
-				v := *bt.PreferIsolCpus
-				clonedBt.PreferIsolCpus = &v
-			}
-			if bt.MinCpus != nil {
-				v := *bt.MinCpus
-				clonedBt.MinCpus = &v
-			}
-			if bt.MaxCpus != nil {
-				v := *bt.MaxCpus
-				clonedBt.MaxCpus = &v
-			}
-			if bt.PreferCloseToDevices != nil {
-				clonedBt.PreferCloseToDevices = make([]string, len(bt.PreferCloseToDevices))
-				copy(clonedBt.PreferCloseToDevices, bt.PreferCloseToDevices)
-			}
-			out.BalloonTypes[i] = clonedBt
+func (r *rawBalloonTypesConfig) validate() error {
+	for idx := range r.BalloonTypes {
+		bt := &r.BalloonTypes[idx]
+		bt.Name = strings.TrimSpace(bt.Name)
+		if bt.Name == "" {
+			return fmt.Errorf("balloonTypes[%d] has empty or missing name", idx)
+		}
+		if bt.MinCpus != nil && *bt.MinCpus < 0 {
+			return fmt.Errorf("balloonTypes[%d] %q has negative minCPUs: %d", idx, bt.Name, *bt.MinCpus)
+		}
+		if bt.MaxCpus != nil && *bt.MaxCpus < 0 {
+			return fmt.Errorf("balloonTypes[%d] %q has negative maxCPUs: %d", idx, bt.Name, *bt.MaxCpus)
+		}
+		if bt.MinCpus != nil && bt.MaxCpus != nil && *bt.MinCpus > *bt.MaxCpus {
+			return fmt.Errorf("balloonTypes[%d] %q has minCPUs (%d) greater than maxCPUs (%d)", idx, bt.Name, *bt.MinCpus, *bt.MaxCpus)
 		}
 	}
-	return out
+	return nil
 }
 
 func parseBalloonsPolicy(obj *unstructured.Unstructured) (*model.ParsedBalloonPolicy, error) {
@@ -214,72 +187,25 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*model.ParsedBalloonPo
 		return nil, fmt.Errorf("policy config section not found")
 	}
 
-	out := &model.ParsedBalloonPolicy{
-		Name:      obj.GetName(),
-		Namespace: obj.GetNamespace(),
-	}
-
-	if rawTypes, ok := cfg["balloonTypes"].([]any); ok {
-		out.BalloonTypes = make([]model.ParsedBalloonType, 0, len(rawTypes))
-		for idx, item := range rawTypes {
-			m, ok := item.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("balloonTypes[%d] is not a map: %T", idx, item)
-			}
-
-			p := model.ParsedBalloonType{}
-			if v, ok := m["name"].(string); ok {
-				p.Name = strings.TrimSpace(v)
-			}
-			if p.Name == "" {
-				return nil, fmt.Errorf("balloonTypes[%d] has empty or missing name", idx)
-			}
-
-			if v, ok := m["preferCoreType"].(string); ok {
-				p.PreferCoreType = v
-			}
-			if v, ok := m["preferIsolCpus"].(bool); ok {
-				vCopy := v
-				p.PreferIsolCpus = &vCopy
-			}
-			var err error
-			if p.MinCpus, err = parseNonNegativeCPUField(m, "minCPUs", p.Name, idx); err != nil {
-				return nil, err
-			}
-			if p.MaxCpus, err = parseNonNegativeCPUField(m, "maxCPUs", p.Name, idx); err != nil {
-				return nil, err
-			}
-			if p.MinCpus != nil && p.MaxCpus != nil && *p.MinCpus > *p.MaxCpus {
-				return nil, fmt.Errorf("balloonTypes[%d] %q has minCPUs (%d) greater than maxCPUs (%d)", idx, p.Name, *p.MinCpus, *p.MaxCpus)
-			}
-			if arr, ok := m["preferCloseToDevices"].([]any); ok {
-				for _, path := range arr {
-					if s, ok := path.(string); ok {
-						p.PreferCloseToDevices = append(p.PreferCloseToDevices, s)
-					}
-				}
-			}
-
-			out.BalloonTypes = append(out.BalloonTypes, p)
+	var raw rawBalloonTypesConfig
+	if rawBalloons, exists := cfg["balloonTypes"]; exists && rawBalloons != nil {
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(
+			map[string]any{"balloonTypes": rawBalloons},
+			&raw,
+		); err != nil {
+			return nil, fmt.Errorf("failed to decode policy config: %w", err)
 		}
 	}
 
-	return out, nil
-}
+	if err := raw.validate(); err != nil {
+		return nil, err
+	}
 
-func parseNonNegativeCPUField(m map[string]any, fieldName, balloonName string, idx int) (*int64, error) {
-	raw, exists := m[fieldName]
-	if !exists {
-		return nil, nil
-	}
-	val, ok := asInt64(raw)
-	if !ok {
-		return nil, fmt.Errorf("balloonTypes[%d] %q has invalid %s value: %v", idx, balloonName, fieldName, raw)
-	}
-	if val < 0 {
-		return nil, fmt.Errorf("balloonTypes[%d] %q has negative %s: %d", idx, balloonName, fieldName, val)
-	}
-	return &val, nil
+	return &model.ParsedBalloonPolicy{
+		Name:         obj.GetName(),
+		Namespace:    obj.GetNamespace(),
+		BalloonTypes: raw.BalloonTypes,
+	}, nil
 }
 
 func extractPolicyConfig(root map[string]any) map[string]any {
@@ -304,50 +230,6 @@ func extractPolicyConfig(root map[string]any) map[string]any {
 	}
 
 	return nil
-}
-
-func asInt64(v any) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int8:
-		return int64(n), true
-	case int16:
-		return int64(n), true
-	case int32:
-		return int64(n), true
-	case int64:
-		return n, true
-	case uint:
-		return int64(n), true
-	case uint8:
-		return int64(n), true
-	case uint16:
-		return int64(n), true
-	case uint32:
-		return int64(n), true
-	case uint64:
-		if n <= math.MaxInt64 {
-			return int64(n), true
-		}
-	case float32:
-		if float32(int64(n)) == n {
-			return int64(n), true
-		}
-	case float64:
-		if float64(int64(n)) == n {
-			return int64(n), true
-		}
-	case json.Number:
-		if i, err := n.Int64(); err == nil {
-			return i, true
-		}
-	case string:
-		if i, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64); err == nil {
-			return i, true
-		}
-	}
-	return 0, false
 }
 
 func buildKubeRestConfig(kubeconfigPath string) (*rest.Config, error) {

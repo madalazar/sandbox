@@ -1,8 +1,6 @@
 package resource
 
 import (
-	"encoding/json"
-	"math"
 	"reflect"
 	"testing"
 
@@ -28,7 +26,7 @@ func TestParseBalloonsPolicy(t *testing.T) {
 				"config": map[string]interface{}{
 					"balloonTypes": []interface{}{
 						map[string]interface{}{
-							"name":                 "isolated-balloon",
+							"name":                 "  isolated-balloon  ",
 							"preferCoreType":       "performance",
 							"preferIsolCpus":       true,
 							"minCPUs":              1,
@@ -142,39 +140,61 @@ func TestParseBalloonsPolicyErrors(t *testing.T) {
 	if _, err := parseBalloonsPolicy(objMinGreaterThanMax); err == nil {
 		t.Fatal("expected error for minCPUs > maxCPUs, got nil")
 	}
-}
 
-func TestAsInt64(t *testing.T) {
-	tests := []struct {
-		input interface{}
-		want  int64
-		ok    bool
-	}{
-		{int(5), 5, true},
-		{int8(6), 6, true},
-		{int16(7), 7, true},
-		{int32(10), 10, true},
-		{int64(15), 15, true},
-		{uint(8), 8, true},
-		{uint8(9), 9, true},
-		{uint16(10), 10, true},
-		{uint32(11), 11, true},
-		{uint64(12), 12, true},
-		{uint64(math.MaxUint64), 0, false},
-		{float32(20), 20, true},
-		{float64(25), 25, true},
-		{float64(2.5), 0, false},
-		{json.Number("42"), 42, true},
-		{"100", 100, true},
-		{"not-a-number", 0, false},
-		{nil, 0, false},
+	// Negative maxCPUs
+	objNegativeMax := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"config": map[string]interface{}{
+				"balloonTypes": []interface{}{
+					map[string]interface{}{"name": "b1", "maxCPUs": -1},
+				},
+			},
+		},
+	}
+	if _, err := parseBalloonsPolicy(objNegativeMax); err == nil {
+		t.Fatal("expected error for negative maxCPUs, got nil")
 	}
 
-	for _, tt := range tests {
-		got, ok := asInt64(tt.input)
-		if ok != tt.ok || got != tt.want {
-			t.Errorf("asInt64(%v) = (%d, %v), want (%d, %v)", tt.input, got, ok, tt.want, tt.ok)
-		}
+	// Fractional CPU count
+	objFractionalCPU := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"config": map[string]interface{}{
+				"balloonTypes": []interface{}{
+					map[string]interface{}{"name": "b1", "minCPUs": 2.5},
+				},
+			},
+		},
+	}
+	if _, err := parseBalloonsPolicy(objFractionalCPU); err == nil {
+		t.Fatal("expected error for fractional minCPUs, got nil")
+	}
+
+	// Non-numeric CPU count
+	objStringCPU := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"config": map[string]interface{}{
+				"balloonTypes": []interface{}{
+					map[string]interface{}{"name": "b1", "minCPUs": "not-a-number"},
+				},
+			},
+		},
+	}
+	if _, err := parseBalloonsPolicy(objStringCPU); err == nil {
+		t.Fatal("expected error for non-numeric minCPUs, got nil")
+	}
+
+	// Wrong type for preferIsolCpus
+	objBadBool := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"config": map[string]interface{}{
+				"balloonTypes": []interface{}{
+					map[string]interface{}{"name": "b1", "preferIsolCpus": "yes"},
+				},
+			},
+		},
+	}
+	if _, err := parseBalloonsPolicy(objBadBool); err == nil {
+		t.Fatal("expected error for non-boolean preferIsolCpus, got nil")
 	}
 }
 
