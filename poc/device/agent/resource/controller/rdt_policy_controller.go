@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
 )
@@ -27,15 +29,11 @@ const (
 	// Condition error messages
 	errFmtPolicyUpdateNotSynced = "balloon policy cache did not reflect RDT updates for component %q and class %q"
 	errFmtPolicyRemoveNotSynced = "balloon policy cache did not reflect RDT removals for component %q and class %q"
-)
 
-var defaultPollDelays = []time.Duration{
-	100 * time.Millisecond,
-	200 * time.Millisecond,
-	400 * time.Millisecond,
-	800 * time.Millisecond,
-	1600 * time.Millisecond,
-}
+	// Informer cache sync polling settings
+	policySyncPollInterval = 100 * time.Millisecond
+	policySyncTimeout      = 3 * time.Second
+)
 
 // manages kubernetes rdt cache classes via nri balloon resource policies
 type RdtPolicyController struct {
@@ -265,22 +263,15 @@ func (c *RdtPolicyController) waitForResourcePolicyCondition(
 		return nil
 	}
 
-	for idx, delay := range defaultPollDelays {
-		policy := c.reader.Parsed()
-		if condition(policy) {
-			return nil
-		}
-
-		if idx == len(defaultPollDelays)-1 {
-			break
-		}
-
-		select {
-		case <-ctx.Done():
+	err := wait.PollUntilContextTimeout(ctx, policySyncPollInterval, policySyncTimeout, true, func(context.Context) (bool, error) {
+		return condition(c.reader.Parsed()), nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
 			return fmt.Errorf("timed out while waiting for balloons policy cache refresh: %w", ctx.Err())
-		case <-time.After(delay):
 		}
+		return fmt.Errorf(failureFormat, componentName, className)
 	}
 
-	return fmt.Errorf(failureFormat, componentName, className)
+	return nil
 }
