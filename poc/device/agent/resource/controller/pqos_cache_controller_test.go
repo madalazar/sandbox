@@ -143,6 +143,42 @@ func TestPqosCacheControllerApply(t *testing.T) {
 			t.Fatalf("expected error containing 'cannot use reserved default pqos class', got %v", err)
 		}
 	})
+
+	t.Run("no L3 caches in host topology", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, nil, 8)
+
+		err := ctrl.Apply(context.Background(), res)
+		if err == nil {
+			t.Fatal("expected error when host has no L3 caches, got nil")
+		}
+		if !strings.Contains(err.Error(), "host has no L3 caches") {
+			t.Fatalf("expected error containing 'host has no L3 caches', got %v", err)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected 0 runner calls, got %d", len(runner.calls))
+		}
+	})
+
+	t.Run("unknown cache id in host topology", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, caches, 8)
+		resUnknownCache := res
+		alloc := *res.L3CacheAssignment
+		alloc.CacheId = "99"
+		resUnknownCache.L3CacheAssignment = &alloc
+
+		err := ctrl.Apply(context.Background(), resUnknownCache)
+		if err == nil {
+			t.Fatal("expected error when cache id is not in host topology, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found in host topology") {
+			t.Fatalf("expected error containing 'not found in host topology', got %v", err)
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected 0 runner calls, got %d", len(runner.calls))
+		}
+	})
 }
 
 func TestPqosCacheControllerVerify(t *testing.T) {

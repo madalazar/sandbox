@@ -28,8 +28,8 @@ func (w WayInterval) Overlaps(other WayInterval) bool {
 // returns an error if the mask is invalid, empty/zero, out of bounds,
 // or has non-contiguous set bits (e.g. 0xF00F)
 func ParseContiguousWayMask(mask string, maxWays int64) (WayInterval, error) {
-	if maxWays <= 0 || maxWays > 64 {
-		return WayInterval{}, fmt.Errorf("maxWays must be in (0, 64], got %d", maxWays)
+	if maxWays <= 0 {
+		return WayInterval{}, fmt.Errorf("maxWays must be > 0, got %d", maxWays)
 	}
 
 	trimmed := strings.TrimSpace(mask)

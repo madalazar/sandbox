@@ -64,6 +64,12 @@ func (c *PqosCacheController) Apply(ctx context.Context, reservation model.Reser
 	if cacheID == "" {
 		return fmt.Errorf("component %q has empty cache id", componentName)
 	}
+	if len(c.caches) == 0 {
+		return fmt.Errorf("component %q requested L3 cache %q, but host has no L3 caches", componentName, cacheID)
+	}
+	if _, ok := c.findCache(cacheID); !ok {
+		return fmt.Errorf("component %q cache id %q not found in host topology", componentName, cacheID)
+	}
 
 	mask := strings.TrimSpace(alloc.Mask)
 	if mask == "" {
@@ -107,14 +113,8 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 		return nil
 	}
 
-	var cacheInfo *types.HostTopologyCache
-	for i := range c.caches {
-		if c.caches[i].Id == cacheId {
-			cacheInfo = &c.caches[i]
-			break
-		}
-	}
-	if cacheInfo == nil {
+	cacheInfo, ok := c.findCache(cacheId)
+	if !ok {
 		return fmt.Errorf("component %q cache id %q not found in topology for pqos reset", componentName, cacheId)
 	}
 
@@ -131,6 +131,15 @@ func (c *PqosCacheController) Release(ctx context.Context, reservation model.Res
 	}
 
 	return nil
+}
+
+func (c *PqosCacheController) findCache(cacheID string) (*types.HostTopologyCache, bool) {
+	for i := range c.caches {
+		if c.caches[i].Id == cacheID {
+			return &c.caches[i], true
+		}
+	}
+	return nil, false
 }
 
 func fullWayMaskHex(ways int64) (string, error) {
