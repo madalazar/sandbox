@@ -901,7 +901,15 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	return envVars
 }
 
-// needed to properly convert integers with more > 6 digits
+// when using a positiveInteger type for parameters in margo.yaml
+// with more than 6 digits the value that is written into the
+// corresponding docker compose file / helm chart value was
+// the corresponding scientific notation i.e "1e+06"
+// this is due to how parser.go's ParseAppDeploymentFromBase64
+// deserialization is implemented; there is also no constraint/
+// validation on the application side to fail the the deployment
+// if string int parameters don't have quotes
+// methods like the one below for both compose and helm are neeed
 func (dm *DeploymentManager) formatEnvValue(value any) string {
 	switch v := value.(type) {
 	case float64:
