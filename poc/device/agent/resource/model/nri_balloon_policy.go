@@ -63,6 +63,7 @@ type ParsedBalloonPolicy struct {
 }
 
 // represents the partitions and classes parsed from a balloon policy
+// +k8s:deepcopy-gen=true
 type RdtConfig struct {
 	Partitions map[string]struct{}
 	Classes    map[string]struct{}

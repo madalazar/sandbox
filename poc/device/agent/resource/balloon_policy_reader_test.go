@@ -301,3 +301,59 @@ func TestParseBalloonsPolicyWithRDT(t *testing.T) {
 		t.Errorf("expected policy to not have class comp-b_class")
 	}
 }
+
+func TestParseBalloonsPolicyUpstreamCRDLayout(t *testing.T) {
+	// Upstream CRD places balloonTypes and control directly under spec (no spec.config wrapper)
+	// and allows RDT-only policies without balloonTypes as well as nil partition values.
+	rdtOnly := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "config.nri/v1alpha1",
+			"kind":       "BalloonsPolicy",
+			"metadata": map[string]any{
+				"name":      "default",
+				"namespace": "kube-system",
+			},
+			"spec": map[string]any{
+				"control": map[string]any{
+					"rdt": map[string]any{
+						"partitions": map[string]any{
+							"fullCache": nil,
+							"comp-a": map[string]any{
+								"classes": map[string]any{
+									"comp-a_class": map[string]any{},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	policy, err := parseBalloonsPolicy(rdtOnly)
+	if err != nil {
+		t.Fatalf("parseBalloonsPolicy() error = %v", err)
+	}
+	if !policy.HasPartition("fullCache") || !policy.HasPartition("comp-a") || !policy.HasClass("comp-a_class") {
+		t.Errorf("unexpected RDT config: %+v", policy.RdtConfig)
+	}
+
+	// Malformed control should not wipe valid balloonTypes
+	badControl := &unstructured.Unstructured{
+		Object: map[string]any{
+			"spec": map[string]any{
+				"balloonTypes": []any{
+					map[string]any{"name": "b1", "minCPUs": float64(2)},
+				},
+				"control": "invalid-control",
+			},
+		},
+	}
+	policy, err = parseBalloonsPolicy(badControl)
+	if err != nil {
+		t.Fatalf("parseBalloonsPolicy() with bad control error = %v", err)
+	}
+	if len(policy.BalloonTypes) != 1 || *policy.BalloonTypes[0].MinCpus != 2 {
+		t.Errorf("expected balloonTypes to be preserved, got %+v", policy.BalloonTypes)
+	}
+}
