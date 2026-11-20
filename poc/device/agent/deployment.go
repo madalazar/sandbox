@@ -866,7 +866,7 @@ func (dm *DeploymentManager) extractComponentDeviceConstraints(
 	return component.DeviceConstraints
 }
 
-// Helper function to convert parameters to environment variables
+// helper function to convert parameters to environment variables
 func (dm *DeploymentManager) convertParametersToEnvVars(
 	params map[string]any,
 	componentName string,
