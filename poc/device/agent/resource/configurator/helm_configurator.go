@@ -1,8 +1,13 @@
 package configurator
 
 import (
+	"errors"
+
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
+
+// marks a contract whose body lands in a later commit
+var errNotImplemented = errors.New("not implemented")
 
 // places a pod into an NRI balloon
 const BalloonPodAnnotationKey = "balloon.balloons.resource-policy.nri.io/pod"
