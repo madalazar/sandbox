@@ -32,7 +32,7 @@ func newCpuPlanningTestLedger(deploymentId string) *ledger.AllocationLedger {
 		isolated[idx] = struct{}{}
 	}
 
-	return ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, isolated), deploymentId)
+	return ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, isolated, nil), deploymentId, model.CacheCapacity{}, nil)
 }
 
 func isolatedCpuRequirement(name string) *sbi.RequiredResources {
