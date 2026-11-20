@@ -15,6 +15,7 @@ import (
 	"github.com/kr/pretty"
 	"github.com/margo/sandbox/poc/device/agent/constant"
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/operation"
 	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
@@ -35,7 +36,7 @@ type DeploymentManagerIfc interface {
 type DeploymentManager struct {
 	database      database.DatabaseIfc
 	helmClient    *workloads.HelmClient
-	composeClient *workloads.DockerComposeClient
+	composeClient *operation.DockerComposeClient
 	capabilities  *sbi.DeviceCapabilitiesManifest
 	policyReader  model.BalloonPolicyReader
 	log           *zap.SugaredLogger
@@ -49,7 +50,7 @@ func NewDeploymentManager(
 	db database.DatabaseIfc,
 	capabilities *sbi.DeviceCapabilitiesManifest,
 	helmClient *workloads.HelmClient,
-	composeClient *workloads.DockerComposeCliClient,
+	composeClient *operation.DockerComposeClient,
 	policyReader model.BalloonPolicyReader,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,

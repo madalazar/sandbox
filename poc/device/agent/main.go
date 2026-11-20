@@ -87,7 +87,7 @@ func NewAgent(configPath string) (*Agent, error) {
 
 	opts := []Option{}
 	var helmClient *workloads.HelmClient
-	var composeClient *workloads.DockerComposeCliClient
+	var composeClient *operation.DockerComposeClient
 	var balloonPolicyInformer *resource.BalloonPolicyInformer
 	for _, runtime := range cfg.Runtimes {
 		if runtime.Kubernetes != nil {
@@ -325,6 +325,16 @@ func (a *Agent) Start() error {
 		}
 	}
 
+	if a.balloonPolicyInformer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := a.balloonPolicyInformer.Start(ctx); err != nil {
+			a.log.Errorw("balloon policy informer failed initial sync", "err", err)
+			return fmt.Errorf("balloon policy informer failed initial sync: %w", err)
+		}
+	}
+
 	// 3. Start all components
 	a.statusReporter.Start()
 	a.deployer.Start()
@@ -346,6 +356,10 @@ func (a *Agent) Start() error {
 func (a *Agent) Stop() error {
 	a.log.Info("Stopping Workload Fleet Management Client")
 	a.tbCacher.Stop()
+
+	if a.balloonPolicyInformer != nil {
+		a.balloonPolicyInformer.Stop()
+	}
 
 	if a.balloonPolicyInformer != nil {
 		a.balloonPolicyInformer.Stop()
