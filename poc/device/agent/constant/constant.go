@@ -10,6 +10,7 @@ const (
 	DeploymentChangeTypeComponentPhaseChanged DeploymentRecordChangeType = "COMPONENT-PHASE-CHANGED"
 	DeploymentChangeTypeDesiredStateAdded     DeploymentRecordChangeType = "DESIRED-STATE-ADDED"
 	DeploymentChangeTypeCurrentStateAdded     DeploymentRecordChangeType = "CURRENT-STATE-ADDED"
+	DeploymentChangeTypeAllocationsChanged    DeploymentRecordChangeType = "ALLOCATIONS-CHANGED"
 )
 
 type Phase string

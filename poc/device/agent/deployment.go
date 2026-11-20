@@ -12,6 +12,7 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/constant"
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/operation"
+	"github.com/margo/sandbox/poc/device/agent/types"
 	"github.com/margo/sandbox/shared-lib/constraints"
 	"github.com/margo/sandbox/shared-lib/workloads"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
@@ -31,6 +32,7 @@ type DeploymentManager struct {
 	capabilities  *sbi.DeviceCapabilitiesManifest
 	log           *zap.SugaredLogger
 	stopChan      chan struct{}
+	hostTopology  types.HostTopology
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
 }
@@ -40,12 +42,14 @@ func NewDeploymentManager(
 	capabilities *sbi.DeviceCapabilitiesManifest,
 	helmClient *workloads.HelmClient,
 	composeClient *operation.DockerComposeClient,
+	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
 	return &DeploymentManager{
 		database:       db,
 		helmClient:     helmClient,
 		composeClient:  composeClient,
+		hostTopology:   hostTopology,
 		log:            log,
 		capabilities:   capabilities,
 		stopChan:       make(chan struct{}),

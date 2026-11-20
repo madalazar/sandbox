@@ -29,6 +29,22 @@ type AppDeploymentState struct {
 	URL         *string   `json:"url,omitempty"`
 }
 
+// this is one deployment's complete holdings, keyed by component name
+// written as a whole: SetAllocations replaces, it does not merge
+type Allocations struct {
+	Cpus map[string][]int
+}
+
+func (a Allocations) clone() Allocations {
+	cloned := Allocations{Cpus: make(map[string][]int, len(a.Cpus))}
+	for component, cpus := range a.Cpus {
+		copied := make([]int, len(cpus))
+		copy(copied, cpus)
+		cloned.Cpus[component] = copied
+	}
+	return cloned
+}
+
 type DeploymentRecord struct {
 	AppID                  string
 	DeploymentID           string
@@ -38,6 +54,7 @@ type DeploymentRecord struct {
 	DesiredState           *AppDeploymentState
 	CurrentState           *AppDeploymentState
 	ComponentViseStatus    map[string]sbi.ComponentStatus
+	Allocations            Allocations
 	Phase                  constant.Phase // "deploying", "running", "failed", "removing", "removed", "pending"
 	Message                string
 	LastUpdated            time.Time
@@ -90,6 +107,10 @@ type DatabaseIfc interface {
 	SetCurrentState(deploymentId string, state AppDeploymentState)
 	SetPhase(deploymentId string, phase constant.Phase, message string)
 	SetComponentStatus(deploymentId, componentName string, status sbi.ComponentStatus)
+	SetAllocations(deploymentId string, allocations Allocations) error
+	ClearComponentAllocations(deploymentId, componentName string) error
+	GetAllocations(deploymentId string) (Allocations, error)
+	AllocatedCpus() map[int]string
 	GetDeployment(deploymentId string) (*DeploymentRecord, error)
 	ListDeployments() []*DeploymentRecord
 	RemoveDeployment(deploymentId string)
@@ -493,8 +514,11 @@ func (db *Database) SetDesiredState(deploymentId string, state AppDeploymentStat
 			AppID:               deploymentId,
 			DeploymentID:        deploymentId,
 			ComponentViseStatus: make(map[string]sbi.ComponentStatus),
-			Phase:               constant.PhasePending,
-			LastUpdated:         time.Now(),
+			Allocations: Allocations{
+				Cpus: make(map[string][]int),
+			},
+			Phase:       constant.PhasePending,
+			LastUpdated: time.Now(),
 		}
 	}
 
@@ -570,6 +594,81 @@ func (db *Database) SetComponentStatus(
 
 	// Notify subscribers so StatusReporter can re-report with updated component status
 	db.notify(deploymentId, record, constant.DeploymentChangeTypeComponentPhaseChanged)
+}
+
+// replaces a deployment's cpu holdings in a single write, so there is no
+// window in which the record shows a partially planned deployment
+func (db *Database) SetAllocations(deploymentId string, allocations Allocations) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	record.Allocations = allocations.clone()
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, constant.DeploymentChangeTypeAllocationsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
+// drops one component's cpu holdings under the same lock that
+// reads them, so a concurrent release of a sibling cannot reinstate it
+func (db *Database) ClearComponentAllocations(deploymentId, componentName string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	if record.Allocations.Cpus != nil {
+		delete(record.Allocations.Cpus, componentName)
+	}
+	record.LastUpdated = time.Now()
+	db.notify(deploymentId, record, constant.DeploymentChangeTypeAllocationsChanged)
+	db.TriggerDataPersist()
+
+	return nil
+}
+
+func (db *Database) GetAllocations(deploymentId string) (Allocations, error) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	record, exists := db.deployments[deploymentId]
+	if !exists {
+		return Allocations{}, fmt.Errorf("deployment %s not found", deploymentId)
+	}
+
+	return record.Allocations.clone(), nil
+}
+
+// the device-wide view of which cpu index is held by which component,
+// encoded as "deployment/component"
+func (db *Database) AllocatedCpus() map[int]string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	allocated := make(map[int]string)
+	for deploymentID, deployment := range db.deployments {
+		for component, cpuIndices := range deployment.Allocations.Cpus {
+			owner := deploymentID
+			if strings.TrimSpace(component) != "" {
+				owner = fmt.Sprintf("%s/%s", deploymentID, component)
+			}
+
+			for _, cpuIndex := range cpuIndices {
+				allocated[cpuIndex] = owner
+			}
+		}
+	}
+
+	return allocated
 }
 
 func (db *Database) GetDeployment(deploymentId string) (*DeploymentRecord, error) {
