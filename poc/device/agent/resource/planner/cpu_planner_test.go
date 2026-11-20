@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
@@ -49,4 +50,12 @@ func isolatedCpuRequirement(name string) *sbi.RequiredResources {
 	}
 
 	return &sbi.RequiredResources{Cpu: &cpuRequirements}
+}
+
+// BalloonCpuPlanner is tested as not yet implemented until its implementation lands
+func TestBalloonCpuPlannerIsNotYetImplemented(t *testing.T) {
+	planner := NewBalloonCpuPlanner(nil, nil)
+	if _, err := planner.PlanCpu(CpuPlanningRequest{}); !errors.Is(err, plannerErrNotImplemented) {
+		t.Fatalf("PlanCpu() error = %v, want %v", err, plannerErrNotImplemented)
+	}
 }
