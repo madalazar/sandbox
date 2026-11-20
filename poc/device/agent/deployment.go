@@ -4,13 +4,21 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kr/pretty"
 	"github.com/margo/sandbox/poc/device/agent/database"
+	"github.com/margo/sandbox/poc/device/agent/resource"
+	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
+	"github.com/margo/sandbox/poc/device/agent/resource/model"
+	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/poc/device/agent/types"
 	"github.com/margo/sandbox/shared-lib/workloads"
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
@@ -27,6 +35,7 @@ type DeploymentManager struct {
 	database      database.DatabaseIfc
 	helmClient    *workloads.HelmClient
 	composeClient *workloads.DockerComposeCliClient
+	policyReader  model.BalloonPolicyReader
 	log           *zap.SugaredLogger
 	stopChan      chan struct{}
 	hostTopology  types.HostTopology
@@ -38,6 +47,7 @@ func NewDeploymentManager(
 	db database.DatabaseIfc,
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
+	policyReader model.BalloonPolicyReader,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
@@ -45,6 +55,7 @@ func NewDeploymentManager(
 		database:       db,
 		helmClient:     helmClient,
 		composeClient:  composeClient,
+		policyReader:   policyReader,
 		hostTopology:   hostTopology,
 		log:            log,
 		stopChan:       make(chan struct{}),
@@ -331,25 +342,28 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
+) (err error) {
+	coordinator := dm.newHelmResourceCoordinator()
+	helmConfigurator := configurator.NewHelmConfigurator()
+
+	ledger, err := coordinator.NewLedger(deploymentId)
+	if err != nil {
+		return fmt.Errorf("unable to create ledger %v", err)
+	}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
 		if err != nil {
 			return fmt.Errorf("invalid helm component: %v", err)
 		}
+		owner := model.NewOwnerRef(deploymentId, helmComp.Name)
 		dm.log.Infow("view of the helm component", "helmComp", pretty.Sprint(helmComp))
-		dm.log.Infow(
-			"deploying app component",
-			"appId",
-			deploymentId,
-			"componentName",
-			helmComp.Name,
-		)
+		dm.log.Infow("deploying app component", "appId", deploymentId, "componentName", helmComp.Name)
 
 		// Generate release name
 		releaseName := fmt.Sprintf("%s-%s", helmComp.Name, deploymentId[:8])
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -358,86 +372,84 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to convert deployment profiles: %w", err)
 			}
 			if v, exists := componentValues[helmComp.Name]; exists {
-				values = v
+				values = normalizeHelmValues(v)
 			}
 		}
 
 		values["fullnameOverride"] = releaseName // Makes all K8s resources unique
 
-		dm.log.Infow("Deploying with unique resource names",
-			"releaseName", releaseName,
-			"fullnameOverride", releaseName)
+		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+			Owner:        owner,
+			Requirements: helmComp.RequiredResources,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", helmComp.Name, err)
+		}
+
+		var rollback *resource.ResourceRollback
+		if plan.Cpu.HasCpus() {
+			if err := coordinator.Commit(ctx, plan); err != nil {
+				return fmt.Errorf("failed to persist helm allocations for component %s: %w", helmComp.Name, err)
+			}
+
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
+		}
+
+		// update pod annotations for this helm component
+		values, err = helmConfigurator.Apply(plan.Cpu, owner, values)
+		if err != nil {
+			return fmt.Errorf("failed to apply CPU plan to helm values for component %s: %w", helmComp.Name, err)
+		}
+
+		dm.log.Infow("Applied resource annotations to Helm values", "componentName", helmComp.Name, "releaseName",
+			releaseName, "podAnnotations", values["podAnnotations"], "componentCPUSet", plan.Cpu.CpuSet())
+
+		dm.log.Infow("Deploying with unique resource names", "releaseName", releaseName, "fullnameOverride", releaseName)
 
 		// Deploy/Update
 		release, err := dm.helmClient.GetReleaseStatus(ctx, releaseName, "")
 		if err != nil {
 			dm.log.Infow(
 				"failed to check whether a release exists or not, assuming that it doesn't exist, will proceed with installation",
-				"releaseName",
-				releaseName,
-				"deploymentId",
-				deploymentId,
-				"err",
-				err.Error(),
-			)
-
+				"releaseName", releaseName, "deploymentId", deploymentId, "err", err.Error())
 		}
 
 		if release != nil {
 			// Release exists, update it
-			dm.log.Infow(
-				"Updating existing Helm release",
-				"releaseName",
-				releaseName,
-				"deploymentId",
-				deploymentId,
-			)
-			err = dm.helmClient.UpdateChart(
-				ctx,
-				releaseName,
-				helmComp.Properties.Repository,
-				"",
-				values,
-			)
-			if err != nil {
+			dm.log.Infow("Updating existing Helm release", "releaseName", releaseName, "deploymentId", deploymentId)
+
+			if err = dm.helmClient.UpdateChart(ctx, releaseName, helmComp.Properties.Repository, "", values); err != nil {
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
 			}
-			return nil
+
+			if rollback != nil {
+				rollback.Complete()
+			}
+
+			continue
 		}
 
 		// New deployment
-		dm.log.Infow(
-			"Installing new Helm release",
-			"releaseName",
-			releaseName,
-			"deploymentId",
-			deploymentId,
-		)
+		dm.log.Infow("Installing new Helm release", "releaseName", releaseName, "deploymentId", deploymentId)
+
 		revision := "latest"
 		if helmComp.Properties.Revision != nil {
 			revision = *helmComp.Properties.Revision
 		}
+
 		wait := helmComp.Properties.Wait != nil && *helmComp.Properties.Wait
-		err = dm.helmClient.InstallChart(
-			ctx,
-			releaseName,
-			helmComp.Properties.Repository,
-			"",
-			revision,
-			wait,
-			values,
-		)
-		if err != nil {
+		if err = dm.helmClient.InstallChart(ctx, releaseName, helmComp.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
 		}
-		dm.log.Infow(
-			"Helm deployment successful",
-			"appId",
-			deploymentId,
-			"releaseName",
-			releaseName,
-		)
+
+		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
+
+		if rollback != nil {
+			rollback.Complete()
+		}
 	}
+
 	return nil
 }
 
@@ -445,41 +457,35 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	ctx context.Context,
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
-) error {
+) (err error) {
+	coordinator := dm.newComposeResourceCoordinator()
+	composeConfigurator := configurator.NewComposeConfigurator()
+
+	ledger, err := coordinator.NewLedger(deploymentId)
+	if err != nil {
+		return fmt.Errorf("unable to create ledger %v", err)
+	}
+
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		composeComp, err := component.AsComposeApplicationDeploymentProfileComponent()
 		if err != nil {
 			return fmt.Errorf("invalid compose component %v", err)
 		}
-		dm.log.Infow(
-			"deploying app component",
-			"appId",
-			deploymentId,
-			"componentName",
-			composeComp.Name,
-		)
+		owner := model.NewOwnerRef(deploymentId, composeComp.Name)
+		dm.log.Infow("deploying app component", "appId", deploymentId, "componentName", composeComp.Name)
 
 		// Get compose content from package location
 		dm.log.Infow("view of the compose component", "composecomp", pretty.Sprint(composeComp))
-		dm.log.Infow(
-			"compose component requiredResources",
-			"appId",
-			deploymentId,
-			"profileType",
-			appDeployment.Spec.DeploymentProfile.Type,
-			"profileRequiredResources",
-			appDeployment.Spec.DeploymentProfile.RequiredResources,
-			"componentName",
-			composeComp.Name,
-			"componentRequiredResources",
-			dm.extractComponentRequiredResources(component),
-		)
+		dm.log.Infow("compose component requiredResources", "appId", deploymentId, "profileType",
+			appDeployment.Spec.DeploymentProfile.Type, "profileRequiredResources",
+			appDeployment.Spec.DeploymentProfile.RequiredResources, "componentName",
+			composeComp.Name, "componentRequiredResources", dm.extractComponentRequiredResources(component))
 
 		// Generate project name (must be valid Docker Compose project name)
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(composeComp.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
 
-		values := map[string]interface{}{}
+		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
 			componentValues, err := pkg.ConvertAllAppDeploymentParamsToValues(
 				*appDeployment.Spec.Parameters,
@@ -492,64 +498,88 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			}
 		}
 
-		composeFilename, err := dm.composeClient.DownloadCompose(
-			ctx,
-			composeComp.Properties.PackageLocation,
-			composeComp.Properties.KeyLocation,
-			projectName,
-		)
+		composeFilename, err := dm.composeClient.DownloadCompose(ctx, composeComp.Properties.PackageLocation,
+			composeComp.Properties.KeyLocation, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to get compose content: %v", err)
 		}
 		dm.log.Debugw("preview of the compose file", "composeFilename", composeFilename)
 
+		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
+			Owner:        owner,
+			Requirements: composeComp.RequiredResources,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", composeComp.Name, err)
+		}
+
+		cpuPlan := resourcePlan.Cpu
+		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
+
+		var rollback *resource.ResourceRollback
+		preparedComposeFilename := composeFilename
+
+		if cpuPlan.HasCpus() {
+			if err := coordinator.Commit(ctx, resourcePlan); err != nil {
+				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
+			}
+
+			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
+			defer rollback.ReleaseOnFailure(&err)
+
+			var prepErr error
+			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
+			if prepErr != nil {
+				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+			}
+
+			removeSourceComposeFile := strings.HasPrefix(composeComp.Properties.PackageLocation, "oci://") ||
+				strings.HasPrefix(composeComp.Properties.PackageLocation, "http://") ||
+				strings.HasPrefix(composeComp.Properties.PackageLocation, "https://")
+			defer func(prep string, src string, rmSrc bool) {
+				if rmSrc {
+					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
+					}
+				}
+				if prep != src {
+					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
+					}
+				}
+			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
+		}
+
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
+		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
 		if exists {
 			// Update existing deployment
-			dm.log.Infow(
-				"Updating existing Docker Compose project",
-				"projectName",
-				projectName,
-				"deploymentId",
-				deploymentId,
-				"composeFilename",
-				composeFilename,
-			)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
+			dm.log.Infow("Updating existing Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
 		} else {
 			// New deployment
-			dm.log.Infow(
-				"Deploying new Docker Compose project",
-				"projectName",
-				projectName,
-				"deploymentId",
-				deploymentId,
-				"composeFilename",
-				composeFilename,
-			)
-			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
+			dm.log.Infow("Deploying new Docker Compose project",
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
 		}
 
 		if err != nil {
 			return fmt.Errorf("docker compose operation failed: %v", err)
 		}
 
-		dm.log.Infow(
-			"Docker Compose deployment successful",
-			"appId",
-			deploymentId,
-			"componentName",
-			composeComp.Name,
-			"projectName",
-			projectName,
-		)
+		dm.log.Infow("Docker Compose deployment successful",
+			"appId", deploymentId, "componentName", composeComp.Name, "projectName", projectName)
+
+		if rollback != nil {
+			rollback.Complete()
+		}
 	}
 	return nil
 }
@@ -687,6 +717,9 @@ func (dm *DeploymentManager) remove(ctx context.Context, deploymentId string) {
 			fmt.Sprintf("Removal completed with errors: %v", removeErr),
 		)
 	} else {
+		if err := dm.database.SetAllocations(deploymentId, database.Allocations{}); err != nil {
+			dm.log.Warnw("Failed to clear allocations during removal", "deploymentId", deploymentId, "err", err)
+		}
 		dm.database.SetPhase(deploymentId, "REMOVED", "Removal Complete")
 	}
 
@@ -709,6 +742,8 @@ func (dm *DeploymentManager) removeHelm(
 		)
 		return nil
 	}
+
+	coordinator := dm.newHelmResourceCoordinator()
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		helmComp, err := component.AsHelmApplicationDeploymentProfileComponent()
@@ -733,6 +768,14 @@ func (dm *DeploymentManager) removeHelm(
 			dm.log.Infow("Helm release removed successfully",
 				"releaseName", releaseName,
 				"componentName", helmComp.Name)
+
+			owner := model.NewOwnerRef(deploymentId, helmComp.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release helm component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", helmComp.Name,
+					"error", err)
+			}
 		}
 	}
 
@@ -753,6 +796,8 @@ func (dm *DeploymentManager) removeCompose(
 		)
 		return nil
 	}
+
+	coordinator := dm.newComposeResourceCoordinator()
 
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
@@ -781,6 +826,14 @@ func (dm *DeploymentManager) removeCompose(
 			dm.log.Infow("Docker Compose project removed successfully",
 				"projectName", projectName,
 				"componentName", composeComp.Name)
+
+			owner := model.NewOwnerRef(deploymentId, composeComp.Name)
+			if err := coordinator.Release(ctx, owner); err != nil {
+				dm.log.Warnw("Failed to release compose component reservation during removal",
+					"deploymentId", deploymentId,
+					"componentName", composeComp.Name,
+					"error", err)
+			}
 		}
 	}
 
@@ -839,18 +892,18 @@ func (dm *DeploymentManager) extractComponentRequiredResources(
 	return nil
 }
 
-// Helper function to convert parameters to environment variables
+// helper function to convert parameters to environment variables
 func (dm *DeploymentManager) convertParametersToEnvVars(
-	params map[string]interface{},
+	params map[string]any,
 	componentName string,
 ) map[string]string {
 	envVars := make(map[string]string)
 
 	// Convert component-specific parameters
 	if componentParams, exists := params[componentName]; exists {
-		if paramMap, ok := componentParams.(map[string]interface{}); ok {
+		if paramMap, ok := componentParams.(map[string]any); ok {
 			for key, value := range paramMap {
-				envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+				envVars[strings.ToUpper(key)] = dm.formatEnvValue(value)
 			}
 		}
 	}
@@ -858,9 +911,97 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	// Convert global parameters
 	for key, value := range params {
 		if key != componentName { // Skip component-specific params already processed
-			envVars[strings.ToUpper(key)] = fmt.Sprintf("%v", value)
+			envVars[strings.ToUpper(key)] = dm.formatEnvValue(value)
 		}
 	}
 
 	return envVars
+}
+
+func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
+		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
+	)
+}
+
+func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
+	return resource.NewResourceCoordinator(
+		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
+		planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices),
+	)
+}
+
+// when using a positiveInteger type for parameters in margo.yaml
+// with more than 6 digits the value that is written into the
+// corresponding docker compose file / helm chart value was
+// the corresponding scientific notation i.e "1e+06"
+// this is due to how parser.go's ParseAppDeploymentFromBase64
+// deserialization is implemented; there is also no constraint/
+// validation on the application side to fail the the deployment
+// if string int parameters don't have quotes
+// methods like the one below for both compose and helm are neeed
+func (dm *DeploymentManager) formatEnvValue(value any) string {
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if v == math.Trunc(v) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case float32:
+		f := float64(v)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return fmt.Sprintf("%v", v)
+		}
+		if f == math.Trunc(f) {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', -1, 32)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
+
+// normalizeHelmValues recursively normalizes values before Helm templating.
+// JSON-decoded numeric values arrive as float64; convert whole-number floats
+// to int64 so templates render integers (e.g. 1000000 instead of 1e+06).
+func normalizeHelmValues(values map[string]any) map[string]any {
+	normalized := make(map[string]any, len(values))
+	for key, value := range values {
+		normalized[key] = normalizeHelmValue(value)
+	}
+	return normalized
+}
+
+func normalizeHelmValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(v))
+		for key, nested := range v {
+			normalized[key] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(v))
+		for i, nested := range v {
+			normalized[i] = normalizeHelmValue(nested)
+		}
+		return normalized
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) {
+			return int64(v)
+		}
+		return v
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) {
+			return int64(f)
+		}
+		return v
+	default:
+		return value
+	}
 }
