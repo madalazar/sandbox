@@ -64,6 +64,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+		WithLogger(log).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build compose resource coordinator", "error", err)
@@ -76,6 +77,7 @@ func NewDeploymentManager(
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
+		WithLogger(log).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build helm resource coordinator", "error", err)
