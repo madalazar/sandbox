@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -567,7 +566,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
 
 		var rollback *resource.ResourceRollback
-		preparedComposeFilename := composeFilename
 
 		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
@@ -577,39 +575,29 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
 			}
 
-			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
-			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+			if err = composeConfigurator.Apply(resourcePlan.Cpu, composeFilename); err != nil {
+				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", composeComp.Name, err)
 			}
-
-			defer func(prep string, src string) {
-				if prep != src {
-					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
-					}
-				}
-			}(preparedComposeFilename, composeFilename)
 		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
+		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
 		if exists {
 			// Update existing deployment
 			dm.log.Infow("Updating existing Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
 		} else {
 			// New deployment
 			dm.log.Infow("Deploying new Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
 		}
 
 		if err != nil {
