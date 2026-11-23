@@ -153,7 +153,7 @@ func (d *fakePqosDevice) Run(ctx context.Context, command string, args ...string
 	if strings.Contains(cmdStr, "core:0=") {
 		// Reset: move cores back to COS 0, reset LLC mask to default
 		for _, arg := range args {
-			p := strings.Trim(arg, "'\"")
+			p := strings.TrimPrefix(strings.Trim(arg, "'\""), "--alloc-class=")
 			if strings.HasPrefix(p, "llc@") {
 				sub := strings.TrimPrefix(p, "llc@")
 				subParts := strings.Split(sub, "=")
@@ -172,6 +172,8 @@ func (d *fakePqosDevice) Run(ctx context.Context, command string, args ...string
 		// Apply: parse llc@<id>:<cos>=<mask> and core:<cos>=<cpuset>
 		for _, arg := range args {
 			p := strings.Trim(arg, "'\"")
+			p = strings.TrimPrefix(p, "--alloc-class=")
+			p = strings.TrimPrefix(p, "--alloc-assoc=")
 			if strings.HasPrefix(p, "llc@") {
 				sub := strings.TrimPrefix(p, "llc@")
 				subParts := strings.Split(sub, "=")
