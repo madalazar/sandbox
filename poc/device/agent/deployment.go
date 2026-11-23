@@ -58,7 +58,7 @@ func NewDeploymentManager(
 ) *DeploymentManager {
 	composeCoord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
-		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
+		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices, log)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewPqosClassNamer()).
