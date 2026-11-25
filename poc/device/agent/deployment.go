@@ -3,10 +3,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -547,7 +545,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
 
 		var rollback *resource.ResourceRollback
-		preparedComposeFilename := composeFilename
 
 		if cpuPlan.HasCpus() {
 			if err := coordinator.Commit(ctx, resourcePlan); err != nil {
@@ -557,33 +554,16 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
-			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
-			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+			if err = composeConfigurator.Apply(cpuPlan, composeFilename); err != nil {
+				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", component.Name, err)
 			}
-
-			// repository only uses oci:// type urls
-			removeSourceComposeFile := strings.HasPrefix(component.Properties.Repository, "oci://")
-			defer func(prep string, src string, rmSrc bool) {
-				if rmSrc {
-					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
-					}
-				}
-				if prep != src {
-					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
-					}
-				}
-			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
 		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, component.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName, envVars)
+		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName, envVars)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
@@ -591,13 +571,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if exists {
 			// Update existing deployment
 			dm.log.Infow("Updating existing Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
 		} else {
 			// New deployment
 			dm.log.Infow("Deploying new Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
 		}
 
 		if err != nil {
@@ -897,7 +877,7 @@ func (dm *DeploymentManager) extractComponentCapacityRequirements(
 func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
 	return resource.NewResourceCoordinator(
 		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
+		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices, dm.log),
 	)
 }
 
