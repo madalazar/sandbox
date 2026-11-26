@@ -75,7 +75,7 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	cpuSet1 := []int{1, 2}
 
 	if err := store.SaveReservation(deploymentID,
-		Reservation{Cpus: cpuSet1, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName1)}}); err != nil {
+		model.Reservation{Cpus: cpuSet1, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName1)}}); err != nil {
 		t.Fatalf("SaveAllocations() error = %v", err)
 	}
 
@@ -92,7 +92,7 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 	cpuSet2 := []int{3}
 
 	if err := store.SaveReservation(deploymentID,
-		Reservation{Cpus: cpuSet2, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName2)}}); err != nil {
+		model.Reservation{Cpus: cpuSet2, Owner: model.OwnerRef{Deployment: deploymentID, Component: model.ComponentRef(componentName2)}}); err != nil {
 		t.Fatalf("SaveAllocations() error = %v", err)
 	}
 
@@ -168,5 +168,87 @@ func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
 	}
 	if got := allocations.Cpus[siblingName]; len(got) != 1 || got[0] != 4 {
 		t.Fatalf("sibling CPU assignment = %#v, want [4]", got)
+	}
+}
+
+func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
+	db := database.NewDatabase(t.TempDir())
+	const deploymentID = "deployment-1"
+	const componentName = "cyclictest"
+
+	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
+		t.Fatalf("SetDesiredState() error = %v", err)
+	}
+
+	owner := model.NewOwnerRef(deploymentID, componentName)
+	store := NewDatabaseReservationStore(db, map[int]struct{}{2: {}, 4: {}})
+
+	res := model.Reservation{
+		Owner: owner,
+		Cpus:  []int{2, 4},
+		L3CacheAssignment: &model.CacheAssignment{
+			Owner:   owner,
+			Level:   "L3",
+			CacheId: "0",
+			SizeKiB: 2048,
+			Mask:    "0xC",
+			Clos:    model.ClosId("cos1"),
+		},
+	}
+
+	if !res.HasL3Cache() {
+		t.Fatal("expected res.HasCache() == true")
+	}
+
+	if err := store.SaveReservation(deploymentID, res); err != nil {
+		t.Fatalf("SaveReservation() error = %v", err)
+	}
+
+	// LoadReservation asserts both CPU and Cache are reconstructed
+	loaded, found, err := store.LoadReservation(owner)
+	if err != nil {
+		t.Fatalf("LoadReservation() error = %v", err)
+	}
+	if !found {
+		t.Fatal("LoadReservation() found = false, want true")
+	}
+	if !loaded.HasL3Cache() {
+		t.Fatal("expected loaded reservation to have cache")
+	}
+	if loaded.L3CacheAssignment == nil {
+		t.Fatal("expected non-nil cache reservation")
+	}
+	cacheRes := *loaded.L3CacheAssignment
+	if cacheRes.Clos != model.ClosId("cos1") {
+		t.Fatalf("expected class 'cos1', got %s", cacheRes.Clos)
+	}
+	if cacheRes.CacheId != "0" || cacheRes.Mask != "0xC" {
+		t.Fatalf("unexpected cache reservation ID/mask: %+v", cacheRes)
+	}
+
+	// LoadSnapshot populates AllocationSnapshot.Caches
+	snapshot, err := store.LoadSnapshot()
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if len(snapshot.Caches) != 1 {
+		t.Fatalf("expected 1 cache in snapshot, got %d", len(snapshot.Caches))
+	}
+	snapCache := snapshot.Caches[0]
+	if snapCache.Owner != owner || snapCache.Mask != "0xC" {
+		t.Fatalf("unexpected snapshot cache: %+v", snapCache)
+	}
+
+	// ClearComponent clears both CPU and cache
+	if err := store.ClearComponent(owner); err != nil {
+		t.Fatalf("ClearComponent() error = %v", err)
+	}
+
+	_, foundAfter, err := store.LoadReservation(owner)
+	if err != nil {
+		t.Fatalf("LoadReservation after clear error = %v", err)
+	}
+	if foundAfter {
+		t.Fatal("expected reservation to be cleared")
 	}
 }
