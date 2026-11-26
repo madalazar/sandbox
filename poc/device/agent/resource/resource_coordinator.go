@@ -61,6 +61,7 @@ type ResourceCoordinator struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	log             *zap.SugaredLogger
 }
 
 // constructs a ResourceCoordinator ensuring all dependencies are non-nil.
@@ -71,6 +72,7 @@ type ResourceCoordinatorBuilder struct {
 	cacheController controller.CacheIsolationController
 	cacheCapacity   model.CacheCapacity
 	classNamer      controller.ClassNamer
+	log             *zap.SugaredLogger
 }
 
 func NewResourceCoordinatorBuilder() *ResourceCoordinatorBuilder {
@@ -117,6 +119,11 @@ func (b *ResourceCoordinatorBuilder) WithClassNamer(namer controller.ClassNamer)
 	return b
 }
 
+func (b *ResourceCoordinatorBuilder) WithLogger(log *zap.SugaredLogger) *ResourceCoordinatorBuilder {
+	b.log = log
+	return b
+}
+
 func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	var errs []error
 	if b.store == nil {
@@ -131,6 +138,9 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 	if b.cacheController == nil {
 		errs = append(errs, errors.New("cache isolation controller cannot be nil"))
 	}
+	if b.log == nil {
+		errs = append(errs, errors.New("logger cannot be nil"))
+	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -141,6 +151,7 @@ func (b *ResourceCoordinatorBuilder) Build() (*ResourceCoordinator, error) {
 		cacheController: b.cacheController,
 		cacheCapacity:   b.cacheCapacity,
 		classNamer:      b.classNamer,
+		log:             b.log,
 	}, nil
 }
 
@@ -209,7 +220,12 @@ func (c *ResourceCoordinator) Commit(ctx context.Context, plan ResourcePlan) err
 		L3CacheAssignment: plan.Cache.L3CacheAssignment,
 	}
 
-	fmt.Printf("[resource coordinator] cache plan details: %#v\n", plan.Cache)
+	c.log.Debugw("committing resource reservation",
+		"deploymentId", plan.Owner.Deployment,
+		"componentName", plan.Owner.Component,
+		"cpus", plan.Cpu.Cpus,
+		"cachePlan", plan.Cache,
+	)
 
 	if err := c.store.SaveReservation(plan.Owner.Deployment, reservation); err != nil {
 		return err
@@ -282,12 +298,10 @@ func releaseOnFailure(
 	defer cancel()
 
 	if err := coordinator.Release(releaseCtx, owner); err != nil {
-		if log != nil {
-			log.Errorw("Failed to release resources during deployment rollback",
-				"deploymentId", owner.Deployment,
-				"componentName", owner.Component,
-				"error", err)
-		}
+		log.Errorw("Failed to release resources during deployment rollback",
+			"deploymentId", owner.Deployment,
+			"componentName", owner.Component,
+			"error", err)
 	}
 }
 

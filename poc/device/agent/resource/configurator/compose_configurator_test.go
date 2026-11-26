@@ -151,11 +151,7 @@ func TestRewriteComposeYamlSupportsListFormEnvironment(t *testing.T) {
 	}
 
 	result := out.String()
-	for _, want := range []string{
-		`cpuset: "1"`,
-		"EXISTING=keep",
-		"TEST_CPUSET=1",
-	} {
+	for _, want := range []string{`cpuset: "1"`, "EXISTING=keep", "TEST_CPUSET=1"} {
 		if !strings.Contains(result, want) {
 			t.Errorf("rewritten compose missing %q:\n%s", want, result)
 		}

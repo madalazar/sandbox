@@ -7,10 +7,14 @@ package model
 // from poc/device/agent (or `go generate` in this directory).
 //
 //go:generate go run k8s.io/code-generator/cmd/deepcopy-gen@v0.35.1 --output-file zz_generated.deepcopy.go --bounding-dirs github.com/margo/sandbox/poc/device/agent/resource/model .
+import "k8s.io/apimachinery/pkg/runtime/schema"
+
 const (
 	// Resource and namespace defaults
 	DefaultBalloonsPolicyNamespace = "kube-system"
 	DefaultBalloonsPolicyName      = "default"
+	BalloonsPolicyGroup            = "config.nri"
+	BalloonsPolicyVersion          = "v1alpha1"
 	BalloonsPolicyResource         = "balloonspolicies"
 
 	// BalloonsPolicy schema keys
@@ -36,6 +40,12 @@ const (
 	RdtFillerCacheMask = "0x1"
 	RdtFullAllocation  = "100%"
 )
+
+var BalloonsPolicyGVR = schema.GroupVersionResource{
+	Group:    BalloonsPolicyGroup,
+	Version:  BalloonsPolicyVersion,
+	Resource: BalloonsPolicyResource,
+}
 
 // non-blocking reads of the latest parsed policy snapshot
 type BalloonPolicyReader interface {

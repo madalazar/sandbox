@@ -10,21 +10,12 @@ import (
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
-
-var balloonsPolicyGVR = schema.GroupVersionResource{
-	Group:    "config.nri",
-	Version:  "v1alpha1",
-	Resource: model.BalloonsPolicyResource,
-}
 
 var _ model.BalloonPolicyReader = (*BalloonPolicyInformer)(nil)
 
@@ -62,17 +53,10 @@ type rawRdtPartition struct {
 	Classes map[string]any `json:"classes"`
 }
 
-// builds the informer against the given kubeconfig, or against the in-cluster config
-// when the path is empty
-func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*BalloonPolicyInformer, error) {
-	restConfig, err := buildKubeRestConfig(kubeconfigPath)
-	if err != nil {
-		return nil, err
-	}
-
-	dynClient, err := dynamic.NewForConfig(restConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+// builds the informer with the shared dynamic client
+func NewBalloonPolicyInformer(dynClient dynamic.Interface, log *zap.SugaredLogger) (*BalloonPolicyInformer, error) {
+	if dynClient == nil {
+		return nil, fmt.Errorf("dynamic client cannot be nil")
 	}
 
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
@@ -81,7 +65,7 @@ func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*B
 		model.DefaultBalloonsPolicyNamespace,
 		nil,
 	)
-	informer := factory.ForResource(balloonsPolicyGVR).Informer()
+	informer := factory.ForResource(model.BalloonsPolicyGVR).Informer()
 
 	b := &BalloonPolicyInformer{
 		log:      log,
@@ -269,28 +253,4 @@ func extractPolicyConfig(root map[string]any) map[string]any {
 	}
 
 	return nil
-}
-
-func buildKubeRestConfig(kubeconfigPath string) (*rest.Config, error) {
-	if kubeconfigPath != "" {
-		cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build kube config from %q: %w", kubeconfigPath, err)
-		}
-		return cfg, nil
-	}
-
-	cfg, err := rest.InClusterConfig()
-	if err == nil {
-		return cfg, nil
-	}
-
-	// Fallback to default kubeconfig loading for local/dev runs.
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	clientCfg := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &clientcmd.ConfigOverrides{})
-	fallbackCfg, fallbackErr := clientCfg.ClientConfig()
-	if fallbackErr != nil {
-		return nil, fmt.Errorf("failed to build in-cluster or default kube config: in-cluster err: %w; default config err: %w", err, fallbackErr)
-	}
-	return fallbackCfg, nil
 }
