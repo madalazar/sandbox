@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/types"
@@ -16,13 +19,6 @@ import (
 var _ CacheIsolationController = (*RdtPolicyController)(nil)
 
 const (
-	// kubectl CLI commands and flags
-	kubectlCmd           = "kubectl"
-	kubectlFlagNamespace = "-n"
-	kubectlCmdPatch      = "patch"
-	kubectlTypeMerge     = "--type=merge"
-	kubectlFlagPatch     = "--patch"
-
 	// JSON merge patch templates
 	releasePatchTemplate = `{%q:{%q:{%q:{%q:{%q:null},%q:{%q:null}}}}}`
 
@@ -37,26 +33,22 @@ const (
 
 // manages kubernetes rdt cache classes via nri balloon resource policies
 type RdtPolicyController struct {
-	runner CommandRunner
-	reader model.BalloonPolicyReader
-	caches []types.HostTopologyCache
+	dynClient dynamic.Interface
+	reader    model.BalloonPolicyReader
+	caches    []types.HostTopologyCache
 }
 
 func NewRdtPolicyController(caches []types.HostTopologyCache) *RdtPolicyController {
 	return &RdtPolicyController{
-		runner: NewDirectRunner(),
 		caches: caches,
 	}
 }
 
-func NewRdtPolicyControllerWithReader(runner CommandRunner, reader model.BalloonPolicyReader, caches []types.HostTopologyCache) *RdtPolicyController {
-	if runner == nil {
-		runner = NewDirectRunner()
-	}
+func NewRdtPolicyControllerWithClient(dynClient dynamic.Interface, reader model.BalloonPolicyReader, caches []types.HostTopologyCache) *RdtPolicyController {
 	return &RdtPolicyController{
-		runner: runner,
-		reader: reader,
-		caches: caches,
+		dynClient: dynClient,
+		reader:    reader,
+		caches:    caches,
 	}
 }
 
@@ -71,10 +63,7 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("reservation has empty component name")
 	}
 
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
+	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return fmt.Errorf("component %q has invalid or unset class id %q", componentName, cosId)
 	}
@@ -110,10 +99,13 @@ func (c *RdtPolicyController) Apply(ctx context.Context, reservation model.Reser
 		return fmt.Errorf("failed to marshal balloons policy patch for component %q: %w", componentName, err)
 	}
 
-	_, err = c.runner.Run(ctx, kubectlCmd, kubectlFlagNamespace, namespace, kubectlCmdPatch, model.BalloonsPolicyResource,
-		policyName, kubectlTypeMerge, kubectlFlagPatch, string(patchBytes))
-	if err != nil {
-		return fmt.Errorf("failed to patch balloons policy for component %q: %w", componentName, err)
+	if c.dynClient != nil {
+		_, err = c.dynClient.Resource(model.BalloonsPolicyGVR).
+			Namespace(namespace).
+			Patch(ctx, policyName, k8stypes.MergePatchType, patchBytes, metav1.PatchOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to patch balloons policy for component %q: %w", componentName, err)
+		}
 	}
 
 	if c.reader != nil {
@@ -137,10 +129,8 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	}
 
 	componentName := string(reservation.Owner.Component)
-	cosId := string(reservation.Clos)
-	if cosId == "" {
-		cosId = string(reservation.L3CacheAssignment.Clos)
-	}
+
+	cosId := string(reservation.L3CacheAssignment.Clos)
 	if cosId == "" || cosId == string(model.ClassUnset) {
 		return nil
 	}
@@ -148,10 +138,13 @@ func (c *RdtPolicyController) Release(ctx context.Context, reservation model.Res
 	namespace, policyName := c.policyTarget()
 	patchPayload := c.buildReleasePatch(componentName, cosId)
 
-	_, err := c.runner.Run(ctx, kubectlCmd, kubectlFlagNamespace, namespace, kubectlCmdPatch, model.BalloonsPolicyResource,
-		policyName, kubectlTypeMerge, kubectlFlagPatch, patchPayload)
-	if err != nil {
-		return fmt.Errorf("failed to remove rdt policy for component %q: %w", componentName, err)
+	if c.dynClient != nil {
+		_, err := c.dynClient.Resource(model.BalloonsPolicyGVR).
+			Namespace(namespace).
+			Patch(ctx, policyName, k8stypes.MergePatchType, []byte(patchPayload), metav1.PatchOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to remove rdt policy for component %q: %w", componentName, err)
+		}
 	}
 
 	if c.reader != nil {

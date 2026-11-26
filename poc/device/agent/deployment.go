@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +24,7 @@ import (
 	"github.com/margo/sandbox/standard/generatedCode/wfm/sbi"
 	"github.com/margo/sandbox/standard/pkg"
 	"go.uber.org/zap"
+	"k8s.io/client-go/dynamic"
 )
 
 type DeploymentManagerIfc interface {
@@ -36,9 +36,10 @@ type DeploymentManager struct {
 	database           database.DatabaseIfc
 	helmClient         *workloads.HelmClient
 	composeClient      *workloads.DockerComposeCliClient
-	policyReader       model.BalloonPolicyReader
 	composeCoordinator *resource.ResourceCoordinator
 	helmCoordinator    *resource.ResourceCoordinator
+	policyReader       model.BalloonPolicyReader
+	dynClient          dynamic.Interface
 	log                *zap.SugaredLogger
 	stopChan           chan struct{}
 	hostTopology       types.HostTopology
@@ -51,16 +52,18 @@ func NewDeploymentManager(
 	helmClient *workloads.HelmClient,
 	composeClient *workloads.DockerComposeCliClient,
 	policyReader model.BalloonPolicyReader,
+	dynClient dynamic.Interface,
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
 	composeCoord, err := resource.NewResourceCoordinatorBuilder().
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
-		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices)).
+		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices, log)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+		WithLogger(log).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build compose resource coordinator", "error", err)
@@ -72,7 +75,8 @@ func NewDeploymentManager(
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
 		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
 		WithClassNamer(controller.NewRdtClassNamer()).
-		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
+		WithCacheController(controller.NewRdtPolicyControllerWithClient(dynClient, policyReader, hostTopology.L3Caches)).
+		WithLogger(log).
 		Build()
 	if err != nil {
 		log.Errorw("failed to build helm resource coordinator", "error", err)
@@ -85,6 +89,7 @@ func NewDeploymentManager(
 		policyReader:       policyReader,
 		composeCoordinator: composeCoord,
 		helmCoordinator:    helmCoord,
+		dynClient:          dynClient,
 		hostTopology:       hostTopology,
 		log:                log,
 		stopChan:           make(chan struct{}),
@@ -456,6 +461,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 				return fmt.Errorf("failed to upgrade existing release: %v", err)
 			}
 
+			if err = coordinator.Activate(ctx, owner); err != nil {
+				return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
+			}
+
 			if rollback != nil {
 				rollback.Complete()
 			}
@@ -474,6 +483,10 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		wait := helmComp.Properties.Wait != nil && *helmComp.Properties.Wait
 		if err = dm.helmClient.InstallChart(ctx, releaseName, helmComp.Properties.Repository, "", revision, wait, values); err != nil {
 			return err
+		}
+
+		if err = coordinator.Activate(ctx, owner); err != nil {
+			return fmt.Errorf("failed to activate cache isolation for component %s: %w", helmComp.Name, err)
 		}
 
 		dm.log.Infow("Helm deployment successful", "appId", deploymentId, "releaseName", releaseName)
@@ -553,7 +566,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
 
 		var rollback *resource.ResourceRollback
-		preparedComposeFilename := composeFilename
 
 		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
@@ -563,39 +575,29 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", composeComp.Name, err)
 			}
 
-			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(resourcePlan.Cpu, owner, composeFilename)
-			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", composeComp.Name, prepErr)
+			if err = composeConfigurator.Apply(resourcePlan.Cpu, composeFilename); err != nil {
+				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", composeComp.Name, err)
 			}
-
-			defer func(prep string, src string) {
-				if prep != src {
-					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
-					}
-				}
-			}(preparedComposeFilename, composeFilename)
 		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, composeComp.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName)
+		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
 		if exists {
 			// Update existing deployment
 			dm.log.Infow("Updating existing Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
 		} else {
 			// New deployment
 			dm.log.Infow("Deploying new Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
 		}
 
 		if err != nil {
@@ -956,6 +958,7 @@ func (dm *DeploymentManager) ComposeResourceCoordinator() (*resource.ResourceCoo
 	if dm.composeCoordinator == nil {
 		return nil, errors.New("compose resource coordinator not initialized")
 	}
+
 	return dm.composeCoordinator, nil
 }
 
@@ -963,6 +966,7 @@ func (dm *DeploymentManager) HelmResourceCoordinator() (*resource.ResourceCoordi
 	if dm.helmCoordinator == nil {
 		return nil, errors.New("helm resource coordinator not initialized")
 	}
+
 	return dm.helmCoordinator, nil
 }
 
