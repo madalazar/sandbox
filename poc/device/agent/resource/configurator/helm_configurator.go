@@ -8,10 +8,13 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-// places a pod into an NRI balloon
+// places a pod into an nri balloon
 const BalloonPodAnnotationKey = "balloon.balloons.resource-policy.nri.io/pod"
 
-// applies a cpu plan to a chart's values map. It produces no artifact, so it has no
+// associates a pod with an nri rdt cache class
+const RdtClassPodAnnotationKey = "rdtclass.resource-policy.nri.io/pod"
+
+// applies cpu and cache plans to a chart's values map. It produces no artifact, so it has no
 // cleanup counterpart to the compose path
 type HelmConfigurator struct{}
 
@@ -19,10 +22,10 @@ func NewHelmConfigurator() *HelmConfigurator {
 	return &HelmConfigurator{}
 }
 
-// merges the plan's balloon placement and cpuset into values, preserving unrelated
-// user-supplied entries
+// merges cpu and cache plans into values, injecting balloon and rdt class annotations
 func (c *HelmConfigurator) Apply(
-	plan model.CpuPlan,
+	cpuPlan model.CpuPlan,
+	cachePlan model.CachePlan,
 	owner model.OwnerRef,
 	values map[string]any,
 ) (map[string]any, error) {
@@ -30,15 +33,29 @@ func (c *HelmConfigurator) Apply(
 		values = map[string]any{}
 	}
 
-	if balloon := plan.PlacementClass(); balloon != "" {
+	annotations := map[string]string{}
+	if balloon := cpuPlan.PlacementClass(); balloon != "" {
+		annotations[BalloonPodAnnotationKey] = balloon
+	}
+	if cachePlan.HasCache() {
+		clos := cachePlan.Clos
+		if !clos.Held() && cachePlan.L3CacheAssignment != nil {
+			clos = cachePlan.L3CacheAssignment.Clos
+		}
+		if clos.Held() {
+			annotations[RdtClassPodAnnotationKey] = clos.String()
+		}
+	}
+
+	if len(annotations) > 0 {
 		values["podAnnotations"] = c.mergePodAnnotations(
 			values["podAnnotations"],
-			map[string]string{BalloonPodAnnotationKey: balloon},
+			annotations,
 		)
 	}
 
 	component := string(owner.Component)
-	if cpuset := plan.CpuSet(); strings.TrimSpace(cpuset) != "" && component != "" {
+	if cpuset := cpuPlan.CpuSet(); strings.TrimSpace(cpuset) != "" && component != "" {
 		values[component] = c.mergeComponentCpuset(values[component], cpuset)
 	}
 
