@@ -20,14 +20,10 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
-const (
-	balloonsPolicyNamespace = "kube-system"
-)
-
 var balloonsPolicyGVR = schema.GroupVersionResource{
 	Group:    "config.nri",
 	Version:  "v1alpha1",
-	Resource: "balloonspolicies",
+	Resource: model.BalloonsPolicyResource,
 }
 
 var _ model.BalloonPolicyReader = (*BalloonPolicyInformer)(nil)
@@ -50,6 +46,22 @@ type rawBalloonTypesConfig struct {
 	BalloonTypes []model.ParsedBalloonType `json:"balloonTypes"`
 }
 
+type rawPolicyControl struct {
+	Control *rawControlConfig `json:"control"`
+}
+
+type rawControlConfig struct {
+	Rdt *rawRdtConfig `json:"rdt"`
+}
+
+type rawRdtConfig struct {
+	Partitions map[string]rawRdtPartition `json:"partitions"`
+}
+
+type rawRdtPartition struct {
+	Classes map[string]any `json:"classes"`
+}
+
 // builds the informer against the given kubeconfig, or against the in-cluster config
 // when the path is empty
 func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*BalloonPolicyInformer, error) {
@@ -66,7 +78,7 @@ func NewBalloonPolicyInformer(kubeconfigPath string, log *zap.SugaredLogger) (*B
 	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynClient,
 		0,
-		balloonsPolicyNamespace,
+		model.DefaultBalloonsPolicyNamespace,
 		nil,
 	)
 	informer := factory.ForResource(balloonsPolicyGVR).Informer()
@@ -192,9 +204,9 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*model.ParsedBalloonPo
 	}
 
 	var raw rawBalloonTypesConfig
-	if rawBalloons, exists := cfg["balloonTypes"]; exists && rawBalloons != nil {
+	if rawBalloons, exists := cfg[model.PolicyKeyBalloonTypes]; exists && rawBalloons != nil {
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(
-			map[string]any{"balloonTypes": rawBalloons},
+			map[string]any{model.PolicyKeyBalloonTypes: rawBalloons},
 			&raw,
 		); err != nil {
 			return nil, fmt.Errorf("failed to decode policy config: %w", err)
@@ -205,10 +217,30 @@ func parseBalloonsPolicy(obj *unstructured.Unstructured) (*model.ParsedBalloonPo
 		return nil, err
 	}
 
+	rdtConfig := model.RdtConfig{
+		Partitions: map[string]struct{}{},
+		Classes:    map[string]struct{}{},
+	}
+	if rawCtrl, exists := cfg[model.PolicyKeyControl]; exists && rawCtrl != nil {
+		var ctrl rawPolicyControl
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(
+			map[string]any{model.PolicyKeyControl: rawCtrl},
+			&ctrl,
+		); err == nil && ctrl.Control != nil && ctrl.Control.Rdt != nil {
+			for partitionName, partition := range ctrl.Control.Rdt.Partitions {
+				rdtConfig.Partitions[partitionName] = struct{}{}
+				for className := range partition.Classes {
+					rdtConfig.Classes[className] = struct{}{}
+				}
+			}
+		}
+	}
+
 	return &model.ParsedBalloonPolicy{
 		Name:         obj.GetName(),
 		Namespace:    obj.GetNamespace(),
 		BalloonTypes: raw.BalloonTypes,
+		RdtConfig:    rdtConfig,
 	}, nil
 }
 
@@ -217,19 +249,22 @@ func extractPolicyConfig(root map[string]any) map[string]any {
 		return nil
 	}
 
-	if cfg, ok := root["config"].(map[string]any); ok {
+	if cfg, ok := root[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
 
-	spec, ok := root["spec"].(map[string]any)
+	spec, ok := root[model.PolicyKeySpec].(map[string]any)
 	if !ok {
 		return nil
 	}
 
-	if cfg, ok := spec["config"].(map[string]any); ok {
+	if cfg, ok := spec[model.PolicyKeyConfig].(map[string]any); ok {
 		return cfg
 	}
-	if _, ok := spec["balloonTypes"]; ok {
+	if _, ok := spec[model.PolicyKeyBalloonTypes]; ok {
+		return spec
+	}
+	if _, ok := spec[model.PolicyKeyControl]; ok {
 		return spec
 	}
 
