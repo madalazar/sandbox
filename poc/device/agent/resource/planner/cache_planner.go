@@ -1,8 +1,6 @@
 package planner
 
 import (
-	"context"
-
 	"github.com/margo/sandbox/poc/device/agent/resource/ledger"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
@@ -18,5 +16,5 @@ type CachePlanningRequest struct {
 
 // decides cache way allocations and class reservation for a component
 type CachePlanner interface {
-	PlanCache(context.Context, CachePlanningRequest) (model.CachePlan, error)
+	PlanCache(CachePlanningRequest) (model.CachePlan, error)
 }

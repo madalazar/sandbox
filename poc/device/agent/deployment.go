@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/operation"
 	"github.com/margo/sandbox/poc/device/agent/resource"
 	"github.com/margo/sandbox/poc/device/agent/resource/configurator"
+	"github.com/margo/sandbox/poc/device/agent/resource/controller"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 	"github.com/margo/sandbox/poc/device/agent/resource/planner"
 	"github.com/margo/sandbox/poc/device/agent/types"
@@ -32,14 +34,16 @@ type DeploymentManagerIfc interface {
 }
 
 type DeploymentManager struct {
-	database      database.DatabaseIfc
-	helmClient    *workloads.HelmClient
-	composeClient *operation.DockerComposeClient
-	capabilities  *sbi.DeviceCapabilitiesManifest
-	policyReader  model.BalloonPolicyReader
-	log           *zap.SugaredLogger
-	stopChan      chan struct{}
-	hostTopology  types.HostTopology
+	database           database.DatabaseIfc
+	helmClient         *workloads.HelmClient
+	composeClient      *operation.DockerComposeClient
+	capabilities       *sbi.DeviceCapabilitiesManifest
+	policyReader       model.BalloonPolicyReader
+	composeCoordinator *resource.ResourceCoordinator
+	helmCoordinator    *resource.ResourceCoordinator
+	log                *zap.SugaredLogger
+	stopChan           chan struct{}
+	hostTopology       types.HostTopology
 	//  Mutex to prevent concurrent reconciliation
 	reconcileLocks sync.Map // map[deploymentId]bool
 }
@@ -53,16 +57,38 @@ func NewDeploymentManager(
 	hostTopology types.HostTopology,
 	log *zap.SugaredLogger,
 ) *DeploymentManager {
+	composeCoord, err := resource.NewResourceCoordinatorBuilder().
+		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
+		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices, log)).
+		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
+		Build()
+	if err != nil {
+		log.Errorw("failed to build compose resource coordinator", "error", err)
+	}
+
+	helmCoord, err := resource.NewResourceCoordinatorBuilder().
+		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
+		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
+		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
+		Build()
+	if err != nil {
+		log.Errorw("failed to build helm resource coordinator", "error", err)
+	}
+
 	return &DeploymentManager{
-		database:       db,
-		helmClient:     helmClient,
-		composeClient:  composeClient,
-		policyReader:   policyReader,
-		hostTopology:   hostTopology,
-		log:            log,
-		capabilities:   capabilities,
-		stopChan:       make(chan struct{}),
-		reconcileLocks: sync.Map{},
+		database:           db,
+		helmClient:         helmClient,
+		composeClient:      composeClient,
+		policyReader:       policyReader,
+		composeCoordinator: composeCoord,
+		helmCoordinator:    helmCoord,
+		hostTopology:       hostTopology,
+		log:                log,
+		capabilities:       capabilities,
+		stopChan:           make(chan struct{}),
+		reconcileLocks:     sync.Map{},
 	}
 }
 
@@ -384,7 +410,11 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator := dm.newHelmResourceCoordinator()
+	coordinator, err := dm.HelmResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	}
+
 	helmConfigurator := configurator.NewHelmConfigurator()
 
 	ledger, err := coordinator.NewLedger(deploymentId)
@@ -423,13 +453,13 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 		}
 
 		var rollback *resource.ResourceRollback
-		if plan.Cpu.HasCpus() {
-			if err := coordinator.Commit(ctx, plan); err != nil {
-				return fmt.Errorf("failed to persist helm allocations for component %s: %w", component.Name, err)
-			}
-
+		if plan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
+
+			if err = coordinator.Commit(ctx, plan); err != nil {
+				return fmt.Errorf("failed to persist helm allocations for component %s: %w", component.Name, err)
+			}
 		}
 
 		// update pod annotations for this helm component
@@ -489,7 +519,11 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 	deploymentId string,
 	appDeployment sbi.AppDeploymentManifest,
 ) (err error) {
-	coordinator := dm.newComposeResourceCoordinator()
+	coordinator, err := dm.ComposeResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	}
+
 	composeConfigurator := configurator.NewComposeConfigurator()
 
 	ledger, err := coordinator.NewLedger(deploymentId)
@@ -547,12 +581,12 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		var rollback *resource.ResourceRollback
 
 		if cpuPlan.HasCpus() {
-			if err := coordinator.Commit(ctx, resourcePlan); err != nil {
-				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
-			}
-
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
+
+			if err = coordinator.Commit(ctx, resourcePlan); err != nil {
+				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
+			}
 
 			if err = composeConfigurator.Apply(cpuPlan, composeFilename); err != nil {
 				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", component.Name, err)
@@ -739,7 +773,10 @@ func (dm *DeploymentManager) removeHelm(
 		return nil
 	}
 
-	coordinator := dm.newHelmResourceCoordinator()
+	coordinator, err := dm.HelmResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize helm resource coordinator: %w", err)
+	}
 
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
 		releaseName := fmt.Sprintf("%s-%s", component.Name, deploymentId[:8])
@@ -784,7 +821,10 @@ func (dm *DeploymentManager) removeCompose(
 		return nil
 	}
 
-	coordinator := dm.newComposeResourceCoordinator()
+	coordinator, err := dm.ComposeResourceCoordinator()
+	if err != nil {
+		return fmt.Errorf("unable to initialize compose resource coordinator: %w", err)
+	}
 
 	// Iterate through ALL components (matching deployOrUpdateCompose pattern)
 	for _, component := range appDeployment.Spec.DeploymentProfile.Components {
@@ -874,18 +914,18 @@ func (dm *DeploymentManager) extractComponentCapacityRequirements(
 	return nil
 }
 
-func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
-	return resource.NewResourceCoordinator(
-		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices, dm.log),
-	)
+func (dm *DeploymentManager) ComposeResourceCoordinator() (*resource.ResourceCoordinator, error) {
+	if dm.composeCoordinator == nil {
+		return nil, errors.New("compose resource coordinator not initialized")
+	}
+	return dm.composeCoordinator, nil
 }
 
-func (dm *DeploymentManager) newHelmResourceCoordinator() *resource.ResourceCoordinator {
-	return resource.NewResourceCoordinator(
-		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewBalloonCpuPlanner(dm.policyReader, dm.hostTopology.IsolatedCpuIndices),
-	)
+func (dm *DeploymentManager) HelmResourceCoordinator() (*resource.ResourceCoordinator, error) {
+	if dm.helmCoordinator == nil {
+		return nil, errors.New("helm resource coordinator not initialized")
+	}
+	return dm.helmCoordinator, nil
 }
 
 // when using a positiveInteger type for parameters in margo.yaml
