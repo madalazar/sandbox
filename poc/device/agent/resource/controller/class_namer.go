@@ -6,5 +6,5 @@ import (
 
 // spells a slot the ledger has confirmed is free
 type ClassNamer interface {
-	Name(ref model.ComponentRef, taken []model.ClosId) (model.ClosId, error)
+	Name(owner model.OwnerRef, taken []model.ClosId) (model.ClosId, error)
 }

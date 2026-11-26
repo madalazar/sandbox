@@ -26,13 +26,13 @@ func newCpuPlanningRequest(
 	return CpuPlanningRequest{Requirements: requirements, Ledger: l}
 }
 
-func newCpuPlanningTestLedger(deploymentId string) *ledger.AllocationLedger {
+func newCpuPlanningTestLedger(deploymentId string, allocated map[int]string) *ledger.AllocationLedger {
 	isolated := make(map[int]struct{}, len(testIsolatedCpuIndices))
 	for _, idx := range testIsolatedCpuIndices {
 		isolated[idx] = struct{}{}
 	}
 
-	return ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(nil, isolated, nil), deploymentId, model.CacheCapacity{}, nil)
+	return ledger.NewAllocationLedger(ledger.NewAllocationSnapshot(allocated, isolated, nil), deploymentId, model.CacheCapacity{}, nil)
 }
 
 func isolatedCpuRequirement(name string) *sbi.CapacityRequirements {

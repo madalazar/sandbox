@@ -64,7 +64,7 @@ func TestPqosCacheControllerApply(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -178,6 +178,20 @@ func TestPqosCacheControllerApply(t *testing.T) {
 			t.Fatalf("expected 0 runner calls, got %d", len(runner.calls))
 		}
 	})
+
+	t.Run("multiple cache masks rejected for pqos", func(t *testing.T) {
+		runner := &fakeRunner{}
+		ctrl := NewPqosCacheController(runner, caches, 8)
+		resMulti := res
+		alloc := *res.L3CacheAssignment
+		alloc.Masks = map[string]string{"0": "0x3", "1": "0x1"}
+		resMulti.L3CacheAssignment = &alloc
+
+		err := ctrl.Apply(context.Background(), resMulti)
+		if err == nil {
+			t.Fatal("expected error when multiple cache masks are passed to pqos, got nil")
+		}
+	})
 }
 
 func TestPqosCacheControllerVerify(t *testing.T) {
@@ -190,7 +204,7 @@ func TestPqosCacheControllerVerify(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -216,7 +230,7 @@ func TestPqosCacheControllerRelease(t *testing.T) {
 		Cpus:  []int{2, 3},
 		L3CacheAssignment: &model.CacheAssignment{
 			CacheId: "0",
-			Mask:    "0x3",
+			Masks:   map[string]string{"0": "0x3"},
 			Clos:    "1",
 		},
 	}
@@ -249,6 +263,21 @@ func TestPqosCacheControllerRelease(t *testing.T) {
 
 		if err := ctrl.Release(context.Background(), res); err == nil {
 			t.Fatal("expected error when cache ID not found in topology, got nil")
+		}
+	})
+
+	t.Run("invalid cache ways in topology", func(t *testing.T) {
+		runner := &fakeRunner{}
+		badCaches := []types.HostTopologyCache{
+			{Id: "0", Level: "L3", Ways: 0, WaySizeKB: 1024},
+		}
+		ctrl := NewPqosCacheController(runner, badCaches, 8)
+
+		if err := ctrl.Release(context.Background(), res); err == nil {
+			t.Fatal("expected error when cache Ways is 0, got nil")
+		}
+		if len(runner.calls) != 0 {
+			t.Fatalf("expected 0 runner calls on error, got %d", len(runner.calls))
 		}
 	})
 }
