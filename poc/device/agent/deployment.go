@@ -61,6 +61,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewTopologyCpuPlanner(hostTopology.IsolatedCpuIndices, log)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewPqosClassNamer()).
 		WithCacheController(controller.NewPqosCacheController(controller.NewNsenterRunner(), hostTopology.L3Caches, hostTopology.MaxClos)).
 		Build()
 	if err != nil {
@@ -71,6 +73,8 @@ func NewDeploymentManager(
 		WithStore(resource.NewDatabaseReservationStore(db, hostTopology.IsolatedCpuSet)).
 		WithCpuPlanner(planner.NewBalloonCpuPlanner(policyReader, hostTopology.IsolatedCpuIndices)).
 		WithCachePlanner(planner.NewL3CachePlanner(hostTopology.L3Caches)).
+		WithCacheTopology(hostTopology.L3Caches, hostTopology.MaxClos).
+		WithClassNamer(controller.NewRdtClassNamer()).
 		WithCacheController(controller.NewRdtPolicyController(hostTopology.L3Caches)).
 		Build()
 	if err != nil {
@@ -575,12 +579,11 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
 		}
 
-		cpuPlan := resourcePlan.Cpu
-		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
+		dm.log.Debugw("assignments for current component", "assignments", resourcePlan.Cpu.Cpus)
 
 		var rollback *resource.ResourceRollback
 
-		if cpuPlan.HasCpus() {
+		if resourcePlan.HasCpu() {
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
@@ -588,7 +591,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 				return fmt.Errorf("failed to persist compose allocations for component %s: %w", component.Name, err)
 			}
 
-			if err = composeConfigurator.Apply(cpuPlan, composeFilename); err != nil {
+			if err = composeConfigurator.Apply(resourcePlan.Cpu, composeFilename); err != nil {
 				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", component.Name, err)
 			}
 		}
