@@ -3,10 +3,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -418,7 +416,7 @@ func (dm *DeploymentManager) deployOrUpdateHelm(
 
 		plan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
-			Requirements: component.RequiredResources,
+			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resolve resource policy balloon annotations for component %s: %w", component.Name, err)
@@ -510,10 +508,10 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		projectName := fmt.Sprintf("%s-%s", strings.ToLower(component.Name), deploymentId[:8])
 		projectName = strings.ReplaceAll(projectName, "_", "-")
 
-		dm.log.Infow("compose component requiredResources", "appId", deploymentId, "profileType",
-			appDeployment.Spec.DeploymentProfile.Type, "profileRequiredResources",
-			appDeployment.Spec.DeploymentProfile.RequiredResources, "componentName",
-			component.Name, "componentRequiredResources", dm.extractComponentRequiredResources(component))
+		dm.log.Infow("compose component capacity reqs", "appId", deploymentId, "profileType",
+			appDeployment.Spec.DeploymentProfile.Type, "profile device constraints",
+			appDeployment.Spec.DeploymentProfile.DeviceConstraints, "componentName",
+			component.Name, "component capacity reqs", dm.extractComponentCapacityRequirements(component))
 
 		values := map[string]any{}
 		if appDeployment.Spec.Parameters != nil {
@@ -537,7 +535,7 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 
 		resourcePlan, err := coordinator.Plan(ledger, resource.ResourceRequest{
 			Owner:        owner,
-			Requirements: component.RequiredResources,
+			Requirements: dm.extractComponentCapacityRequirements(component),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resolve compose cpu assignments for component %s: %w", component.Name, err)
@@ -547,7 +545,6 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		dm.log.Debugw("assignments for current component", "assignments", cpuPlan.Cpus)
 
 		var rollback *resource.ResourceRollback
-		preparedComposeFilename := composeFilename
 
 		if cpuPlan.HasCpus() {
 			if err := coordinator.Commit(ctx, resourcePlan); err != nil {
@@ -557,34 +554,16 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 			rollback = resource.NewResourceRollback(ctx, coordinator, owner, dm.log)
 			defer rollback.ReleaseOnFailure(&err)
 
-			var prepErr error
-			preparedComposeFilename, prepErr = composeConfigurator.Apply(cpuPlan, owner, composeFilename)
-			if prepErr != nil {
-				return fmt.Errorf("failed to prepare compose file for component %s: %w", component.Name, prepErr)
+			if err = composeConfigurator.Apply(cpuPlan, composeFilename); err != nil {
+				return fmt.Errorf("failed to update compose file with resource plan for component %s: %w", component.Name, err)
 			}
-
-			removeSourceComposeFile := strings.HasPrefix(component.Properties.PackageLocation, "oci://") ||
-				strings.HasPrefix(component.Properties.PackageLocation, "http://") ||
-				strings.HasPrefix(component.Properties.PackageLocation, "https://")
-			defer func(prep string, src string, rmSrc bool) {
-				if rmSrc {
-					if removeErr := os.Remove(src); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", src, "error", removeErr)
-					}
-				}
-				if prep != src {
-					if removeErr := os.Remove(prep); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-						dm.log.Warnw("Failed to remove compose file", "path", prep, "error", removeErr)
-					}
-				}
-			}(preparedComposeFilename, composeFilename, removeSourceComposeFile)
 		}
 
 		// Convert parameters to environment variables
 		envVars := dm.convertParametersToEnvVars(values, component.Name)
 
 		// Check if project already exists
-		exists, err := dm.composeClient.ComposeExists(ctx, preparedComposeFilename, projectName, envVars)
+		exists, err := dm.composeClient.ComposeExists(ctx, composeFilename, projectName, envVars)
 		if err != nil {
 			return fmt.Errorf("failed to check compose project existence: %v", err)
 		}
@@ -592,13 +571,13 @@ func (dm *DeploymentManager) deployOrUpdateCompose(
 		if exists {
 			// Update existing deployment
 			dm.log.Infow("Updating existing Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.UpdateCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.UpdateCompose(ctx, projectName, composeFilename, envVars)
 		} else {
 			// New deployment
 			dm.log.Infow("Deploying new Docker Compose project",
-				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", preparedComposeFilename)
-			err = dm.composeClient.DeployCompose(ctx, projectName, preparedComposeFilename, envVars)
+				"projectName", projectName, "deploymentId", deploymentId, "composeFilename", composeFilename)
+			err = dm.composeClient.DeployCompose(ctx, projectName, composeFilename, envVars)
 		}
 
 		if err != nil {
@@ -858,15 +837,6 @@ func GetAddress[T any](a T) *T {
 	return &a
 }
 
-// TODO: this is just a method used for logging purposes. To be removed once the
-// implementation is added
-// extractComponentDeviceConstraints reads deviceConstraints from the component.
-func (dm *DeploymentManager) extractComponentDeviceConstraints(
-	component sbi.ApplicationDeploymentProfileComponent,
-) *sbi.DeviceConstraints {
-	return component.DeviceConstraints
-}
-
 // helper function to convert parameters to environment variables
 func (dm *DeploymentManager) convertParametersToEnvVars(
 	params map[string]any,
@@ -893,10 +863,21 @@ func (dm *DeploymentManager) convertParametersToEnvVars(
 	return envVars
 }
 
+// reads the capacity requirements from the component
+func (dm *DeploymentManager) extractComponentCapacityRequirements(
+	component sbi.ApplicationDeploymentProfileComponent,
+) *sbi.CapacityRequirements {
+	if component.DeviceConstraints != nil && component.DeviceConstraints.CapacityRequirements != nil {
+		return component.DeviceConstraints.CapacityRequirements
+	}
+
+	return nil
+}
+
 func (dm *DeploymentManager) newComposeResourceCoordinator() *resource.ResourceCoordinator {
 	return resource.NewResourceCoordinator(
 		resource.NewDatabaseReservationStore(dm.database, dm.hostTopology.IsolatedCpuSet),
-		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices),
+		planner.NewTopologyCpuPlanner(dm.hostTopology.IsolatedCpuIndices, dm.log),
 	)
 }
 

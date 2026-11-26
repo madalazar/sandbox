@@ -146,8 +146,22 @@ func TestRewriteComposeYamlSupportsListFormEnvironment(t *testing.T) {
       - TEST_CPUSET=0
 `
 	var out bytes.Buffer
-	if err := rewriteComposeYaml(strings.NewReader(source), &out, composeCpuPlanFor("component", 1)); err == nil {
-		t.Fatal("expected an error for list-form environment, got nil")
+	if err := rewriteComposeYaml(strings.NewReader(source), &out, composeCpuPlanFor("component", 1)); err != nil {
+		t.Fatalf("RewriteComposeYaml: %v", err)
+	}
+
+	result := out.String()
+	for _, want := range []string{
+		`cpuset: "1"`,
+		"EXISTING=keep",
+		"TEST_CPUSET=1",
+	} {
+		if !strings.Contains(result, want) {
+			t.Errorf("rewritten compose missing %q:\n%s", want, result)
+		}
+	}
+	if strings.Contains(result, "TEST_CPUSET=0") {
+		t.Errorf("rewritten compose still contains old TEST_CPUSET=0:\n%s", result)
 	}
 }
 

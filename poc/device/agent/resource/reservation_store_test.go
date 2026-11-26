@@ -6,10 +6,11 @@ import (
 
 	"github.com/margo/sandbox/poc/device/agent/database"
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
+	"go.uber.org/zap"
 )
 
 func TestDatabaseReservationStoreLoadReservation(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := database.NewDatabase(t.TempDir(), zap.NewNop().Sugar())
 	const deploymentID = "deployment-1"
 	const componentName = "cyclictest"
 
@@ -45,7 +46,7 @@ func TestDatabaseReservationStoreLoadReservation(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreLoadReservationNotFound(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := database.NewDatabase(t.TempDir(), zap.NewNop().Sugar())
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
@@ -63,7 +64,7 @@ func TestDatabaseReservationStoreLoadReservationNotFound(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := database.NewDatabase(t.TempDir(), zap.NewNop().Sugar())
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
@@ -107,7 +108,7 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreSnapshot(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := database.NewDatabase(t.TempDir(), zap.NewNop().Sugar())
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
@@ -140,7 +141,7 @@ func TestDatabaseReservationStoreSnapshot(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := database.NewDatabase(t.TempDir(), zap.NewNop().Sugar())
 	const deploymentID = "deployment-1"
 	const componentName = "component"
 	const siblingName = "sibling"
