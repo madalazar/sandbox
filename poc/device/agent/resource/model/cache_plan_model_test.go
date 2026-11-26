@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 )
 
@@ -24,6 +25,97 @@ func TestWayInterval(t *testing.T) {
 	if iv.Overlaps(before) {
 		t.Fatalf("expected iv %+v not to overlap %+v", iv, before)
 	}
+}
+
+func TestWayIntervalMaskHex(t *testing.T) {
+	tests := []struct {
+		name    string
+		iv      WayInterval
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "start 0 length 2",
+			iv:   WayInterval{Start: 0, Length: 2},
+			want: "0x3",
+		},
+		{
+			name: "start 4 length 4",
+			iv:   WayInterval{Start: 4, Length: 4},
+			want: "0xF0",
+		},
+		{
+			name: "full 64 ways",
+			iv:   WayInterval{Start: 0, Length: MaxCacheWays},
+			want: "0xFFFFFFFFFFFFFFFF",
+		},
+		{
+			name: "highest bit 63",
+			iv:   WayInterval{Start: 63, Length: 1},
+			want: "0x8000000000000000",
+		},
+		{
+			name:    "negative start",
+			iv:      WayInterval{Start: -1, Length: 2},
+			wantErr: true,
+		},
+		{
+			name:    "zero length",
+			iv:      WayInterval{Start: 0, Length: 0},
+			wantErr: true,
+		},
+		{
+			name:    "length exceeds max ways",
+			iv:      WayInterval{Start: 0, Length: MaxCacheWays + 1},
+			wantErr: true,
+		},
+		{
+			name:    "interval end exceeds max ways",
+			iv:      WayInterval{Start: 60, Length: 5},
+			wantErr: true,
+		},
+		{
+			name:    "overflow start with length 1",
+			iv:      WayInterval{Start: math.MaxInt64, Length: 1},
+			wantErr: true,
+		},
+		{
+			name:    "overflow length with start 1",
+			iv:      WayInterval{Start: 1, Length: math.MaxInt64},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.iv.MaskHex()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("WayInterval%+v.MaskHex() error = %v, wantErr %v", tc.iv, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("WayInterval%+v.MaskHex() = %s, want %s", tc.iv, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("round trip with ParseContiguousWayMask", func(t *testing.T) {
+		for start := int64(0); start < MaxCacheWays; start += 7 {
+			for length := int64(1); start+length <= MaxCacheWays; length += 5 {
+				iv := WayInterval{Start: start, Length: length}
+				hex, err := iv.MaskHex()
+				if err != nil {
+					t.Fatalf("MaskHex() for %+v failed: %v", iv, err)
+				}
+				parsed, err := ParseContiguousWayMask(hex, MaxCacheWays)
+				if err != nil {
+					t.Fatalf("ParseContiguousWayMask(%q) failed: %v", hex, err)
+				}
+				if parsed != iv {
+					t.Fatalf("round trip got %+v, want %+v", parsed, iv)
+				}
+			}
+		}
+	})
 }
 
 func TestParseContiguousWayMask(t *testing.T) {
@@ -188,13 +280,12 @@ func TestCachePlan(t *testing.T) {
 
 	owner := NewOwnerRef("dep1", "comp1")
 	assignment := CacheAssignment{
-		Owner:    owner,
-		Level:    "L3",
-		CacheId:  "0",
-		SizeKiB:  2048,
-		Interval: WayInterval{Start: 0, Length: 2},
-		Mask:     "0x3",
-		Clos:     ClosId("1"),
+		Owner:   owner,
+		Level:   "L3",
+		CacheId: "0",
+		SizeKiB: 2048,
+		Masks:   map[string]string{"0": "0x3"},
+		Clos:    ClosId("1"),
 	}
 	plan := CachePlan{
 		Component:         ComponentRef("comp1"),

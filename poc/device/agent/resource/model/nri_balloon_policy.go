@@ -37,7 +37,6 @@ const (
 	RdtKeyClasses      = "classes"
 	RdtKeyL3Allocation = "l3Allocation"
 	RdtKeyUnified      = "unified"
-	RdtFillerCacheMask = "0x1"
 	RdtFullAllocation  = "100%"
 )
 

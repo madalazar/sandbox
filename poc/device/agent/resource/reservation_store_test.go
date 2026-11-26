@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"os"
 	"reflect"
 	"testing"
 
@@ -8,18 +9,30 @@ import (
 	"github.com/margo/sandbox/poc/device/agent/resource/model"
 )
 
+func newTestDatabase(t *testing.T) *database.Database {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "resource-db-test-*")
+	if err != nil {
+		t.Fatalf("os.MkdirTemp() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return database.NewDatabase(dir)
+}
+
 func TestDatabaseReservationStoreLoadReservation(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 	const componentName = "cyclictest"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	if err := db.SetComponentAllocations(deploymentID, componentName, database.Allocations{
 		Cpus: map[string][]int{componentName: {4, 2}},
 	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	owner := model.NewOwnerRef(deploymentID, componentName)
@@ -45,7 +58,7 @@ func TestDatabaseReservationStoreLoadReservation(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreLoadReservationNotFound(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
@@ -63,7 +76,7 @@ func TestDatabaseReservationStoreLoadReservationNotFound(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
@@ -107,16 +120,16 @@ func TestDatabaseReservationStoreSaveAllocations(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreSnapshot(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	if err := db.SetComponentAllocations(deploymentID, "comp1", database.Allocations{
 		Cpus: map[string][]int{"comp1": {1, 2, 5}},
 	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	isolated := map[int]struct{}{1: {}, 2: {}} // cpu 5 is not isolated
@@ -140,7 +153,7 @@ func TestDatabaseReservationStoreSnapshot(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 	const componentName = "component"
 	const siblingName = "sibling"
@@ -148,10 +161,14 @@ func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
 	if err := db.SetDesiredState(deploymentID, database.AppDeploymentState{}); err != nil {
 		t.Fatalf("SetDesiredState() error = %v", err)
 	}
-	if err := db.SetAllocations(deploymentID, database.Allocations{
+	seedAllocs := database.Allocations{
 		Cpus: map[string][]int{componentName: {2}, siblingName: {4}},
-	}); err != nil {
-		t.Fatalf("SetAllocations() error = %v", err)
+	}
+	if err := db.SetComponentAllocations(deploymentID, componentName, seedAllocs); err != nil {
+		t.Fatalf("SetComponentAllocations() error = %v", err)
+	}
+	if err := db.SetComponentAllocations(deploymentID, siblingName, seedAllocs); err != nil {
+		t.Fatalf("SetComponentAllocations() error = %v", err)
 	}
 
 	store := NewDatabaseReservationStore(db, map[int]struct{}{2: {}, 4: {}})
@@ -172,7 +189,7 @@ func TestDatabaseReservationStoreClearComponentPreservesSiblings(t *testing.T) {
 }
 
 func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
-	db := database.NewDatabase(t.TempDir())
+	db := newTestDatabase(t)
 	const deploymentID = "deployment-1"
 	const componentName = "cyclictest"
 
@@ -191,7 +208,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 			Level:   "L3",
 			CacheId: "0",
 			SizeKiB: 2048,
-			Mask:    "0xC",
+			Masks:   map[string]string{"0": "0xC"},
 			Clos:    model.ClosId("cos1"),
 		},
 	}
@@ -222,7 +239,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 	if cacheRes.Clos != model.ClosId("cos1") {
 		t.Fatalf("expected class 'cos1', got %s", cacheRes.Clos)
 	}
-	if cacheRes.CacheId != "0" || cacheRes.Mask != "0xC" {
+	if cacheRes.CacheId != "0" || cacheRes.Masks["0"] != "0xC" {
 		t.Fatalf("unexpected cache reservation ID/mask: %+v", cacheRes)
 	}
 
@@ -235,7 +252,7 @@ func TestDatabaseReservationStoreCacheSupport(t *testing.T) {
 		t.Fatalf("expected 1 cache in snapshot, got %d", len(snapshot.Caches))
 	}
 	snapCache := snapshot.Caches[0]
-	if snapCache.Owner != owner || snapCache.Mask != "0xC" {
+	if snapCache.Owner != owner || snapCache.Masks["0"] != "0xC" {
 		t.Fatalf("unexpected snapshot cache: %+v", snapCache)
 	}
 

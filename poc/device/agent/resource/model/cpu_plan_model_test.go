@@ -87,3 +87,70 @@ func TestCpuPlanAssignmentMapCopiesCpus(t *testing.T) {
 		t.Fatal("AssignmentMap() aliased the plan's CPU slice")
 	}
 }
+
+func TestParseCpuSet(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    []int
+		wantErr bool
+	}{
+		{
+			name: "empty string",
+			raw:  "",
+			want: nil,
+		},
+		{
+			name: "single cpu",
+			raw:  "3",
+			want: []int{3},
+		},
+		{
+			name: "comma separated cpus with duplicates",
+			raw:  "0, 4, 2, 4, 0",
+			want: []int{0, 2, 4},
+		},
+		{
+			name: "range",
+			raw:  "0-3",
+			want: []int{0, 1, 2, 3},
+		},
+		{
+			name: "mixed ranges and singles with whitespace",
+			raw:  "0-2, 6, 4-5, 2",
+			want: []int{0, 1, 2, 4, 5, 6},
+		},
+		{
+			name:    "invalid range start",
+			raw:     "a-3",
+			wantErr: true,
+		},
+		{
+			name:    "invalid range end",
+			raw:     "0-b",
+			wantErr: true,
+		},
+		{
+			name:    "invalid inverted range",
+			raw:     "4-2",
+			wantErr: true,
+		},
+		{
+			name:    "invalid negative index",
+			raw:     "-1",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseCpuSet(tc.raw)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseCpuSet(%q) error = %v, wantErr %v", tc.raw, err, tc.wantErr)
+			}
+			if !tc.wantErr && !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ParseCpuSet(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
